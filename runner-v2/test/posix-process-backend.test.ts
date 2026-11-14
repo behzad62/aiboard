@@ -730,6 +730,180 @@ test("C4 POSIX v2 accepts post-retirement supervisor crash without adopting a re
   }
 });
 
+test("FL1 POSIX release tombstone refuses every later claim and effect even when the lock is active again", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl1-tombstone-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "fl1-tombstone";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  writeStoppedPosixV2Fixture(directory, nonce, workloadGroup);
+  const signals: unknown[] = [];
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    operations: {
+      inspectProcessBirth: () => ({ state: "absent" }),
+      listPosixGroup: () => [],
+      signal: (...args) => { signals.push(args); },
+    },
+    // Keep the released authority on disk, as a failed or partial removal would.
+    removeRetiredAuthority: () => undefined,
+  });
+  const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
+  const higher = { ownerId: "fl1-recovery", fencingToken: fence.fencingToken + 1 };
+  const fencePath = join(directory, "fence.json");
+  try {
+    assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(binding, higher)).empty, true);
+    assert.deepEqual(await backend.release(binding, higher), { released: true });
+    const tombstone = { nonce, released: higher };
+    assert.deepEqual(JSON.parse(readFileSync(fencePath, "utf8")), tombstone);
+    // A lock that carries no retirement any more (as the OS lock of FL2 will not): a fresh, active one.
+    const lockPath = join(directory, ".fence.lock");
+    unlinkSync(lockPath);
+    await withOwnedFenceLock(lockPath, () => undefined);
+    for (const candidate of [fence, higher, { ownerId: "fl1-late", fencingToken: higher.fencingToken + 1 }]) {
+      await assert.rejects(backend.signal(binding, "force_terminate", candidate), /released/i);
+      await assert.rejects(backend.verifyEmpty(binding, candidate), /released/i);
+      await assert.rejects(backend.observe(binding, async () => undefined, candidate), /released/i);
+      await assert.rejects(backend.backpressuredChannelProvider().acquire(binding, candidate), /released/i);
+      assert.deepEqual(await backend.reconcile(binding, candidate), { state: "identity_mismatch" });
+    }
+    assert.equal(existsSync(join(directory, "control.json")), false, "a released authority must accept no control");
+    assert.deepEqual(signals, []);
+    assert.deepEqual(JSON.parse(readFileSync(fencePath, "utf8")), tombstone, "no claim may turn the tombstone back into a live fence");
+    // The release itself stays finishable, by its own fence or a higher one, never a lower one.
+    await assert.rejects(backend.release(binding, fence), /stale/i);
+    assert.deepEqual(await backend.release(binding, higher), { released: true });
+    assert.deepEqual(JSON.parse(readFileSync(fencePath, "utf8")), tombstone);
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
+test("FL1 POSIX release finishes over its own tombstone when the lock never retired", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl1-unretired-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "fl1-unretired";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  writeStoppedPosixV2Fixture(directory, nonce, workloadGroup);
+  // A release that wrote its tombstone and died before the lock committed its retirement: the lock is still active.
+  const releasing = { ownerId: "fl1-releaser", fencingToken: fence.fencingToken + 1 };
+  await withOwnedFenceLock(join(directory, ".fence.lock"), () => undefined);
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, released: releasing }));
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    operations: {
+      inspectProcessBirth: () => ({ state: "absent" }),
+      listPosixGroup: () => [],
+      signal: () => assert.fail("a released authority must not be signalled"),
+    },
+  });
+  const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
+  try {
+    await assert.rejects(backend.release(binding, fence), /stale/i, "a lower fence cannot finish the release");
+    await assert.rejects(backend.release(binding, { ownerId: "fl1-foreign", fencingToken: releasing.fencingToken }), /stale/i);
+    assert.equal(existsSync(directory), true);
+    assert.deepEqual(await backend.release(binding, releasing), { released: true });
+    assert.equal(existsSync(directory), false);
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
+test("FL1 POSIX release still finishes a retired authority whose fence predates the tombstone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl1-legacy-retired-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "fl1-legacy-retired";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  writeStoppedPosixV2Fixture(directory, nonce, workloadGroup);
+  let removals = 0;
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    operations: {
+      inspectProcessBirth: () => ({ state: "absent" }),
+      listPosixGroup: () => [],
+      signal: () => assert.fail("a released authority must not be signalled"),
+    },
+    removeRetiredAuthority: (path) => {
+      removals += 1;
+      if (removals === 1) throw new Error("injected retired authority deletion fault");
+      rmSync(path, { recursive: true, force: true });
+    },
+  });
+  const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
+  try {
+    await assert.rejects(backend.release(binding, fence), /writer fence effect boundary is unavailable/);
+    // The lock is retired. Put back the fence a release of an earlier version leaves: live, with no tombstone.
+    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+    assert.deepEqual(await backend.release(binding, fence), { released: true });
+    assert.equal(removals, 2);
+    assert.equal(existsSync(directory), false);
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
+test("FL1 released authority removal takes the lock first and the tombstone last", () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const file = ts.createSourceFile("native-process-backend.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  const evidence = file.statements.find((statement): statement is ts.VariableStatement => ts.isVariableStatement(statement) &&
+    statement.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === "RELEASED_AUTHORITY_EVIDENCE"));
+  assert.ok(evidence, "missing production RELEASED_AUTHORITY_EVIDENCE");
+  const entries = [".fence.lock", "channel", "control.json", "fence.json", "lock-holder.json", "state.json", "stderr.log", "stdout.log", "usage.json"];
+  const removeWith = (failOn?: string) => {
+    const removed: string[] = [];
+    const context = vm.createContext({
+      Object,
+      join: (...parts: string[]) => parts.join("/"),
+      readdirSync: () => [...entries],
+      rmSync: (path: string) => {
+        removed.push(path);
+        if (path === failOn) throw Object.assign(new Error(`EBUSY: ${path}`), { code: "EBUSY" });
+      },
+    });
+    vm.runInContext(ts.transpileModule(evidence.getText(file), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText.replace(/^const /m, "var "), context);
+    vm.runInContext(extractNamedTsFunction(source, "removeRetiredAuthorityDirectory"), context);
+    try { vm.runInContext("removeRetiredAuthorityDirectory('owned')", context); } catch { /* the injected fault */ }
+    return removed;
+  };
+  assert.deepEqual(removeWith(), [
+    "owned/.fence.lock", "owned/control.json", "owned/lock-holder.json", "owned/usage.json",
+    "owned/state.json", "owned/channel", "owned/stdout.log", "owned/stderr.log", "owned",
+  ]);
+  // A busy lock: nothing else is removed, so a retried release still has its retired lock and all its evidence.
+  assert.deepEqual(removeWith("owned/.fence.lock"), ["owned/.fence.lock"]);
+  // A stop inside the evidence never reaches the tombstone.
+  assert.equal(removeWith("owned/channel").includes("owned"), false);
+});
+
+test("FL1 portable supervisor and POSIX child read a released tombstone as no current fence", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
+  const nonce = "fl1-readers";
+  const live = { nonce, ...fence };
+  let current: unknown = live;
+  const supervisor = vm.createContext({ JSON, config: { nonce }, fencePath: "fence.json", readFileSync: () => JSON.stringify(current) });
+  vm.runInContext(extractNamedFunction(supervisorSource, "readCurrentFence"), supervisor);
+  const child = vm.createContext({
+    JSON,
+    config: { nonce, fencePath: "fence.json", lockHolderPath: "lock-holder.json" },
+    expectedSupervisor: { supervisorPid: 9001, supervisorBirth: "supervisor-birth" },
+    inspectPosixProcessIdentity: (pid: number) => ({ state: "present", value: { pid, birth: "supervisor-birth" } }),
+    readJson: (path: string) => path === "lock-holder.json"
+      ? { nonce, holderPid: 9001, holderBirth: "supervisor-birth" }
+      : JSON.parse(JSON.stringify(current)),
+  });
+  vm.runInContext(extractNamedFunction(childSource, "readCurrentPosixFence"), child);
+  const read = () => ({
+    supervisor: JSON.parse(vm.runInContext("JSON.stringify(readCurrentFence() ?? null)", supervisor)),
+    child: JSON.parse(vm.runInContext("JSON.stringify(readCurrentPosixFence(expectedSupervisor) ?? null)", child)),
+  });
+  assert.deepEqual(read(), { supervisor: live, child: live });
+  // The tombstone the backend writes, and any record that carries `released` next to a top-level fence.
+  for (const released of [{ nonce, released: { ...fence } }, { ...live, released: { ...fence } }, { ...live, released: true }]) {
+    current = released;
+    assert.deepEqual(read(), { supervisor: null, child: null }, JSON.stringify(released));
+  }
+});
+
 test("C4 POSIX v2 launch rollback queues workload control without signalling the supervisor group", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-v2-rollback-"));
   const directory = join(root, "owned-v2");
@@ -4168,6 +4342,40 @@ test("portable POSIX control maps only an explicit workload group to fixed signa
 });
 
 const fence = { ownerId: "test-owner", fencingToken: 1 } as const;
+/** A stopped v2 authority whose workload group is retired and whose output is settled: releasable once its supervisor is gone. */
+function writeStoppedPosixV2Fixture(
+  directory: string,
+  nonce: string,
+  workloadGroup: { readonly groupId: number; readonly leaderPid: number; readonly leaderBirth: string },
+): void {
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(directory, path), { recursive: true });
+  writeFileSync(join(directory, "stdout.log"), "");
+  writeFileSync(join(directory, "stderr.log"), "");
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "channel", "output-checkpoint.json"), JSON.stringify({
+    nonce,
+    stdout: { sequence: 0, endOffset: 0 },
+    stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v2",
+    nonce,
+    supervisorPid: 9001,
+    supervisorBirth: "supervisor-birth",
+    workloadGroup,
+    workloadGroupRetirement: { state: "retired", cause: "force_terminate", at: "2026-09-06T00:00:01.000Z" },
+    launchEffect: "started",
+    rootProcess: null,
+    revision: 2,
+    handledControl: 0,
+    status: "stopped",
+    exitCode: 0,
+    signal: null,
+    knownProcesses: [],
+    error: null,
+    updatedAt: "2026-09-06T00:00:01.000Z",
+  }));
+}
 function removeFixtureRoot(root: string): void {
   rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   rmSync(`${root}.fence.lock`, { force: true, maxRetries: 30, retryDelay: 50 });

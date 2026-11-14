@@ -400,8 +400,8 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           effect: (kind, effect) => {
             const preparation = this.options.beforeFenceEffect?.(kind);
             return preparation
-              ? Promise.resolve(preparation).then(() => commitOwnedFenceEffectAsync(identity, fence, effect, undefined, this.inspectionFenceOptions()))
-              : commitOwnedFenceEffectAsync(identity, fence, effect, undefined, this.inspectionFenceOptions());
+              ? Promise.resolve(preparation).then(() => commitOwnedFenceEffectAsync(identity, fence, effect, this.inspectionFenceOptions()))
+              : commitOwnedFenceEffectAsync(identity, fence, effect, this.inspectionFenceOptions());
           },
           snapshot: (read) => runPortableFenceSnapshotSync({
             lockPath: join(identity.directory, ".fence.lock"),
@@ -606,10 +606,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
     const lockPath = join(identity.directory, ".fence.lock");
-    const authorityRetired = retiredOwnedFenceCleanupAvailable(lockPath);
-    if (authorityRetired) this.assertDurableFence(identity, _fence);
+    // A retired lock or a released tombstone in fence.json means an earlier release already passed its final checks
+    // under the lock and only its cleanup is left. This release re-runs those checks without a claim, which the
+    // tombstone would refuse.
+    const finishing = retiredOwnedFenceCleanupAvailable(lockPath) || hasReleasedFence(identity);
+    if (finishing) this.assertReleaseFence(identity, _fence);
     else this.assertFence(identity, _fence);
-    const assertOutputSettled = authorityRetired
+    const assertOutputSettled = finishing
       ? () => assertPortableOutputSettled(identity)
       : () => assertPortableOutputSettledAtFence(identity, _fence, this.inspectionFenceOptions());
     const validation = this.validate(identity);
@@ -628,11 +631,14 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     assertOutputSettled();
     if (!this.hasTerminalStoppedProof(identity)) throw new Error("Cannot release ownership after durable terminal state changed.");
     const validateFinalRelease = () => {
-      this.assertDurableFence(identity, _fence);
+      const releasing = this.assertReleaseFence(identity, _fence);
       const finalValidation = this.validate(identity);
       if ((finalValidation !== "live" && finalValidation !== "exited") || !this.hasTerminalStoppedProof(identity) || this.emptiness(identity) !== "empty")
         throw new Error("Cannot release ownership without final terminal empty re-attestation.");
       assertPortableOutputSettled(identity);
+      // The authority's own tombstone, written before the lock retires: from here every claim, effect and snapshot
+      // refuses this authority whatever the lock holds.
+      writeReleasedFence(identity, releasing);
     };
     try {
       await this.fencedEffect(identity, _fence, "release", validateFinalRelease);
@@ -654,12 +660,14 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async fencedEffect<T>(identity: Identity, fence: ProcessEffectFence | undefined, kind: "signal" | "verify_empty" | "release", effect: () => T): Promise<T> {
     if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
     await this.options.beforeFenceEffect?.(kind);
-    return await commitOwnedFenceEffectAsync(identity, fence, effect, kind === "release"
-      ? () => {
-          (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
-          this.outputOffsets.delete(identity.nonce);
+    return await commitOwnedFenceEffectAsync(identity, fence, effect, this.inspectionFenceOptions(), kind === "release"
+      ? {
+          retireAuthority: () => {
+            (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
+            this.outputOffsets.delete(identity.nonce);
+          },
         }
-      : undefined, this.inspectionFenceOptions());
+      : undefined);
   }
   private identity(binding: ProcessBackendBinding): Identity {
     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as OpaqueIdentityInput;
@@ -694,6 +702,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
     if (fence.ownerId !== current.ownerId || fence.fencingToken !== current.fencingToken)
       throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+  }
+  /** The fence a release may finish with: the current one, or one at or above a released tombstone's (same owner if equal). */
+  private assertReleaseFence(identity: Identity, fence: ProcessEffectFence | undefined): ProcessEffectFence {
+    if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    if (!releaseFenceAccepted(readOwnedFenceRecord(join(identity.directory, "fence.json"), identity), fence))
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+    return fence;
   }
   private assertObservationFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
     if (!fence) {
@@ -1320,22 +1335,46 @@ function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectF
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
-async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, retireAuthority?: () => void, inspection?: OwnedFenceLockOptions): Promise<T> {
+/** `release` (the release effect only) retires the authority after the effect and may finish over its own tombstone. */
+async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: ProcessEffectFence, effect: () => T | Promise<T>, inspection?: OwnedFenceLockOptions, release?: { readonly retireAuthority: () => void }): Promise<T> {
   const path = join(identity.directory, "fence.json");
   const lock = join(identity.directory, ".fence.lock");
   try {
     return await withOwnedFenceLock(lock, () => {
-      const current = readOwnedFence(path, identity);
-      if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
-        throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+      if (release) {
+        if (!releaseFenceAccepted(readOwnedFenceRecord(path, identity), candidate))
+          throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+      } else {
+        const current = readOwnedFence(path, identity);
+        if (candidate.ownerId !== current.ownerId || candidate.fencingToken !== current.fencingToken)
+          throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+      }
       return effect();
-    }, { ...inspection, retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
+    }, { ...inspection, retireAfterEffect: release !== undefined, ...(release ? { retireAuthority: release.retireAuthority } : {}) });
   } catch (error) {
     if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
+// What a retried release re-checks: its terminal state and its output evidence.
+const RELEASED_AUTHORITY_EVIDENCE = Object.freeze(["state.json", "channel", "stdout.log", "stderr.log"]);
+// A released authority's directory goes in this order. First the lock: if it is busy (a Windows handle), nothing else
+// is gone yet, and a retried release finishes through the retired lock. Then everything a retried release does not
+// re-check, then what it does, then fence.json, the released tombstone, with the directory. While anything of the
+// authority is left, the tombstone still refuses every claim and effect on it, a recreated lock included.
 function removeRetiredAuthorityDirectory(directory: string): void {
+  let entries: string[];
+  try { entries = readdirSync(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  rmSync(join(directory, ".fence.lock"), { force: true });
+  for (const entry of entries) {
+    if (entry !== ".fence.lock" && entry !== "fence.json" && !RELEASED_AUTHORITY_EVIDENCE.includes(entry))
+      rmSync(join(directory, entry), { recursive: true, force: true });
+  }
+  for (const entry of RELEASED_AUTHORITY_EVIDENCE) rmSync(join(directory, entry), { recursive: true, force: true });
   rmSync(directory, { recursive: true, force: true });
 }
 function errorChainMatches(error: unknown, pattern: RegExp): boolean {
@@ -1358,14 +1397,50 @@ function errorChainHas(error: unknown, constructor: new (...args: never[]) => Er
   }
   return false;
 }
-function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
+/**
+ * fence.json holds the current writer fence, `{ nonce, ownerId, fencingToken }`, or, once a release passed its final
+ * checks under the lock, the released tombstone `{ nonce, released: { ownerId, fencingToken } }`. The tombstone has no
+ * top-level fence, so a reader of an earlier version finds no valid fence in it and refuses as well. A tombstone is
+ * final: nothing but release accepts it, and nothing rewrites it as a live fence.
+ */
+interface OwnedFenceRecord extends ProcessEffectFence { readonly released: boolean }
+function readOwnedFenceRecord(path: string, identity: Identity): OwnedFenceRecord {
   try {
     const value = JSON.parse(readFileSync(path, "utf8"));
-    if (value.nonce !== identity.nonce || typeof value.ownerId !== "string" || !Number.isSafeInteger(value.fencingToken)) throw new Error();
-    return { ownerId: value.ownerId, fencingToken: value.fencingToken };
+    if (value.nonce !== identity.nonce) throw new Error();
+    if (value.released === undefined) {
+      if (typeof value.ownerId !== "string" || !Number.isSafeInteger(value.fencingToken)) throw new Error();
+      return { ownerId: value.ownerId, fencingToken: value.fencingToken, released: false };
+    }
+    const released = value.released;
+    if (value.ownerId !== undefined || value.fencingToken !== undefined || typeof released !== "object" || released === null ||
+        typeof released.ownerId !== "string" || !Number.isSafeInteger(released.fencingToken)) throw new Error();
+    return { ownerId: released.ownerId, fencingToken: released.fencingToken, released: true };
   } catch {
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence evidence is invalid.");
   }
+}
+/** The current live writer fence. A released tombstone refuses every claim, effect and snapshot. */
+function readOwnedFence(path: string, identity: Identity): ProcessEffectFence {
+  const record = readOwnedFenceRecord(path, identity);
+  if (record.released) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is released with its authority.");
+  return { ownerId: record.ownerId, fencingToken: record.fencingToken };
+}
+function hasReleasedFence(identity: Identity): boolean {
+  try { return readOwnedFenceRecord(join(identity.directory, "fence.json"), identity).released; }
+  catch { return false; }
+}
+/** A release may run at the current fence, or finish over a tombstone at or above its fence (the same owner if equal). */
+function releaseFenceAccepted(current: OwnedFenceRecord, candidate: ProcessEffectFence): boolean {
+  if (!current.released) return candidate.ownerId === current.ownerId && candidate.fencingToken === current.fencingToken;
+  return candidate.fencingToken > current.fencingToken ||
+    (candidate.fencingToken === current.fencingToken && candidate.ownerId === current.ownerId);
+}
+function writeReleasedFence(identity: Identity, fence: ProcessEffectFence): void {
+  const path = join(identity.directory, "fence.json");
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, released: { ownerId: fence.ownerId, fencingToken: fence.fencingToken } }), { mode: 0o600 });
+  renameSync(temporary, path);
 }
 function assertPortableOutputSettledAtFence(identity: Identity, fence: ProcessEffectFence | undefined, inspection?: OwnedFenceLockOptions): void {
   if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
