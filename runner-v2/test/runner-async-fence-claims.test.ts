@@ -48,6 +48,13 @@ test("the reachability guard catches a planted sync claim", () => {
     "late.ts": 'export { runPortableFenceEffectSync as run } from "./portable-process-protocol.mjs";',
     "portable-process-protocol.mjs": "export function runPortableFenceEffectSync() {}",
   }).length, 1);
+  // A sync entry point under another name in the lock module itself.
+  assert.equal(planted({
+    "cli.ts": 'import { recoverSync } from "./owned-fence-lock.mjs"; recoverSync("x");',
+    "owned-fence-lock.mjs": "function runSteps() {} export function withOwnedFenceLockSync() { return runSteps(); } export function recoverSync() { return runSteps(); }",
+  }).length, 1);
+  // An import the walk cannot follow fails the guard rather than hiding what is behind it.
+  assert.throws(() => planted({ "cli.ts": 'import "./missing.js";' }), /unresolved Runner import/);
   assert.deepEqual(planted({
     "cli.ts": 'import { withOwnedFenceLock } from "./owned-fence-lock.mjs"; await withOwnedFenceLock("x", () => 1);',
     "owned-fence-lock.mjs": "export async function withOwnedFenceLock() {} export function withOwnedFenceLockSync() {}",
@@ -73,7 +80,8 @@ function reachableModules(entries: readonly string[], read: (path: string) => st
         specifier = node.arguments[0].text;
       if (specifier?.startsWith(".")) {
         const target = resolveModule(resolve(dirname(path), specifier), read);
-        if (target) queue.push(target);
+        if (!target) throw new Error(`unresolved Runner import ${specifier} in ${path}`);
+        queue.push(target);
       }
       ts.forEachChild(node, visit);
     };
@@ -85,6 +93,27 @@ function reachableModules(entries: readonly string[], read: (path: string) => st
 function resolveModule(path: string, read: (path: string) => string | undefined): string | undefined {
   const candidates = path.endsWith(".js") ? [path.slice(0, -3) + ".ts", path] : [path];
   return candidates.find((candidate) => read(candidate) !== undefined);
+}
+
+/**
+ * The lock module's sync driver is `runSteps`: only withOwnedFenceLockSync may call it, so a sync entry point under
+ * another name (a sync recovery or retirement helper) is a reference here.
+ */
+function syncDriverReferences(file: ts.SourceFile, name: string): string[] {
+  const found: string[] = [];
+  for (const statement of file.statements) {
+    const declared = ts.isFunctionDeclaration(statement) ? statement.name?.text : undefined;
+    if (declared === "withOwnedFenceLockSync" || declared === "runSteps") continue;
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node) && node.text === "runSteps") {
+        const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
+        found.push(`${name}:${line + 1} runSteps outside withOwnedFenceLockSync`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(statement);
+  }
+  return found;
 }
 
 /** Every reference to a sync claim outside its definitions, as `module:line name`. */
@@ -103,6 +132,7 @@ function syncClaimReferences(modules: ReadonlyMap<string, ts.SourceFile>): strin
     };
     visit(file);
   }
+  for (const [path, file] of modules) if (path.endsWith("owned-fence-lock.mjs")) found.push(...syncDriverReferences(file, "owned-fence-lock.mjs"));
   // Inside the protocol module, the sync claim is reached only through runPortableFenceEffectSync, which the Runner
   // never imports (checked above).
   for (const [path, file] of modules) {

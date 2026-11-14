@@ -944,9 +944,13 @@ test("FL2 released tombstone is flushed before its rename and the rename after i
 // The Windows Job host's release record is its only record of a release since FL2, so the release writes it durably.
 test("FL2 Windows Job release record is flushed before its rename and the renamed file after it, persisted once in place", () => {
   const source = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
-  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^]*?this\.persist\((\w+)(, \{ afterRename: [^\n]*releaseEffectPersisted = true[^\n]*)?\)/g)];
+  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n(?:\s*\/\/[^\n]*\n){0,3}\s*this\.persist\((\w+)(, \{ afterRename: [^\n]*releaseEffectPersisted = true[^\n]*)?\)/g)];
   assert.equal(releases.length, 1, "one release effect writes the release record");
   assert.ok(releases[0]![2], "and it writes it durably, marking the release persisted once the record is in place");
+  // A release finished from the record (recoverReleasedFence) flushes the record first, before the lock is removed.
+  const recovery = source.slice(source.indexOf("private async recoverReleasedFence("));
+  const flushAt = recovery.indexOf("this.flushRecord(requestedProcessId)");
+  assert.ok(flushAt > 0 && flushAt < recovery.indexOf("recoverRevokedOwnedFenceLock("), "the recovery flushes the record before it removes the lock");
   const file = ts.createSourceFile("windows-job-process-host.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
   let persist: ts.MethodDeclaration | undefined;
   const find = (node: ts.Node): void => {
@@ -975,7 +979,14 @@ test("FL2 Windows Job release record is flushed before its rename and the rename
     writeFileSync: (path: string) => { calls.push(`writeFile ${path}`); },
   });
   vm.runInContext(method, context);
+  const flushRecord = (persist.parent as ts.ClassDeclaration).members.find((member): member is ts.MethodDeclaration =>
+    ts.isMethodDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === "flushRecord");
+  assert.ok(flushRecord?.body, "missing production flushRecord");
+  vm.runInContext(ts.transpileModule(`function flushRecord(${flushRecord.parameters.map((parameter) => parameter.getText(file)).join(", ")}) ${flushRecord.body.getText(file)}`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText, context);
   context.host = { containedProcessPath: (id: string, suffix: string) => `root/${id}${suffix}` };
+  vm.runInContext("host.flushRecord = flushRecord", context);
   context.calls = calls;
   vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, { afterRename: () => calls.push('persisted') })", context);
   assert.deepEqual(calls, [

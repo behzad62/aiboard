@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile, execFileSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: platform process-identity probe (self-birth, kept until FL4); a claim never calls it.
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, unlinkSync } from "node:fs";
@@ -37,6 +38,10 @@ const RETIRED_CLEANUP = Object.freeze({ create: false, retired: "require" });
 
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
+// The async turns the current asynchronous context is in, innermost first: { path, active, outer }. A turn waits
+// behind every earlier turn on its path without a deadline, so a claim made from inside a still-active turn on the same
+// path would wait for itself forever; it fails at once instead, as a nested sync claim does.
+const asynchronousTurns = new AsyncLocalStorage();
 // The acquisition holding each path now (lock taken to lock given back), by resolved path: { token, identity }.
 // The sync driver refuses to wait on a path another live acquisition of this thread holds (performStepSync), since
 // nothing on this thread could give it back while the wait blocks.
@@ -125,17 +130,29 @@ export function retiredOwnedFenceCleanupAvailable(path) {
 }
 
 async function inAsynchronousTurn(path, body) {
-  const previous = asynchronousTails.get(path) ?? Promise.resolve();
-  let finishTurn;
-  const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
-  const tail = previous.then(() => turn);
-  asynchronousTails.set(path, tail);
-  await previous;
-  try { return await body(); }
-  finally {
-    finishTurn();
-    if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
+  const outer = asynchronousTurns.getStore();
+  for (let turn = outer; turn !== undefined; turn = turn.outer) {
+    if (turn.active && turn.path === path)
+      throw new OwnedFenceContentionError(
+        "Owned fence lock is held or awaited by this same asynchronous context; a nested claim would wait for itself.");
   }
+  const record = { path, active: true, outer };
+  return await asynchronousTurns.run(record, async () => {
+    const previous = asynchronousTails.get(path) ?? Promise.resolve();
+    let finishTurn;
+    const turn = new Promise((resolvePromise) => { finishTurn = resolvePromise; });
+    const tail = previous.then(() => turn);
+    asynchronousTails.set(path, tail);
+    try {
+      await previous;
+      return await body();
+    } finally {
+      // Work this turn started and left running is not inside it any more: it may claim the path once the turn ends.
+      record.active = false;
+      finishTurn();
+      if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
+    }
+  });
 }
 
 // One claim-effect-release, shared by both entry points. Every wait is a step its driver performs: the sync driver

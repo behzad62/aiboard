@@ -742,8 +742,9 @@ test("portable snapshot validates one coherent checkpoint, retained suffix, and 
   } finally { removeFixture(fixture.root); }
 });
 
-// The Runner's snapshot is async (FL3), and the retirement is the supervisor's sync effect. Asked for in the middle of a
-// retirement, the snapshot waits for the lock and sees all of it; a holder in another process keeps it out.
+// The Runner's snapshot is async (FL3); the retirement is the supervisor's sync effect, in the supervisor's own process.
+// While that retirement holds the lock between deleting the output and advancing the checkpoint, a snapshot cannot
+// enter: a short one reports coordination, and a long one settles only after the retirement, with all of it.
 test("portable snapshot and ACK retirement share the real owned lock and never expose a torn state", async () => {
   const fixture = outputFixture("real-lock-snapshot-retirement");
   const snapshot = (deadlineMs = 2_000) => runPortableFenceSnapshot({
@@ -773,39 +774,49 @@ test("portable snapshot and ACK retirement share the real owned lock and never e
       assert.deepEqual(before.value.checkpoint.stdout, { sequence: 0, endOffset: 0 });
     }
 
-    // A holder in another process (the supervisor) keeps the snapshot out until its deadline: coordination, not a read.
-    const holder = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url)), "hold", fixture.lockPath, "", "2000", "60000"],
-      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    try {
-      const acquired = await new Promise<string>((resolvePromise, reject) => {
-        let text = "";
-        holder.stdout.on("data", (chunk: Buffer) => { text += chunk.toString("utf8"); if (text.includes("\n")) resolvePromise(text); });
-        holder.once("close", (code) => reject(new Error(`holder exited (${String(code)}): ${text}`)));
-      });
-      assert.match(acquired, /"acquired"/);
-      const blocked = await snapshot(25);
-      assert.equal(blocked.status, "unavailable", "a reader cannot enter while another process holds the lock");
-      if (blocked.status === "unavailable") assert.equal(blocked.cause, "coordination");
-    } finally {
-      holder.kill("SIGKILL");
-      if (holder.exitCode === null && holder.signalCode === null) await new Promise((resolvePromise) => holder.once("exit", resolvePromise));
-    }
-
-    let during: ReturnType<typeof snapshot> | undefined;
-    const retirement = runPortableFenceEffectSync({
-      lockPath: fixture.lockPath,
-      expectedFence: oldFence,
-      readCurrentFence: () => readFence(fixture),
-      effect: () => retirePortableOutputAcknowledgement({
-        ...fixture.retirement,
-        afterBoundary: (boundary) => {
-          if (boundary === "output") during = snapshot(2_000);
-        },
-      }),
+    const resumePath = join(fixture.root, "resume-retirement");
+    const supervisor = spawn(process.execPath, [
+      fileURLToPath(new URL("./fixtures/portable-retirement-pause.mjs", import.meta.url)),
+      fixture.lockPath, fixture.fencePath, JSON.stringify(fixture.retirement), resumePath,
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const messages: Array<Record<string, unknown>> = [];
+    let output = "";
+    const waiters: Array<() => void> = [];
+    supervisor.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      for (let newline = output.indexOf("\n"); newline >= 0; newline = output.indexOf("\n")) {
+        messages.push(JSON.parse(output.slice(0, newline)) as Record<string, unknown>);
+        output = output.slice(newline + 1);
+      }
+      for (const wake of waiters.splice(0)) wake();
     });
-    assert.equal(retirement.status, "applied");
-    assert.ok(during, "the snapshot was asked for between output deletion and checkpoint publication");
-    assertRetired(await during, "asked for mid-retirement, it reads the whole retirement");
+    let exited = false;
+    supervisor.once("close", () => { exited = true; for (const wake of waiters.splice(0)) wake(); });
+    const message = async (state: string) => {
+      for (;;) {
+        const found = messages.find((entry) => entry.state === state);
+        if (found) return found;
+        if (exited) throw new Error(`the retirement process exited before "${state}": ${JSON.stringify(messages)}`);
+        await new Promise<void>((resolvePromise) => waiters.push(resolvePromise));
+      }
+    };
+    try {
+      await message("paused");
+      const blocked = await snapshot(25);
+      assert.equal(blocked.status, "unavailable", "a reader cannot enter between output deletion and checkpoint publication");
+      if (blocked.status === "unavailable") assert.equal(blocked.cause, "coordination");
+      let settled = false;
+      const late = snapshot(20_000);
+      void late.then(() => { settled = true; });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+      assert.equal(settled, false, "a snapshot asked for mid-retirement waits for it");
+      writeFileSync(resumePath, "");
+      assert.equal((await message("retired")).status, "applied");
+      assertRetired(await late, "asked for mid-retirement, it reads the whole retirement");
+    } finally {
+      if (!exited) supervisor.kill("SIGKILL");
+      if (!exited) await new Promise((resolvePromise) => supervisor.once("close", resolvePromise));
+    }
     assertRetired(await snapshot(), "after");
   } finally { removeFixture(fixture.root); }
 });

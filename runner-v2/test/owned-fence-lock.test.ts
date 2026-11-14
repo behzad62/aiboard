@@ -232,6 +232,32 @@ test("a sync claim on a lock this thread holds through a live async acquisition 
   });
 });
 
+// The async queue waits behind every earlier turn on a path without a deadline, so an async claim from inside this
+// context's own claim of the same lock would wait for itself forever (FL3 review). It fails at once, as a nested sync
+// claim does; work the effect leaves running claims normally once the effect is over.
+test("an async claim nested in this context's own async claim of the same lock fails at once", { timeout: 10_000 }, async () => {
+  await withRoot("nested-async", async (root) => {
+    const lockPath = join(root, ".fence.lock");
+    let nested: unknown;
+    let background: Promise<string> | undefined;
+    const startedAt = Date.now();
+    await withOwnedFenceLock(lockPath, async () => {
+      try { await withOwnedFenceLock(lockPath, () => assert.fail("the nested effect must not run")); }
+      catch (error) { nested = error; }
+      try { await withOwnedFenceLock(join(root, ".", ".fence.lock"), () => assert.fail("nor under another spelling")); }
+      catch (error) { assert.ok(isOwnedFenceLockContention(error), String(error)); }
+      background = new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20))
+        .then(() => withOwnedFenceLock(lockPath, () => "background claimed"));
+    });
+    assert.ok(isOwnedFenceLockContention(nested), `contention, not another failure: ${String(nested)}`);
+    assert.match(String((nested as Error).message), /would wait for itself/);
+    assert.ok(Date.now() - startedAt < 2_000, "it failed at once");
+    assert.equal(await background, "background claimed", "work the effect left running claims once the effect is over");
+    // Another lock inside a held one is not nested.
+    assert.equal(await withOwnedFenceLock(lockPath, async () => await withOwnedFenceLock(join(root, "other.lock"), () => "other")), "other");
+  });
+});
+
 // A POSIX name may hold a backslash. The URI SQLite opens must name that same file, not one with a separator there.
 test("a lock path is opened as itself: a POSIX backslash stays part of the name", async (t) => {
   const { sqliteDatabaseLocation } = await import("../src/windows-path-limits.mjs");

@@ -1329,7 +1329,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     } finally { closeSync(written); }
     renameSync(temporary, destination);
     durable.afterRename();
-    const renamed = openSync(destination, "r+");
+    this.flushRecord(record.processId);
+  }
+  /** Flushes a record file in place: the renamed release record, and again before a release is finished from it. */
+  private flushRecord(processId: string): void {
+    const renamed = openSync(this.containedProcessPath(processId, ".json"), "r+");
     try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
   private applyStatus(record: HostRecord, status: SupervisorStatus, persistRecord = true): void {
@@ -1437,6 +1441,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   }
   private async recoverReleasedFence(requestedProcessId: string, record: HostRecord, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence: WindowsJobWriterFence | undefined): Promise<void> {
     this.assertEmbeddedProcessId(requestedProcessId, record);
+    // The release record may be one whose flush after its rename failed: flush it before the release is finished.
+    try { this.flushRecord(requestedProcessId); }
+    catch (error) { throw new WindowsJobHostError("process_control_unavailable", `Windows Job release record cannot be flushed: ${String(error)}`); }
     const lockPath = this.containedProcessPath(requestedProcessId, ".fence.lock");
     const assertRevoked = (): void => {
       const current = this.ownedRecord(requestedProcessId, owner);
