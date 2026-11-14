@@ -1,4 +1,6 @@
 import { Script, createContext } from "node:vm";
+
+import { PATTERN_WALL_CEILING_MS, runPatternWithCpuBudget } from "./pattern-cpu-budget.js";
 import {
   MANAGED_INPUT_WAIT_CPU_FRACTION,
   MANAGED_PATTERN_MAX_CHARS,
@@ -96,28 +98,33 @@ export function validateOutputPattern(pattern: string): { ok: true } | { ok: fal
   return { ok: true };
 }
 
-/** Hard bound on one pattern evaluation. Ordinary patterns take ≤ ~11 ms on a full 4 KiB tail. */
-export const MANAGED_PATTERN_EVAL_TIMEOUT_MS = 50;
-// One reusable context: V8 interrupts a backtracking RegExp at the vm timeout, which no static
+/**
+ * CPU-time bound on one pattern evaluation (pattern-cpu-budget.ts), never wall-clock time. Measured on a full 4 KiB
+ * tail: ordinary patterns use 0-0.4 ms of CPU (Windows 16 CPUs and a 2-CPU Linux container, idle and with 2x and 4x
+ * as many busy processes as CPUs); an earlier note recorded up to ~11 ms. 50 ms is about 4x that and three Windows
+ * CPU-clock ticks (15.6 ms), while `a*a*!` uses 120 ms on 512 characters and seconds on 4 KiB.
+ */
+export const MANAGED_PATTERN_EVAL_CPU_BUDGET_MS = 50;
+// One reusable context: V8 interrupts a backtracking RegExp only at a vm timeout, which no static
 // guard can promise (two adjacent quantifiers already cost seconds on a 4 KiB tail).
 const patternContext = createContext({ re: /(?:)/u, s: "" });
 const patternScript = new Script("re.exec(s)");
 
 /**
- * Assumes validateOutputPattern passed. Only the bounded tail is ever searched, and never for longer
- * than MANAGED_PATTERN_EVAL_TIMEOUT_MS: an over-budget pattern fails the wait with invalid_arguments
- * instead of stalling the Runner's event loop.
+ * Assumes validateOutputPattern passed. Only the bounded tail is ever searched, and never with more than
+ * MANAGED_PATTERN_EVAL_CPU_BUDGET_MS of CPU time: an over-budget pattern fails the wait with invalid_arguments
+ * instead of stalling the Runner's event loop. A busy host that only delays the evaluation never fails it.
  */
 export function matchOutputPattern(pattern: string, flags: "i" | undefined, plainTail: string): string | undefined {
   patternContext.re = new RegExp(pattern, flags === "i" ? "iu" : "u");
   patternContext.s = utf8Tail(plainTail, MANAGED_PATTERN_TAIL_BYTES);
-  let match: RegExpExecArray | null;
-  try { match = patternScript.runInContext(patternContext, { timeout: MANAGED_PATTERN_EVAL_TIMEOUT_MS }) as RegExpExecArray | null; }
-  catch (error) {
-    if ((error as { code?: string }).code === "ERR_SCRIPT_EXECUTION_TIMEOUT")
-      throw invalid(`until.pattern exceeded its ${MANAGED_PATTERN_EVAL_TIMEOUT_MS} ms evaluation bound; use a simpler pattern.`);
-    throw error;
-  } finally { patternContext.s = ""; }
+  let evaluation;
+  try { evaluation = runPatternWithCpuBudget<RegExpExecArray | null>(patternScript, patternContext, MANAGED_PATTERN_EVAL_CPU_BUDGET_MS); }
+  finally { patternContext.s = ""; }
+  if (!evaluation.ok) throw invalid(evaluation.reason === "cpu"
+    ? `until.pattern used more than its ${MANAGED_PATTERN_EVAL_CPU_BUDGET_MS} ms CPU evaluation bound; use a simpler pattern.`
+    : `until.pattern could not be evaluated within ${PATTERN_WALL_CEILING_MS} ms on this busy host.`);
+  const match = evaluation.value;
   return match ? match[0].slice(0, 200) : undefined;
 }
 

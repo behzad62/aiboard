@@ -20,7 +20,8 @@ async function withProbeTransport(
       assert.equal(executable, "powershell.exe");
       assert.deepEqual(args.slice(0, 4), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]);
       assert.equal(args.length, 5);
-      assert.equal(options.timeout, 5_000);
+      // The measured default (windows-job-process-host.ts DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS).
+      assert.equal(options.timeout, 15_000);
       assert.equal(options.killSignal, "SIGKILL");
       assert.equal(options.windowsHide, true);
       assert.equal(options.stdio, "ignore");

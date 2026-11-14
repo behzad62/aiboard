@@ -18,6 +18,8 @@ export interface GenericPosixProcessInspectionOperations {
     | { readonly outcome: "ok"; readonly fingerprint: string }
     | { readonly outcome: "absent" | "timeout" | "malformed" | "failure" };
 }
+/** The default claim deadline (ms); see the measurements at the constant. */
+export const OWNED_FENCE_DEFAULT_DEADLINE_MS: number;
 export class OwnedFenceLockUnavailableError extends Error {}
 export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {}
 export class OwnedFenceAuthorityRetirementError extends Error {}

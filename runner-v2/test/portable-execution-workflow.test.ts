@@ -150,7 +150,7 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.ok(inputWaitStep > 0, "T1 acceptance is the only proof of POSIX CPU evidence on Linux and macOS.");
   const inputWaitBlock = portable.slice(inputWaitStep);
   assert.match(inputWaitBlock, /if:\s*runner\.os\s*!=\s*'Windows'/);
-  for (const testPath of ["posix-process-usage", "managed-process-wait-tracker", "managed-interaction-native"])
+  for (const testPath of ["posix-process-usage", "managed-process-wait-tracker", "managed-interaction-native", "pattern-cpu-budget"])
     assert.equal(inputWaitBlock.includes(`runner-v2/test/${testPath}.test.ts`), true, `POSIX T1 CI omits ${testPath}.`);
   for (const testPath of qualificationOnlyLeakGuards) {
     assert.equal(source.includes(testPath), false, `Host-sensitive qualification-only test leaked into required PR CI: ${testPath}.`);

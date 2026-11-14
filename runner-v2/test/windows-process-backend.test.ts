@@ -1581,7 +1581,8 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
   }
 });
 
-test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
+// A 3 s probe once took two attempts (a 2 s slice killed, then 4 s started cold). Now one probe gets the whole budget.
+test("Windows portable startup gives one exact birth inspection its whole bounded budget", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive birth fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-birth-"));
   const directory = join(root, "owned-adaptive-birth"); mkdirSync(directory);
@@ -1608,7 +1609,7 @@ test("Windows portable startup retries an exact birth inspection with an adaptiv
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const running = await waitForPortableState(directory, (state) =>
-      state.status === "running" && state.windowsBirthInspectionAttempts === 2 &&
+      state.status === "running" && state.windowsBirthInspectionAttempts === 1 &&
       (state.windowsBirthInspectionDeadlineMs ?? 0) >= 4_000,
     10_000);
     assert.equal(running.launchEffect, "started");
@@ -1630,7 +1631,8 @@ test("portable backend does not cap Windows supervisor birth discovery at the fo
   assert.match(source, /WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS/);
 });
 
-test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
+// A 3 s inventory used to be killed at the 2 s first watchdog and started again; now one inventory gets the whole bound.
+test("Windows supervisor gives a slow default inventory its whole bound, with no failed attempt", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive CIM fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-cim-"));
   const directory = join(root, "owned-adaptive-query"); mkdirSync(directory);
@@ -1661,7 +1663,7 @@ test("Windows supervisor adapts its default inventory attempt budget to a slower
   try {
     const recovered = await waitForPortableState(directory, (state) =>
       state.status === "running" && (state.windowsTreeRefreshCount ?? 0) >= 2 &&
-      (state.windowsTreeFailures ?? 0) === 0 && (state.windowsTreeInspectionDeadlineMs ?? 0) > 2_000,
+      (state.windowsTreeFailures ?? 0) === 0 && state.windowsTreeInspectionDeadlineMs === 60_000,
     8_000);
     assert.ok(recovered.rootProcess);
     assert.equal(processIsAlive(recovered.rootProcess.pid), true);

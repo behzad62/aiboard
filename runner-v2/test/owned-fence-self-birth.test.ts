@@ -13,6 +13,7 @@ import * as sqlite from "node:sqlite";
 import test from "node:test";
 import vm from "node:vm";
 
+import * as hostTiming from "../src/host-timing.mjs";
 import { currentProcessBirthPreparation, prepareCurrentProcessBirthFingerprint } from "../src/owned-fence-lock.mjs";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import * as windowsPathLimits from "../src/windows-path-limits.mjs";
@@ -26,10 +27,12 @@ interface FakeTimer { at: number; seq: number; callback: () => void; refed: bool
 interface FakeChild { startedAt: number; killed: boolean; killedAt?: number; unrefed: Set<string>; done: boolean }
 
 // One module instance: a fake clock and timers, a fake execFile whose powershell.exe starts take `coldStartMs`
-// (Infinity: never), honouring its own `timeout` option as node does, and an execFileSync that throws (the sync
-// probe would be a cold start too; a test that needs it to run has to say so).
+// (Infinity: never), honouring its own `timeout` option as node does, and a sync execFileSync probe. By default the sync
+// probe never answers: it spends its whole `timeout` on the fake clock and fails, as a timed-out cold start does; a
+// test that needs it to answer passes `syncProbe` (how long call `call` takes, and what it prints, or an error).
 // `completionLagMs`: how much later than the probe's exit its caller gets to run (a busy event loop).
-function loadModule(options: { coldStartMs: number | ((call: number) => number); output?: (call: number) => string; platform?: string; completionLagMs?: number }) {
+type SyncProbe = (call: number) => { ms: number; output?: string; fails?: boolean };
+function loadModule(options: { coldStartMs: number | ((call: number) => number); output?: (call: number) => string; platform?: string; completionLagMs?: number; syncProbe?: SyncProbe }) {
   const clock = { now: T0 };
   const timers = new Set<FakeTimer>();
   let seq = 0;
@@ -64,8 +67,16 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
     return { unref: () => { child.unrefed.add("child"); }, kill, stdin: pipe("stdin"), stdout: pipe("stdout"), stderr: pipe("stderr") };
   };
   const execFileSync = (_file: string, _args: string[], execOptions: { timeout: number }) => {
+    const call = syncCalls.length;
     syncCalls.push(execOptions.timeout);
-    throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const probe = options.syncProbe?.(call) ?? { ms: Number.POSITIVE_INFINITY };
+    if (probe.ms >= execOptions.timeout) {
+      clock.now += execOptions.timeout;
+      throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
+    }
+    clock.now += probe.ms;
+    if (probe.fails) throw new Error("Command failed: powershell.exe");
+    return probe.output ?? PRESENT_BIRTH;
   };
   const fakeProcess = {
     pid: process.pid, platform: options.platform ?? "win32",
@@ -73,15 +84,16 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
     off: (event: string, listener: () => void) => { if (event === "exit") exitListeners.delete(listener); },
   };
   const context = vm.createContext({
-    ...childProcess, execFile, execFileSync, ...crypto, ...fs, ...path, ...sqlite, ...windowsPathLimits,
+    ...childProcess, execFile, execFileSync, ...crypto, ...fs, ...path, ...sqlite, ...windowsPathLimits, ...hostTiming,
     process: fakeProcess, Date: { now: () => clock.now }, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout,
   });
   const body = SOURCE
     .replace(/^import \{[^}]*\} from "[^"]+";$/gm, "")
     .replace(/^export (?=(?:async )?function |class |const |let )/gm, "");
   assert.doesNotMatch(body, /^(?:import|export)\b/m, "the whole module loads");
-  vm.runInContext(`${body}\nglobalThis.__module = { withOwnedFenceLock, prepareCurrentProcessBirthFingerprint, currentProcessBirthPreparation, parseWindowsBirthProbe };`, context);
+  vm.runInContext(`${body}\nglobalThis.__module = { withOwnedFenceLock, prepareCurrentProcessBirthFingerprint, currentProcessBirthPreparation, parseWindowsBirthProbe, currentProcessBirthFingerprint };`, context);
   const lockModule = context.__module as {
+    currentProcessBirthFingerprint(remainingMs?: number): string;
     withOwnedFenceLock<T>(path: string, effect: () => T, options?: Record<string, unknown>): Promise<T>;
     prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
     currentProcessBirthPreparation(): string;
@@ -130,7 +142,7 @@ function withLockFolder<T>(body: (lockPath: string) => Promise<T>): Promise<T> {
 }
 
 // Review S1: a 10 s caller used to lose to a 6 s cold start, because the background attempts kept fixed 2/4/8 s
-// bounds and each new attempt started cold again. An attempt now lasts while a waiting claim still has time.
+// bounds and each new attempt started cold again. Now one probe lasts until it answers or its cap.
 // Also S2: reverting withOwnedFenceLock to `acquire(path, options)` sends this claim to the sync probe and fails it.
 test("a 10 s claim through withOwnedFenceLock outlasts a 6 s powershell.exe cold start with one probe", async () => {
   await withLockFolder(async (lockPath) => {
@@ -146,30 +158,38 @@ test("a 10 s claim through withOwnedFenceLock outlasts a 6 s powershell.exe cold
   });
 });
 
-test("a claim whose deadline passes before the cold start fails closed at that deadline, and the preparation goes on", async () => {
+test("a claim whose deadline passes before the cold start fails closed at that deadline, and the probe goes on for the next one", async () => {
   await withLockFolder(async (lockPath) => {
     const never = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
     const failed = await never.drive(never.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000 }));
     assert.ok(!failed.ok);
     assert.match(failed.error.message, /Current owned fence holder birth identity is unavailable/);
     assert.equal(failed.at, 10_000, "exactly at the caller's own deadline, never later");
-    assert.equal(never.children[0]!.killed, true, "the attempt the claim waited on ended with the claim's deadline");
+    assert.equal(never.children[0]!.killed, false, "the probe is not killed with the claim that gave up");
+    assert.equal(never.module.currentProcessBirthPreparation(), "preparing");
     assert.deepEqual(never.syncCalls, []);
 
-    // The 2 s default: the first attempt (bound 2 s) ends with the claim, the next one (4 s) starts at once.
-    const slow = loadModule({ coldStartMs: 3_000 });
+    // The default deadline (15 s, set from measured claims): a 20 s cold start outlives the first claim, which fails
+    // closed at 15 s; the same probe answers at 20 s and the next claim needs no cold start.
+    const slow = loadModule({ coldStartMs: 20_000 });
     const first = await slow.drive(slow.module.withOwnedFenceLock(lockPath, () => "effect ran"));
     assert.ok(!first.ok);
     assert.match(first.error.message, /birth identity is unavailable/);
-    assert.equal(first.at, 2_000);
-    assert.equal(slow.module.currentProcessBirthPreparation(), "preparing", "the failed claim leaves the preparation running");
-    await slow.advance(3_100);
+    assert.equal(first.at, 15_000);
+    assert.equal(slow.module.currentProcessBirthPreparation(), "preparing", "the failed claim leaves the probe running");
+    await slow.advance(5_100);
     assert.equal(slow.module.currentProcessBirthPreparation(), "known");
-    assert.equal(slow.children.length, 2);
+    assert.equal(slow.children.length, 1, "one cold start, never killed and restarted");
     const second = await slow.drive(slow.module.withOwnedFenceLock(lockPath, () => "effect ran"));
     assert.ok(second.ok, "the next claim needs no cold start");
-    assert.equal(slow.children.length, 2);
+    assert.equal(slow.children.length, 1);
     assert.deepEqual(slow.syncCalls, []);
+
+    // A 9 s cold start (2x load on 16 CPUs measured 4.9-9.1 s) fits the default claim.
+    const loaded = loadModule({ coldStartMs: 9_000 });
+    const ran = await loaded.drive(loaded.module.withOwnedFenceLock(lockPath, () => "effect ran"));
+    assert.ok(ran.ok);
+    assert.equal(ran.at, 9_000, "it ran the moment the probe answered");
   });
 });
 
@@ -179,7 +199,7 @@ test("a claim that waited for the probe reaches acquire with its original deadli
   await withLockFolder(async (lockPath) => {
     // The probe returns at 1.9 s and the claim gets to run 150 ms later, past its 2 s.
     const late = loadModule({ coldStartMs: 1_900, completionLagMs: 150 });
-    const result = await late.drive(late.module.withOwnedFenceLock(lockPath, () => "effect ran"));
+    const result = await late.drive(late.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 2_000 }));
     assert.ok(!result.ok, "a fresh 2 s in acquire would have run the effect at 2.05 s");
     assert.equal(result.error.name, "OwnedFenceContentionError");
     assert.match(result.error.message, /deadline is exhausted/);
@@ -192,14 +212,14 @@ test("a claim that waited for the probe reaches acquire with its original deadli
     assert.match(capped.error.message, /deadline is exhausted/);
 
     const onTime = loadModule({ coldStartMs: 1_900 });
-    const ran = await onTime.drive(onTime.module.withOwnedFenceLock(lockPath, () => "effect ran"));
+    const ran = await onTime.drive(onTime.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 2_000 }));
     assert.ok(ran.ok, "inside its deadline the same claim runs");
   });
 });
 
-// Review A: waiters extend an attempt only up to the schedule's longest attempt bound (16 s) from its start, so a
-// busy host whose claims never stop cannot keep a hung probe alive: it is killed at that cap and replaced.
-test("a stream of overlapping claims cannot keep a hung probe alive past 16 s from its start", async () => {
+// Review A: a probe lasts at most its 30 s cap from its own start, so a busy host whose claims never stop cannot keep
+// a hung probe alive: it is killed at that cap and, while claims still wait, replaced after a short delay.
+test("a stream of overlapping claims cannot keep a hung probe alive past its 30 s cap", async () => {
   const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
   const claims: Promise<{ error?: Error; afterMs: number }>[] = [];
   for (let second = 0; second < 60; second += 1) {
@@ -208,36 +228,66 @@ test("a stream of overlapping claims cannot keep a hung probe alive past 16 s fr
       () => ({ afterMs: harness.clock.now - startedAt }), (error: Error) => ({ error, afterMs: harness.clock.now - startedAt })));
     await harness.advance(1_000);
   }
-  await harness.advance(2_000);
+  await harness.advance(15_000);
   for (const outcome of await Promise.all(claims)) {
     assert.match(outcome.error?.message ?? "the claim ran", /birth identity is unavailable/);
-    assert.equal(outcome.afterMs, 2_000, "every claim fails closed at its own 2 s");
+    assert.equal(outcome.afterMs, 15_000, "every claim fails closed at its own 15 s");
   }
   const [first, second, third] = harness.children;
-  assert.equal(first!.killedAt! - T0, 16_000, "the 2 s attempt, extended by the waiting claims, is killed at its 16 s cap");
-  assert.equal(second!.startedAt - T0, 16_025, "and replaced after the retry delay");
-  assert.equal(second!.killedAt! - second!.startedAt, 16_000, "the next one gets the same cap from its own start");
-  assert.equal(third!.startedAt - T0, 32_050);
+  assert.equal(first!.killedAt! - T0, 30_000, "the probe is killed at its 30 s cap");
+  assert.equal(second!.startedAt - T0, 30_025, "and replaced after the 25 ms retry delay, since claims still wait");
+  assert.equal(second!.killedAt! - second!.startedAt, 30_000, "the next one gets the same cap from its own start");
+  assert.equal(third!.startedAt - second!.killedAt!, 38, "the retry delay grows by half");
 });
 
-test("with no claim waiting, the background attempts keep their 2, 4, 8 and 16 s bounds and never cache an unknown identity", async () => {
+test("with no claim waiting, one background probe lasts its 30 s cap and never caches an unknown identity", async () => {
   const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
-  const preparing = harness.drive(harness.module.prepareCurrentProcessBirthFingerprint(), 120_000);
-  const result = await preparing;
+  const result = await harness.drive(harness.module.prepareCurrentProcessBirthFingerprint(), 120_000);
   assert.ok(result.ok);
   assert.equal(result.value, undefined, "it resolves to undefined, never rejects");
-  const durations = harness.children.map((child, index) => (harness.children[index + 1]?.startedAt ?? T0 + result.at) - child.startedAt);
-  assert.deepEqual(durations, [2_025, 4_025, 8_025, 16_000], "each bound, then the 25 ms retry delay before the next");
-  assert.ok(harness.children.every((child) => child.killed));
+  assert.equal(harness.children.length, 1, "one probe, never restarted cold while it might still answer");
+  assert.equal(harness.children[0]!.killedAt! - T0, 30_000);
+  assert.equal(result.at, 30_000);
   assert.equal(harness.module.currentProcessBirthPreparation(), "idle");
 
-  // Garbled output of a run that exited 0 (review N6) is unknown too: not cached, and the next call probes again.
+  // Garbled output of a run that exited 0 (review N6) is unknown too: not cached, and the probe runs again.
   const outputs = ["PRESENT:garbage\r\n", PRESENT_BIRTH];
   const garbled = loadModule({ coldStartMs: 100, output: (call) => outputs[call]! });
   const learned = await garbled.drive(garbled.module.prepareCurrentProcessBirthFingerprint());
   assert.ok(learned.ok);
   assert.equal(learned.value, BIRTH);
   assert.equal(garbled.children.length, 2);
+  assert.equal(garbled.children[1]!.startedAt - T0, 125, "after the 25 ms retry delay");
+});
+
+// The sync probe (acquire, when the identity is not known yet): one probe gets all of the caller's time.
+test("the sync self-birth probe gets the caller's whole time and returns the moment it answers", () => {
+  const slow = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, syncProbe: () => ({ ms: 6_000 }) });
+  assert.equal(slow.module.currentProcessBirthFingerprint(10_000), BIRTH);
+  assert.deepEqual(slow.syncCalls, [10_000], "one probe bounded by the caller's 10 s, never a 2 s slice");
+  assert.equal(slow.clock.now - T0, 6_000);
+
+  const never = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
+  assert.throws(() => never.module.currentProcessBirthFingerprint(10_000), /Current owned fence holder birth identity is unavailable/);
+  assert.deepEqual(never.syncCalls, [10_000], "a probe that never answers is not restarted");
+  assert.equal(never.clock.now - T0, 10_000, "and fails closed at the caller's deadline, never later");
+
+  const defaulted = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
+  assert.throws(() => defaulted.module.currentProcessBirthFingerprint(), /birth identity is unavailable/);
+  assert.deepEqual(defaulted.syncCalls, [15_000], "the default is the lock's measured claim deadline");
+});
+
+test("the sync self-birth probe retries a probe that failed early, and never caches an unknown identity", () => {
+  const flaky = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, syncProbe: (call) => call < 2 ? { ms: 100, fails: true } : { ms: 100 } });
+  assert.equal(flaky.module.currentProcessBirthFingerprint(1_000), BIRTH);
+  assert.deepEqual(flaky.syncCalls, [1_000, 900, 800], "each retry gets the time still left");
+
+  let answers = false;
+  const recovering = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, syncProbe: () => answers ? { ms: 10 } : { ms: Number.POSITIVE_INFINITY } });
+  assert.throws(() => recovering.module.currentProcessBirthFingerprint(60), /birth identity is unavailable/);
+  answers = true;
+  assert.equal(recovering.module.currentProcessBirthFingerprint(), BIRTH, "an unknown result was not cached; the next call probes again");
+  assert.equal(recovering.syncCalls.length, 2);
 });
 
 test("the Windows birth probe output is accepted only in the round-trip format", () => {

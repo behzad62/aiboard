@@ -6,6 +6,7 @@ import {
   type ManagedOutputStreamEvidence,
 } from "./managed-process-contracts.js";
 import { renderPlainLines, validateOutputPattern } from "./managed-process-wait.js";
+import { runPatternWithCpuBudget } from "./pattern-cpu-budget.js";
 
 /**
  * Line search over everything bounded retention kept of a command's output, so a model can find one
@@ -76,7 +77,12 @@ const MATCH_LEAD_CHARS = 80;
 /** A result that fits a tool's inline output bound, so it is never cut into a preview. */
 const RESULT_MAX_BYTES = 6 * 1024;
 const CHUNK_BYTES = 1024 * 1024;
-const CHUNK_EVALUATION_TIMEOUT_MS = 250;
+/**
+ * CPU-time bound on one chunk (pattern-cpu-budget.ts), never wall-clock time. Ordinary patterns used 0-2.5 ms of CPU
+ * on a full 1 MiB chunk of build output (Windows and a 2-CPU Linux container); 250 ms is 100x that, while
+ * `a*a*a*a*a*a*b` uses 9-15 s of CPU on 64 characters.
+ */
+const CHUNK_EVALUATION_CPU_BUDGET_MS = 250;
 const SEARCH_BUDGET_MS = 10_000;
 const LINE_TEXT_CHARS = 2_000;
 /** How much of a line to render for each character shown. Terminal control renders to nothing, so it is well above one; a huge line stops here. */
@@ -189,7 +195,9 @@ async function scanRegion(stream: "stdout" | "stderr", region: RetainedOutputReg
     // renderPlainLines keeps every newline, so the nth line here is the nth line of the raw bytes.
     const text = renderPlainLines(bytes.toString("utf8", start, end));
     // One more than is still wanted shows whether the search stops early. A piece of a line that matched already can take one.
-    const found = evaluate(expression, text, scan.limit - scan.matches.length + (insideLine ? 2 : 1), insideLine, endsInsideLine);
+    const found = evaluate(expression, text, scan.limit - scan.matches.length + (insideLine ? 2 : 1), insideLine, endsInsideLine, scan.deadline - scan.now());
+    // A host too busy to finish this chunk inside the search budget ends the search as its own time limit does.
+    if (!found) return "time_limit";
     // The first line of a piece starts where its line does, which can be in an earlier piece.
     let textLine = 0, rawLine = lineOrigin, linesPassed = 0;
     for (let index = 0; index < found.length; index += 2) {
@@ -383,14 +391,14 @@ const searchScript = new Script(`(() => {
   return found;
 })()`);
 
-function evaluate(expression: RegExp, text: string, limit: number, cutHead: boolean, cutTail: boolean): readonly number[] {
+function evaluate(expression: RegExp, text: string, limit: number, cutHead: boolean, cutTail: boolean, timeLeftMs: number): readonly number[] | undefined {
   searchContext.re = expression; searchContext.s = text; searchContext.limit = limit; searchContext.cutHead = cutHead; searchContext.cutTail = cutTail;
-  try { return searchScript.runInContext(searchContext, { timeout: CHUNK_EVALUATION_TIMEOUT_MS }) as number[]; }
-  catch (error) {
-    if ((error as { code?: string }).code === "ERR_SCRIPT_EXECUTION_TIMEOUT")
-      throw invalid(`search.pattern exceeded its ${CHUNK_EVALUATION_TIMEOUT_MS} ms bound on one chunk of output; use a simpler pattern.`);
-    throw error;
-  } finally { searchContext.s = ""; }
+  let evaluation;
+  try { evaluation = runPatternWithCpuBudget<number[]>(searchScript, searchContext, CHUNK_EVALUATION_CPU_BUDGET_MS, Math.max(1, timeLeftMs)); }
+  finally { searchContext.s = ""; }
+  if (evaluation.ok) return evaluation.value;
+  if (evaluation.reason === "wall") return undefined;
+  throw invalid(`search.pattern used more than its ${CHUNK_EVALUATION_CPU_BUDGET_MS} ms CPU bound on one chunk of output; use a simpler pattern.`);
 }
 
 /** The next chunk ends after a newline, or where a character ends on a line longer than a chunk. */

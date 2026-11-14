@@ -19,8 +19,10 @@ const DEFAULT_START_DEADLINE_MS = 5_000;
 const KEEP_WARM_FAILURE_LIMIT = 3;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
 // Bounds the entire cold PowerShell process, including host startup. The
-// unchanged create/close command completed in 2,369 ms on hosted Windows.
-const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 5_000;
+// unchanged create/close command completed in 2,369 ms on hosted Windows; a cold powershell.exe start alone took
+// 4.9-9.1 s with 2x as many busy processes as CPUs (16 CPUs), and 5.3-7.4 s on two contended CPUs (T8). 15 s, the
+// bound the birth probes use for the same cold start, is 1.6x the slowest. It returns the moment the probe exits.
+const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 15_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
 const JOB_HOST_HELPER_DLL_FILENAME = "ManagedProcessJobHost.dll";
 const JOB_HOST_SOURCE_MARKER_START = "$jobHostCsSource = @'";

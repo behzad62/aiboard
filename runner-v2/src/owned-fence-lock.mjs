@@ -4,14 +4,40 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { HOST_POLL_MAX_DELAY_MS, nextHostPollDelay } from "./host-timing.mjs";
 import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 
 const PROTOCOL_VERSION = 1;
-const DEFAULT_DEADLINE_MS = 2_000;
+// A claim's default deadline. It covers the whole claim: on Windows the wait for this process's own birth identity,
+// then the SQLite open and every retry, all host-speed work. Measured:
+// - whole uncontended claim: Windows 15-23 ms idle, up to 851 ms with 2x as many busy processes as CPUs; a 2-CPU Linux
+//   container 45-150 ms idle, up to 263 ms loaded;
+// - SQLite open: Windows <= 17 ms idle locally, but 1,750 ms (PR #205, one case in 32 on main) and 2,783 ms (Windows
+//   CI, 2026-11-14, "open 2783 ms") on loaded hosts; Linux container up to 715 ms;
+// - Windows self-birth (cold powershell.exe): 155-413 ms idle; 5.3-7.4 s on two contended CPUs (T8, PR #205); 4.9-9.1 s
+//   with 2x as many busy processes as CPUs here, 9.6-21.3 s with 4x.
+// 15 s is over 5x the slowest open and 2x the slowest real self-birth (1.6x the 2x-load one). At 4x load the first
+// claim of a process can still fail closed; the background probe (SELF_BIRTH_PROBE_CAP_MS) goes on for later ones.
+// A claim returns the moment it holds the lock; the ceiling is reached only by a lock that stays held.
+export const OWNED_FENCE_DEFAULT_DEADLINE_MS = 15_000;
+const DEFAULT_DEADLINE_MS = OWNED_FENCE_DEFAULT_DEADLINE_MS;
+// First wait before a claim checks again; then it grows by half up to HOST_POLL_MAX_DELAY_MS. What it waits for is
+// another claim's transaction, and the fastest whole claim measured is 15 ms (Windows idle), so 5 ms checks about three
+// times within the shortest hold. A check is one BEGIN IMMEDIATE (with SQLite's own 25 ms busy_timeout).
 const DEFAULT_RETRY_DELAY_MS = 5;
-const SELF_BIRTH_FIRST_ATTEMPT_MS = 2_000;
-const SELF_BIRTH_MAX_ATTEMPTS = 4;
+// The background Windows self-birth probe is one cold powershell.exe start, never killed and restarted while it may
+// still answer: it lasts SELF_BIRTH_PROBE_CAP_MS from its own start and returns the moment it answers. 30 s is 1.4x
+// the slowest start measured (21.3 s, 4x as many busy processes as CPUs) and twice a default claim, so a probe slower
+// than one claim still serves the next.
+const SELF_BIRTH_PROBE_CAP_MS = 30_000;
+// A probe that ends early without an identity starts again after this, growing by half up to the maximum. No early
+// probe failure was ever observed, so there is no data for these; they keep the earlier 25 ms retry delay.
 const SELF_BIRTH_RETRY_DELAY_MS = 25;
+const SELF_BIRTH_MAX_RETRY_DELAY_MS = 250;
+// At most this many probes per call or preparation, as before (4 attempts). Each gets all the time left, so the cap
+// matters only when powershell.exe fails at once (missing, or blocked by policy): it stops a spawn every few ms.
+// A later claim starts a new preparation.
+const SELF_BIRTH_MAX_PROBES = 4;
 const PROTOCOL_COLUMNS = Object.freeze(["version", "retired", "authority_id"]);
 const LEGACY_PROTOCOL_COLUMNS = Object.freeze(["version", "retired"]);
 const AUTHORITY_UPDATE_TRIGGER = "owned_fence_authority_immutable";
@@ -60,8 +86,9 @@ const CANONICAL_AUTOINDEX_TABLES = new Map([
 ]);
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
-// The acquisition id this module instance currently holds, by resolved path (claim to release).
-// Diagnostic only: a contention failure says whether the blocking holder is this live acquisition.
+// The acquisition id this module instance currently holds, by resolved path (claim to release). A contention failure
+// says whether the blocking holder is this live acquisition, and the sync driver refuses to block on a path another
+// live acquisition of this thread holds (performStepSync). Every exit forgets its entry, even when close throws.
 const liveAcquisitions = new Map();
 const tracedErrors = new WeakSet();
 // Holder rows this module instance claimed but could not release, by resolved path. An entry whose
@@ -124,31 +151,7 @@ export function isOwnedFenceLockContention(error) {
 
 export function withOwnedFenceLockSync(path, effect, options = {}) {
   path = resolve(path);
-  const context = acquire(path, options);
-  let effectError;
-  let retired = false;
-  let effectStarted = false;
-  try {
-    beginEffect(context);
-    effectStarted = true;
-    let result;
-    try { result = effect(); }
-    catch (error) { effectError = error; }
-    retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
-    if (effectError !== undefined) throw effectError;
-    return result;
-  } catch (error) {
-    rollbackQuietly(context.database);
-    if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
-    if (effectError !== undefined && error !== effectError) {
-      throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
-    }
-    throw error;
-  } finally {
-    context.database.close();
-    forgetLiveAcquisition(context);
-    if (retired) retireProtocol(path, options, context.pathIdentity, context.authorityId);
-  }
+  return runSteps(lockSteps(path, effect, options));
 }
 
 export async function withOwnedFenceLock(path, effect, options = {}) {
@@ -160,38 +163,121 @@ export async function withOwnedFenceLock(path, effect, options = {}) {
   asynchronousTails.set(path, tail);
   await previous;
   try {
-    const context = acquire(path, await awaitPreparedHolderBirth(options));
-    let effectError;
-    let retired = false;
-    let effectStarted = false;
-    try {
-      beginEffect(context);
-      effectStarted = true;
-      let result;
-      try {
-        result = effect();
-        if (result && typeof result.then === "function") result = await result;
-      }
-      catch (error) { effectError = error; }
-      retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
-      if (effectError !== undefined) throw effectError;
-      return result;
-    } catch (error) {
-      rollbackQuietly(context.database);
-      if (!effectStarted) throw releaseUnstartedAcquisition(context, error);
-      if (effectError !== undefined && error !== effectError) {
-        throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
-      }
-      throw error;
-    } finally {
-      context.database.close();
-      forgetLiveAcquisition(context);
-      if (retired) retireProtocol(path, options, context.pathIdentity, context.authorityId);
-    }
+    return await runStepsAsync(lockSteps(path, effect, await awaitPreparedHolderBirth(options)));
   } finally {
     finishTurn();
     if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
   }
+}
+
+// One claim-effect-release, shared by both entry points. Every wait inside it is a step its driver performs: the sync
+// driver (withOwnedFenceLockSync) blocks the thread, which it already owns; the async driver (withOwnedFenceLock)
+// awaits a timer, so a claim that polls for seconds on a busy host never stops the Runner's event loop, and on Windows
+// it probes another holder's identity without blocking. No step yields while this connection holds a SQLite write
+// transaction it has not committed, except the effect itself, whose transaction the protocol holds by design.
+function* lockSteps(path, effect, options) {
+  const context = yield* acquireSteps(path, options);
+  let effectError;
+  let retired = false;
+  let effectStarted = false;
+  try {
+    yield* beginEffectSteps(context);
+    effectStarted = true;
+    let result;
+    try { result = yield effectStep(effect); }
+    catch (error) { effectError = error; }
+    retired = finalizeEffect(context, effectError, options.retireAfterEffect === true);
+    if (effectError !== undefined) throw effectError;
+    return result;
+  } catch (error) {
+    rollbackQuietly(context.database);
+    if (!effectStarted) throw yield* releaseUnstartedAcquisitionSteps(context, error);
+    if (effectError !== undefined && error !== effectError) {
+      throw new AggregateError([effectError, error], "Owned fence effect and finalization both failed.", { cause: effectError });
+    }
+    throw error;
+  } finally {
+    try { context.database.close(); }
+    finally { forgetLiveAcquisition(context); }
+    if (retired) yield* retireProtocolSteps(path, options, context.pathIdentity, context.authorityId);
+  }
+}
+
+/**
+ * A wait of `ms` before the next check. `path` and `acquisitionId` name the acquisition that waits, when it is a claim:
+ * the sync driver refuses to block on a lock this thread itself holds through another live acquisition (an async
+ * effect in progress, or a nested claim), since nothing on this thread could release it while the wait blocks.
+ */
+function sleepStep(ms, path, acquisitionId) {
+  return { kind: "sleep", ms, path, acquisitionId };
+}
+
+function effectStep(effect) {
+  return {
+    kind: "call",
+    sync: () => effect(),
+    async: async () => {
+      const result = effect();
+      return result && typeof result.then === "function" ? await result : result;
+    },
+  };
+}
+
+/** Gentle backoff from `firstMs`: each call returns the next wait, growing by half up to `maximumMs`. */
+function pollDelays(firstMs, maximumMs = HOST_POLL_MAX_DELAY_MS) {
+  let current = firstMs;
+  const maximum = Math.max(firstMs, maximumMs);
+  return () => {
+    const delay = current;
+    current = nextHostPollDelay(current, maximum);
+    return delay;
+  };
+}
+
+function runSteps(steps) {
+  let next = steps.next();
+  for (;;) {
+    if (next.done) return next.value;
+    let value;
+    let failure;
+    let failed = false;
+    try { value = performStepSync(next.value); }
+    catch (error) { failure = error; failed = true; }
+    next = failed ? steps.throw(failure) : steps.next(value);
+  }
+}
+
+async function runStepsAsync(steps) {
+  let next = steps.next();
+  for (;;) {
+    if (next.done) return next.value;
+    let value;
+    let failure;
+    let failed = false;
+    try { value = await performStepAsync(next.value); }
+    catch (error) { failure = error; failed = true; }
+    next = failed ? steps.throw(failure) : steps.next(value);
+  }
+}
+
+function performStepSync(step) {
+  if (step.kind === "sleep") {
+    const live = step.path === undefined ? undefined : liveAcquisitions.get(step.path);
+    if (live !== undefined && live !== step.acquisitionId)
+      throw new OwnedFenceContentionError(
+        "Owned fence lock is held by another live acquisition of this thread; a synchronous wait cannot outlast it.");
+    if (step.ms > 0) Atomics.wait(waiter, 0, 0, step.ms);
+    return undefined;
+  }
+  return step.sync();
+}
+
+async function performStepAsync(step) {
+  if (step.kind === "sleep") {
+    await new Promise((resolvePromise) => { setTimeout(resolvePromise, Math.max(0, step.ms)); });
+    return undefined;
+  }
+  return await step.async();
 }
 
 /**
@@ -226,13 +312,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
       database = new DatabaseSync(sqliteDatabaseLocation(path));
       assertCoordinationPathIdentity(path, pathIdentity);
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-      for (;;) {
-        try { database.exec("BEGIN IMMEDIATE"); break; }
-        catch (error) {
-          if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-          Atomics.wait(waiter, 0, 0, retryDelayMs);
-        }
-      }
+      await beginImmediateAsync(database, deadline, retryDelayMs);
       assertRecoverableProtocol(database, authorityId, { allowHolderDeleteTriggers: true });
       options.assertRevoked();
       assertCoordinationPathIdentity(path, pathIdentity);
@@ -265,7 +345,7 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
     const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
     options.assertRevoked();
     revalidateProtocolRemovalAuthority(path, removalAuthority);
-    removeProtocolPath(path, removalAuthority);
+    await runStepsAsync(removeProtocolPathSteps(path, removalAuthority));
   } finally {
     finishTurn();
     if (asynchronousTails.get(path) === tail) asynchronousTails.delete(path);
@@ -276,44 +356,37 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
   if (!Number.isFinite(remainingMs) || remainingMs <= 0)
     throw new OwnedFenceLockUnavailableError("Current owned fence holder inspection deadline is exhausted.");
   if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-  // On Windows the probe is a cold powershell.exe start: 155-218 ms idle, but 5.3-7.4 s measured on
-  // two contended CPUs, so one 2 s attempt failed every acquisition even with a 10 s caller deadline.
-  // Like the native backend's waitForBirth, escalate the per-attempt bound (2 s, 4 s, ...) inside the
-  // caller's own deadline. A timed-out attempt is killed and gives the next one no head start, so
-  // when the time left could not also hold the next, doubled attempt, this attempt takes all of it
-  // (a 10 s caller gets 2 s, then about 8 s). An inspection still unknown when that deadline is spent
-  // fails closed, and an unknown result is never cached.
+  // On Windows the probe is a cold powershell.exe start: 155-218 ms idle, but 5.3-7.4 s measured on two contended
+  // CPUs. One probe gets all of the caller's time and returns the moment it answers: killing a slow probe to start
+  // another would only start it cold again. A probe that ends early without an identity starts again after a short,
+  // growing delay while time is left. An inspection still unknown when the caller's deadline is spent fails closed,
+  // and an unknown result is never cached.
   const deadline = Date.now() + remainingMs;
-  let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
-  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
+  const delays = pollDelays(SELF_BIRTH_RETRY_DELAY_MS, SELF_BIRTH_MAX_RETRY_DELAY_MS);
+  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_PROBES; attempt += 1) {
     const left = deadline - Date.now();
     if (left < 1) break;
-    const bound = attempt === SELF_BIRTH_MAX_ATTEMPTS || left - attemptMs < attemptMs * 2 ? left : attemptMs;
-    const inspected = inspectProcessBirth(process.pid, left, bound);
+    const inspected = inspectProcessBirth(process.pid, left);
     if (inspected.state === "same") {
       cachedCurrentBirth = inspected;
       return inspected.fingerprint;
     }
-    if (inspected.state !== "unknown" || deadline - Date.now() <= SELF_BIRTH_RETRY_DELAY_MS) break;
-    attemptMs *= 2;
-    Atomics.wait(waiter, 0, 0, SELF_BIRTH_RETRY_DELAY_MS);
+    const delay = delays();
+    if (inspected.state !== "unknown" || deadline - Date.now() <= delay) break;
+    if (attempt < SELF_BIRTH_MAX_PROBES) Atomics.wait(waiter, 0, 0, delay);
   }
   throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
 }
 
 /**
  * Windows: learn this process's own birth identity in the background, before the first fence acquisition needs it.
- * The probe is a cold powershell.exe start (155-218 ms idle, seconds on a loaded host), and inside a 2 s acquisition
- * that start was the whole budget: the first claim of a fresh process failed with "birth identity is unavailable",
- * and its sync probe was killed with it, so the next claim started cold again. This runs the same escalating
- * schedule as currentProcessBirthFingerprint (2 s, 4 s, ... up to SELF_BIRTH_MAX_ATTEMPTS attempts), except that an
- * attempt is not ended while a claim waiting on it still has time: it lasts until its own bound or the latest
- * waiting claim's own deadline, whichever is later, so a 10 s caller keeps the whole 10 s for a slow start, as the
- * sync schedule gives its last attempt everything left. Waiters extend an attempt only up to the schedule's longest
- * attempt bound (16 s) from its start, so a hung probe is still killed and replaced while claims keep arriving.
- * It authorizes nothing: a claim still fails closed when the
- * identity is not known by its own deadline. Only a well-formed read identity is cached; an unknown one never is, and
- * a later call starts again.
+ * The probe is a cold powershell.exe start (155-218 ms idle, seconds on a loaded host). One probe runs until it answers
+ * or SELF_BIRTH_PROBE_CAP_MS from its own start, whichever is first; a claim that gives up meanwhile leaves it running
+ * for the next one. A probe that ends without an identity (it failed early, or was killed at its cap) starts again
+ * after a short, growing delay while the preparation is still inside SELF_BIRTH_PROBE_CAP_MS from its start or a
+ * waiting claim still has time; so a hung probe is still killed at its cap and replaced while claims keep arriving.
+ * It authorizes nothing: a claim still fails closed when the identity is not known by its own deadline. Only a
+ * well-formed read identity is cached; an unknown one never is, and a later call starts again.
  *
  * Nothing here keeps the process alive or outlives it: the probe, its pipes and its timers are unref'd, and a probe
  * still running when the process exits is killed. A waiting claim keeps the loop alive with its own deadline timer.
@@ -339,7 +412,7 @@ export function currentProcessBirthPreparation() {
 
 function startCurrentBirthPreparation() {
   if (preparingCurrentBirth) return preparingCurrentBirth;
-  const preparation = { waiters: new Set(), attempt: undefined, promise: undefined };
+  const preparation = { waiters: new Set(), promise: undefined };
   preparingCurrentBirth = preparation;
   preparation.promise = learnCurrentProcessBirth(preparation)
     .catch(() => undefined)
@@ -348,17 +421,20 @@ function startCurrentBirthPreparation() {
 }
 
 async function learnCurrentProcessBirth(preparation) {
-  let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
-  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
+  const startedAt = Date.now();
+  const delays = pollDelays(SELF_BIRTH_RETRY_DELAY_MS, SELF_BIRTH_MAX_RETRY_DELAY_MS);
+  for (let attempt = 1; attempt <= SELF_BIRTH_MAX_PROBES; attempt += 1) {
     if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-    const inspected = await inspectWindowsProcessBirthAsync(process.pid, Date.now(), attemptMs, preparation);
+    const inspected = await inspectWindowsProcessBirthAsync(process.pid);
     if (inspected.state === "same") {
       cachedCurrentBirth ??= inspected;
       return cachedCurrentBirth.fingerprint;
     }
-    if (inspected.state !== "unknown") return undefined;
-    attemptMs *= 2;
-    if (attempt < SELF_BIRTH_MAX_ATTEMPTS) await new Promise((resolvePromise) => { setTimeout(resolvePromise, SELF_BIRTH_RETRY_DELAY_MS).unref?.(); });
+    if (inspected.state !== "unknown" || attempt === SELF_BIRTH_MAX_PROBES) return undefined;
+    const delay = delays();
+    const endAt = Math.max(startedAt + SELF_BIRTH_PROBE_CAP_MS, latestWaitingDeadline(preparation));
+    if (Date.now() + delay >= endAt) return undefined;
+    await new Promise((resolvePromise) => { setTimeout(resolvePromise, delay).unref?.(); });
   }
   return undefined;
 }
@@ -369,11 +445,8 @@ function latestWaitingDeadline(preparation) {
   return latest;
 }
 
-function inspectWindowsProcessBirthAsync(pid, startedAt, attemptMs, preparation) {
-  const boundAt = startedAt + attemptMs;
-  // Waiters extend an attempt at most to the schedule's longest attempt bound from its start: the last attempt's.
-  const extensionCapAt = startedAt + SELF_BIRTH_FIRST_ATTEMPT_MS * 2 ** (SELF_BIRTH_MAX_ATTEMPTS - 1);
-  const endAt = () => Math.max(boundAt, Math.min(latestWaitingDeadline(preparation), extensionCapAt));
+/** One cold probe, ended only by its answer or SELF_BIRTH_PROBE_CAP_MS from its start (then killed, "unknown"). */
+function inspectWindowsProcessBirthAsync(pid) {
   return new Promise((resolvePromise) => {
     let settled = false;
     let timer;
@@ -384,19 +457,7 @@ function inspectWindowsProcessBirthAsync(pid, startedAt, attemptMs, preparation)
       settled = true;
       clearTimeout(timer);
       process.off("exit", kill);
-      if (preparation.attempt?.finish === finish) preparation.attempt = undefined;
       resolvePromise(result);
-    };
-    // The attempt ends at its own bound, or later while a waiting claim still has time, up to the cap.
-    const arm = () => {
-      if (settled) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        if (endAt() > Date.now()) { arm(); return; }
-        kill();
-        finish({ state: "unknown" });
-      }, Math.max(0, endAt() - Date.now()));
-      timer.unref?.();
     };
     try {
       child = execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true },
@@ -410,8 +471,8 @@ function inspectWindowsProcessBirthAsync(pid, startedAt, attemptMs, preparation)
     child.stdout?.unref?.();
     child.stderr?.unref?.();
     process.once("exit", kill);
-    preparation.attempt = { finish, arm };
-    arm();
+    timer = setTimeout(() => { kill(); finish({ state: "unknown" }); }, SELF_BIRTH_PROBE_CAP_MS);
+    timer.unref?.();
   });
 }
 
@@ -421,7 +482,6 @@ function waitForPreparedBirth(deadline) {
   const preparation = startCurrentBirthPreparation();
   const waiter = { deadline };
   preparation.waiters.add(waiter);
-  preparation.attempt?.arm();
   return new Promise((resolvePromise) => {
     let timer;
     const done = (outcome) => {
@@ -471,13 +531,7 @@ export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {})
     database = new DatabaseSync(sqliteDatabaseLocation(path));
     assertCoordinationPathIdentity(path, pathIdentity);
     database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-    for (;;) {
-      try { database.exec("BEGIN IMMEDIATE"); break; }
-      catch (error) {
-        if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-        Atomics.wait(waiter, 0, 0, retryDelayMs);
-      }
-    }
+    await beginImmediateAsync(database, deadline, retryDelayMs);
     assertCoordinationPathIdentity(path, pathIdentity);
     assertRetiredProtocol(database, authorityId);
     assertCoordinationPathIdentity(path, pathIdentity);
@@ -506,7 +560,7 @@ export function retiredOwnedFenceCleanupAvailable(path) {
   finally { database?.close(); }
 }
 
-function acquire(path, options) {
+function* acquireSteps(path, options) {
   const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1)
@@ -528,14 +582,18 @@ function acquire(path, options) {
     throw withAcquisitionTrace(new OwnedFenceContentionError("Owned fence acquisition deadline is exhausted."), path, trace, "starting");
   const authorityId = coordinationAuthorityId(path);
   let opened;
-  try { opened = openProtocol(path, authorityId, deadline, retryDelayMs, options.assertAuthority); }
+  try { opened = yield* openProtocolSteps(path, authorityId, deadline, retryDelayMs, options.assertAuthority, acquisitionId); }
   catch (error) { trace.openMs = Date.now() - startedAt - trace.birthMs; throw withAcquisitionTrace(error, path, trace, "opening"); }
   const { database, pathIdentity } = opened;
   trace.openMs = Date.now() - startedAt - trace.birthMs;
   const context = {
     path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs,
     inspectHolder: options.inspectHolder ?? defaultInspectHolder,
+    // An injected inspector is called as it is by both drivers; only the default one has a non-blocking form.
+    inspectHolderAsync: options.inspectHolder ?? defaultInspectHolderAsync,
     afterClaim: options.afterClaim,
+    // Tests only (like afterClaim): a shorter release window than the default, so a test can outlast it quickly.
+    releaseWindowMs: Number.isSafeInteger(options.releaseWindowMs) && options.releaseWindowMs > 0 ? options.releaseWindowMs : DEFAULT_DEADLINE_MS,
     trace,
   };
   let proposalInserted = false;
@@ -549,6 +607,7 @@ function acquire(path, options) {
       context.afterClaim?.();
       return context;
     }
+    const proposalDelays = pollDelays(retryDelayMs);
     while (!proposalInserted) {
       try {
         assertCoordinationPathIdentity(path, pathIdentity);
@@ -561,11 +620,12 @@ function acquire(path, options) {
           throw isBusy(error)
             ? new OwnedFenceContentionError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
             : error;
-        Atomics.wait(waiter, 0, 0, retryDelayMs);
+        yield sleepStep(Math.min(proposalDelays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
       }
     }
+    const claimDelays = pollDelays(retryDelayMs);
     for (;;) {
-      if (tryClaim(context)) {
+      if (yield* tryClaimSteps(context)) {
         claimed = true;
         retainedHolders.delete(path);
         liveAcquisitions.set(path, acquisitionId);
@@ -574,7 +634,7 @@ function acquire(path, options) {
       }
       if (Date.now() >= deadline)
         throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
-      Atomics.wait(waiter, 0, 0, retryDelayMs);
+      yield sleepStep(Math.min(claimDelays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
     }
   } catch (error) {
     if (!proposalInserted) {
@@ -583,9 +643,9 @@ function acquire(path, options) {
       throw thrown;
     }
     if (claimed) {
-      const released = releaseUnstartedAcquisition(context, error);
-      database.close();
-      forgetLiveAcquisition(context);
+      const released = yield* releaseUnstartedAcquisitionSteps(context, error);
+      try { database.close(); }
+      finally { forgetLiveAcquisition(context); }
       throw released;
     }
     try {
@@ -602,8 +662,10 @@ function acquire(path, options) {
   }
 }
 
-function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority) {
+function* openProtocolSteps(path, authorityId, deadline, retryDelayMs, assertAuthority, acquisitionId) {
   let observedProvisionalContention = false;
+  const delays = pollDelays(retryDelayMs);
+  const retry = (error) => waitForProtocolRetry(error, deadline, delays(), path, acquisitionId);
   for (;;) {
     let database;
     let pathIdentity;
@@ -616,18 +678,14 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
       try { assertProtocolObservation(path, beforeOpenIdentity, "before existing-path classification"); }
       catch (error) {
         if (beforeOpenIdentity && !coordinationPathCanRetry(path, beforeOpenIdentity)) throw error;
-        waitForProtocolRetry(error, deadline, retryDelayMs);
+        yield retry(error);
         continue;
       }
       if (!beforeOpenIdentity) {
         provisionalSnapshot = reserveProtocolPath(path);
         if (!provisionalSnapshot) {
           observedProvisionalContention = true;
-          waitForProtocolRetry(
-            new OwnedFenceContentionError("Owned fence provisional coordination creation remained contested."),
-            deadline,
-            retryDelayMs,
-          );
+          yield retry(new OwnedFenceContentionError("Owned fence provisional coordination creation remained contested."));
           continue;
         }
         beforeOpenIdentity = provisionalSnapshot;
@@ -639,11 +697,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         assertCoordinationPathSnapshot(path, provisionalSnapshot);
       } else {
         if (observedProvisionalContention && beforeOpenIdentity.size === "0") {
-          waitForProtocolRetry(
-            new OwnedFenceContentionError("Owned fence provisional coordination winner is not initialized yet."),
-            deadline,
-            retryDelayMs,
-          );
+          yield retry(new OwnedFenceContentionError("Owned fence provisional coordination winner is not initialized yet."));
           continue;
         }
         try {
@@ -651,14 +705,14 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         } catch (error) {
           const retryable = observedProvisionalContention || error instanceof OwnedFenceProtocolObservationChangedError || isBusy(error);
           if (!retryable || !coordinationPathCanRetry(path, beforeOpenIdentity, observedProvisionalContention)) throw error;
-          waitForProtocolRetry(error, deadline, retryDelayMs);
+          yield retry(error);
           continue;
         }
       }
       try { assertProtocolObservation(path, beforeOpenIdentity, "before read-write open"); }
       catch (error) {
         if (!coordinationPathCanRetry(path, beforeOpenIdentity)) throw error;
-        waitForProtocolRetry(error, deadline, retryDelayMs);
+        yield retry(error);
         continue;
       }
       database = new DatabaseSync(sqliteDatabaseLocation(path));
@@ -675,7 +729,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         database = undefined;
         if (!(error instanceof OwnedFenceProtocolObservationChangedError) || !coordinationPathRetainsIdentity(path, beforeOpenIdentity))
           throw error;
-        waitForProtocolRetry(error, deadline, retryDelayMs);
+        yield retry(error);
         continue;
       }
       database.exec("PRAGMA busy_timeout=25; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
@@ -749,14 +803,14 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
       if (mayInitialize && authorityRefused) {
         try {
           const removalAuthority = Object.freeze({ authorityId, mainSnapshot: provisionalSnapshot });
-          removeProtocolPath(path, removalAuthority);
+          yield* removeProtocolPathSteps(path, removalAuthority);
         } catch (cleanupError) {
           throw new AggregateError([error, cleanupError], "Owned fence authority refusal and coordination cleanup both failed.", { cause: error });
         }
         throw error;
       }
       if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-      Atomics.wait(waiter, 0, 0, retryDelayMs);
+      yield retry(error);
     }
   }
 }
@@ -781,8 +835,8 @@ function sameHolderProposal(left, right) {
   return left && right && ["acquisitionId", "holderPid", "holderBirth", "proposalPid", "proposalBirth"]
     .every(key => left[key] === right[key]);
 }
-function tryClaim(context) {
-  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder, trace } = context;
+function* tryClaimSteps(context) {
+  const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, inspectHolder, inspectHolderAsync, trace } = context;
   let observed, inspection;
   trace.attempts += 1;
   try {
@@ -812,7 +866,15 @@ function tryClaim(context) {
         const remaining = acquisitionTimeRemaining(context);
         const inspectedAt = Date.now();
         trace.inspections += 1;
-        try { inspection = inspectHolder(Number(observed.holderPid), String(observed.holderBirth), remaining); }
+        const seenPid = Number(observed.holderPid);
+        const seenBirth = String(observed.holderBirth);
+        try {
+          inspection = yield {
+            kind: "call",
+            sync: () => inspectHolder(seenPid, seenBirth, remaining),
+            async: () => inspectHolderAsync(seenPid, seenBirth, remaining),
+          };
+        }
         catch (cause) {
           throw new OwnedFenceIdentityInspectionError("Owned fence holder inspection failed.", { cause });
         }
@@ -905,13 +967,14 @@ function insertHolder(database, acquisitionId, holderPid, holderBirth) {
     .run(acquisitionId, holderPid, holderBirth);
 }
 
-function beginEffect(context) {
+function* beginEffectSteps(context) {
   const { path, pathIdentity, database, acquisitionId, holderPid, holderBirth, authorityId, deadline, retryDelayMs } = context;
+  const delays = pollDelays(retryDelayMs);
   for (;;) {
     try { database.exec("BEGIN IMMEDIATE"); break; }
     catch (error) {
       if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
-      Atomics.wait(waiter, 0, 0, retryDelayMs);
+      yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
     }
   }
   assertCoordinationPathIdentity(path, pathIdentity);
@@ -955,15 +1018,18 @@ function finalizeEffect(context, primaryError, retireAfterEffect) {
 // later acquisition here would wait out its whole deadline ("Owned fence acquisition deadline is
 // exhausted.", the Windows T8 factory wedge). The release re-checks the coordination path identity
 // and is bounded; if it cannot commit, the holder is kept, recorded, and both failures are reported.
-function releaseUnstartedAcquisition(context, error) {
-  const { path, pathIdentity, database, acquisitionId, retryDelayMs } = context;
-  const deadline = Date.now() + DEFAULT_DEADLINE_MS;
+function* releaseUnstartedAcquisitionSteps(context, error) {
+  const { path, pathIdentity, database, acquisitionId, retryDelayMs, releaseWindowMs } = context;
+  // A fresh window: the claim's own deadline may be spent already. Its contention is the claim's, so it gets the
+  // same measured default (OWNED_FENCE_DEFAULT_DEADLINE_MS).
+  const deadline = Date.now() + releaseWindowMs;
+  const delays = pollDelays(retryDelayMs);
   try {
     for (;;) {
       try { database.exec("BEGIN IMMEDIATE"); break; }
       catch (busy) {
         if (!isBusy(busy) || Date.now() >= deadline) throw busy;
-        Atomics.wait(waiter, 0, 0, retryDelayMs);
+        yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
       }
     }
     try {
@@ -973,11 +1039,14 @@ function releaseUnstartedAcquisition(context, error) {
       for (;;) {
         // Re-check before every attempt: a busy COMMIT can be retried for the whole window, and nothing
         // may be committed through a coordination path that was replaced or gained a link meanwhile.
+        // This wait holds an uncommitted write transaction. The async driver may still yield it: other async
+        // claims on this path are serialized behind this one, and a same-thread sync claim refuses at its first
+        // wait, since this acquisition is still live (performStepSync).
         assertCoordinationPathIdentity(path, pathIdentity);
         try { database.exec("COMMIT"); break; }
         catch (busy) {
           if (!isBusy(busy) || Date.now() >= deadline) throw busy;
-          Atomics.wait(waiter, 0, 0, retryDelayMs);
+          yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())), path, acquisitionId);
         }
       }
     } catch (releaseError) {
@@ -1163,10 +1232,11 @@ function reserveProtocolPath(path) {
   }
 }
 
-function waitForProtocolRetry(error, deadline, retryDelayMs) {
+/** The wait before the next open attempt, or the error itself once the deadline is spent. */
+function waitForProtocolRetry(error, deadline, delayMs, path, acquisitionId) {
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0) throw normalizeUnavailable(error);
-  Atomics.wait(waiter, 0, 0, Math.min(retryDelayMs, remainingMs));
+  return sleepStep(Math.min(delayMs, remainingMs), path, acquisitionId);
 }
 
 function assertProtocolObservation(path, mainSnapshot, stage) {
@@ -1432,8 +1502,9 @@ function revalidateProtocolRemovalAuthority(path, authority) {
   assertNoProtocolSidecars(path, authority.mainSnapshot);
 }
 
-function removeProtocolPath(path, authority) {
+function* removeProtocolPathSteps(path, authority) {
   const deadline = Date.now() + DEFAULT_DEADLINE_MS;
+  const delays = pollDelays(DEFAULT_RETRY_DELAY_MS);
   for (;;) {
     try {
       if (!authority || authority.authorityId !== coordinationAuthorityId(path))
@@ -1453,12 +1524,12 @@ function removeProtocolPath(path, authority) {
       const code = error?.code ?? error?.cause?.code;
       if (!["EPERM", "EACCES", "EBUSY"].includes(code) || Date.now() >= deadline)
         throw new OwnedFenceLockUnavailableError("Retired owned fence protocol cleanup is unavailable.", { cause: error });
-      Atomics.wait(waiter, 0, 0, DEFAULT_RETRY_DELAY_MS);
+      yield sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now())));
     }
   }
 }
 
-function retireProtocol(path, options, pathIdentity, authorityId) {
+function* retireProtocolSteps(path, options, pathIdentity, authorityId) {
   try {
     const removalAuthority = captureProtocolRemovalAuthority(path, pathIdentity, authorityId);
     revalidateProtocolRemovalAuthority(path, removalAuthority);
@@ -1466,7 +1537,7 @@ function retireProtocol(path, options, pathIdentity, authorityId) {
       options.retireAuthority();
       return;
     }
-    removeProtocolPath(path, removalAuthority);
+    yield* removeProtocolPathSteps(path, removalAuthority);
   } catch (error) {
     throw new OwnedFenceAuthorityRetirementError("Owned fence authority retirement failed after its durable commit.", { cause: error });
   }
@@ -1486,14 +1557,46 @@ function defaultInspectHolder(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
   return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
 }
 
-function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS, attemptBoundMs = 2_000) {
+/**
+ * The default holder inspection without blocking the event loop (withOwnedFenceLock): on Windows the probe is an
+ * async powershell.exe start bounded only by the claim's time left; elsewhere it is a /proc read or `ps`, run as is.
+ */
+async function defaultInspectHolderAsync(pid, birth, remainingMs = DEFAULT_DEADLINE_MS) {
+  if (process.platform !== "win32") return defaultInspectHolder(pid, birth, remainingMs);
+  if (!Number.isFinite(remainingMs) || remainingMs < 1) return "unknown";
+  const deadline = Date.now() + remainingMs;
+  const inspection = await new Promise((resolvePromise) => {
+    try {
+      execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true, timeout: Math.floor(remainingMs) },
+        (error, stdout) => resolvePromise(error ? { state: "unknown" } : parseWindowsBirthProbe(String(stdout).trim())));
+    } catch { resolvePromise({ state: "unknown" }); }
+  });
+  if (inspection.state === "unknown" || Date.now() >= deadline) return "unknown";
+  if (inspection.state === "absent") return "absent";
+  return sameBirth(inspection.fingerprint, birth) ? "same" : "birth_mismatch";
+}
+
+/** BEGIN IMMEDIATE, polled with gentle backoff until `deadline` while it is busy (async callers, no transaction held). */
+async function beginImmediateAsync(database, deadline, retryDelayMs) {
+  const delays = pollDelays(retryDelayMs);
+  for (;;) {
+    try { database.exec("BEGIN IMMEDIATE"); return; }
+    catch (error) {
+      if (!isBusy(error) || Date.now() >= deadline) throw normalizeUnavailable(error);
+      await performStepAsync(sleepStep(Math.min(delays(), Math.max(1, deadline - Date.now()))));
+    }
+  }
+}
+
+/** One probe bounded only by the caller's time left: it returns the moment the process answers. */
+function inspectProcessBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
   if (!Number.isFinite(remainingMs) || remainingMs < 1) return { state: "unknown" };
   const deadline = Date.now() + remainingMs;
   const timely = result => Date.now() < deadline ? result : { state: "unknown" };
   try {
     if (process.platform === "win32") {
       const output = execFileSync("powershell.exe", windowsBirthProbeArguments(pid),
-        { encoding: "utf8", windowsHide: true, timeout: Math.floor(Math.min(attemptBoundMs, remainingMs)) }).trim();
+        { encoding: "utf8", windowsHide: true, timeout: Math.floor(remainingMs) }).trim();
       const parsed = parseWindowsBirthProbe(output);
       return parsed.state === "unknown" ? parsed : timely(parsed);
     }
@@ -1568,7 +1671,7 @@ const genericPosixInspectionOperations = Object.freeze({
   inspectBirth(pid, remainingMs = DEFAULT_DEADLINE_MS) {
     if (!Number.isFinite(remainingMs) || remainingMs < 1) return { outcome: "timeout" };
     try {
-      const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: Math.floor(Math.min(2_000, remainingMs)) }).trim();
+      const output = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: Math.floor(remainingMs) }).trim();
       return output ? { outcome: "ok", fingerprint: output } : { outcome: "malformed" };
     } catch (error) {
       if (error?.code === "ETIMEDOUT" || error?.signal) return { outcome: "timeout" };

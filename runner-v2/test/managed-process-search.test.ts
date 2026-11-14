@@ -240,7 +240,7 @@ test("an unsafe or malformed request is refused before any output is touched", (
 test("a pattern that passes the screen but runs away is stopped, not left to stall the Runner", async () => {
   const output = `${"a".repeat(200_000)}!\n`;
   await assert.rejects(search(output, { pattern: "a*a*a*a*a*a*b", regex: true }), (error: unknown) =>
-    error instanceof ManagedProcessError && error.code === "invalid_arguments" && /exceeded its 250 ms bound/u.test(error.message));
+    error instanceof ManagedProcessError && error.code === "invalid_arguments" && /used more than its 250 ms CPU bound/u.test(error.message));
   assert.equal((await search("still works\n", { pattern: "works" })).matches.length, 1, "the shared evaluator is usable afterwards");
 });
 
