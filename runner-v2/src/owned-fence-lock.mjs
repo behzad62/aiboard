@@ -306,62 +306,144 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
  * The probe is a cold powershell.exe start (155-218 ms idle, seconds on a loaded host), and inside a 2 s acquisition
  * that start was the whole budget: the first claim of a fresh process failed with "birth identity is unavailable",
  * and its sync probe was killed with it, so the next claim started cold again. This runs the same escalating
- * schedule as currentProcessBirthFingerprint (2 s, 4 s, ... up to SELF_BIRTH_MAX_ATTEMPTS attempts) without blocking
- * anyone. It authorizes nothing: an acquisition still fails closed when the identity is not known by its own
- * deadline. Only a read identity is cached; an unknown one never is, and a later call starts again. Resolves to the
- * fingerprint, or to undefined when it stays unknown; never rejects. Elsewhere the sync probe is a /proc read or one
- * `ps`, and this resolves to undefined at once.
+ * schedule as currentProcessBirthFingerprint (2 s, 4 s, ... up to SELF_BIRTH_MAX_ATTEMPTS attempts), except that an
+ * attempt is never ended while a claim waiting on it still has time: it lasts until its own bound or the latest
+ * waiting claim's own deadline, whichever is later, so a 10 s caller keeps the whole 10 s for a slow start, as the
+ * sync schedule gives its last attempt everything left. It authorizes nothing: a claim still fails closed when the
+ * identity is not known by its own deadline. Only a well-formed read identity is cached; an unknown one never is, and
+ * a later call starts again.
+ *
+ * Nothing here keeps the process alive or outlives it: the probe, its pipes and its timers are unref'd, and a probe
+ * still running when the process exits is killed. A waiting claim keeps the loop alive with its own deadline timer.
+ * Without `waitUntil` it resolves when the preparation ends; with it, at that absolute time at the latest, keeping the
+ * process alive until then. Resolves to the fingerprint, or to undefined when it is not known; never rejects.
+ * Elsewhere the sync probe is a /proc read or one `ps`, and this resolves to undefined at once.
  */
-export function prepareCurrentProcessBirthFingerprint() {
+export function prepareCurrentProcessBirthFingerprint(waitUntil) {
   if (cachedCurrentBirth?.state === "same") return Promise.resolve(cachedCurrentBirth.fingerprint);
   if (process.platform !== "win32") return Promise.resolve(undefined);
-  preparingCurrentBirth ??= learnCurrentProcessBirth().finally(() => { preparingCurrentBirth = undefined; });
-  return preparingCurrentBirth;
+  if (waitUntil === undefined) return startCurrentBirthPreparation().promise;
+  if (!Number.isFinite(waitUntil)) return Promise.resolve(undefined);
+  return waitForPreparedBirth(waitUntil).then(() => cachedCurrentBirth?.state === "same" ? cachedCurrentBirth.fingerprint : undefined);
 }
 
-async function learnCurrentProcessBirth() {
+/** Diagnostics and tests: "known", "preparing" (a background preparation runs) or "idle". */
+export function currentProcessBirthPreparation() {
+  return cachedCurrentBirth?.state === "same" ? "known" : preparingCurrentBirth ? "preparing" : "idle";
+}
+
+function startCurrentBirthPreparation() {
+  if (preparingCurrentBirth) return preparingCurrentBirth;
+  const preparation = { waiters: new Set(), attempt: undefined, promise: undefined };
+  preparingCurrentBirth = preparation;
+  preparation.promise = learnCurrentProcessBirth(preparation)
+    .catch(() => undefined)
+    .finally(() => { if (preparingCurrentBirth === preparation) preparingCurrentBirth = undefined; });
+  return preparation;
+}
+
+async function learnCurrentProcessBirth(preparation) {
   let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
   for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
     if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-    let inspected;
-    try { inspected = await inspectWindowsProcessBirthAsync(process.pid, attemptMs); }
-    catch { inspected = { state: "unknown" }; }
+    const inspected = await inspectWindowsProcessBirthAsync(process.pid, Date.now() + attemptMs, preparation);
     if (inspected.state === "same") {
       cachedCurrentBirth ??= inspected;
       return cachedCurrentBirth.fingerprint;
     }
     if (inspected.state !== "unknown") return undefined;
     attemptMs *= 2;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, SELF_BIRTH_RETRY_DELAY_MS));
+    if (attempt < SELF_BIRTH_MAX_ATTEMPTS) await new Promise((resolvePromise) => { setTimeout(resolvePromise, SELF_BIRTH_RETRY_DELAY_MS).unref?.(); });
   }
   return undefined;
 }
 
-function inspectWindowsProcessBirthAsync(pid, boundMs) {
+function latestWaitingDeadline(preparation) {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const waiter of preparation.waiters) latest = Math.max(latest, waiter.deadline);
+  return latest;
+}
+
+function inspectWindowsProcessBirthAsync(pid, boundAt, preparation) {
   return new Promise((resolvePromise) => {
-    execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true, timeout: boundMs },
-      (error, stdout) => resolvePromise(error ? { state: "unknown" } : parseWindowsBirthProbe(String(stdout).trim())));
+    let settled = false;
+    let timer;
+    let child;
+    const kill = () => { try { child?.kill(); } catch {} };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.off("exit", kill);
+      if (preparation.attempt?.finish === finish) preparation.attempt = undefined;
+      resolvePromise(result);
+    };
+    // The attempt ends at its own bound, or later while a waiting claim still has time.
+    const arm = () => {
+      if (settled) return;
+      clearTimeout(timer);
+      const endAt = Math.max(boundAt, latestWaitingDeadline(preparation));
+      timer = setTimeout(() => {
+        if (Math.max(boundAt, latestWaitingDeadline(preparation)) > Date.now()) { arm(); return; }
+        kill();
+        finish({ state: "unknown" });
+      }, Math.max(0, endAt - Date.now()));
+      timer.unref?.();
+    };
+    try {
+      child = execFile("powershell.exe", windowsBirthProbeArguments(pid), { encoding: "utf8", windowsHide: true },
+        (error, stdout) => finish(error ? { state: "unknown" } : parseWindowsBirthProbe(String(stdout).trim())));
+    } catch {
+      finish({ state: "unknown" });
+      return;
+    }
+    child.unref?.();
+    child.stdin?.unref?.();
+    child.stdout?.unref?.();
+    child.stderr?.unref?.();
+    process.once("exit", kill);
+    preparation.attempt = { finish, arm };
+    arm();
+  });
+}
+
+/** Waits, keeping the process alive, until the identity is known ("known"), the preparation ended without it ("ended"), or the deadline ("expired"). */
+function waitForPreparedBirth(deadline) {
+  if (cachedCurrentBirth?.state === "same") return Promise.resolve("known");
+  const preparation = startCurrentBirthPreparation();
+  const waiter = { deadline };
+  preparation.waiters.add(waiter);
+  preparation.attempt?.arm();
+  return new Promise((resolvePromise) => {
+    let timer;
+    const done = (outcome) => {
+      clearTimeout(timer);
+      preparation.waiters.delete(waiter);
+      resolvePromise(outcome);
+    };
+    timer = setTimeout(() => done(cachedCurrentBirth?.state === "same" ? "known" : "expired"), Math.max(0, deadline - Date.now()));
+    preparation.promise.then(() => done(cachedCurrentBirth?.state === "same" ? "known" : "ended"));
   });
 }
 
 /**
  * withOwnedFenceLock on Windows: when this process's own birth identity is not known yet, wait for the background
  * preparation (starting it if none runs) inside the caller's own deadline, and hand acquire that same deadline, so
- * the wait and the acquisition together never run past it. Still unknown at the deadline: the acquisition fails
- * closed with the same error as before, and the preparation goes on for the next one. A preparation that ended
- * without the identity leaves acquire its usual sync probe in the time left.
+ * the wait and the acquisition together never run past it. Still unknown at the deadline: the claim fails closed
+ * with the same error as before, and the preparation goes on for the next one. A preparation that ended without the
+ * identity leaves acquire its usual sync probe in the time left. Invalid bounds and an already spent deadline go
+ * straight to acquire, which refuses them with its own errors.
  */
 async function awaitPreparedHolderBirth(options) {
   if (process.platform !== "win32" || options.holderBirth !== undefined || cachedCurrentBirth?.state === "same") return options;
   const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
-  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) return options;
+  const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1) return options;
   if (options.deadlineAt !== undefined && (!Number.isFinite(options.deadlineAt) || options.deadlineAt <= 0)) return options;
   const deadline = Math.min(Date.now() + deadlineMs, options.deadlineAt ?? Number.POSITIVE_INFINITY);
-  let timer;
-  const expired = new Promise((resolvePromise) => { timer = setTimeout(() => resolvePromise(false), Math.max(0, deadline - Date.now())); });
-  const prepared = await Promise.race([prepareCurrentProcessBirthFingerprint().then(() => true), expired]);
-  clearTimeout(timer);
-  if (!prepared && cachedCurrentBirth?.state !== "same")
+  if (Date.now() >= deadline) return options;
+  const outcome = await waitForPreparedBirth(deadline);
+  if (outcome === "expired" && cachedCurrentBirth?.state !== "same")
     throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
   return { ...options, deadlineAt: deadline };
 }
@@ -1426,9 +1508,13 @@ function windowsBirthProbeArguments(pid) {
   ];
 }
 
+// Get-Process StartTime as ToUniversalTime().ToString('o'). Anything else, garbled output of a run that exited 0
+// included, is unknown and never cached.
+const WINDOWS_BIRTH_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$/;
+
 function parseWindowsBirthProbe(output) {
   if (output === "ABSENT") return { state: "absent" };
-  if (output.startsWith("PRESENT:") && output.length > 8) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };
+  if (output.startsWith("PRESENT:") && WINDOWS_BIRTH_PATTERN.test(output.slice(8))) return { state: "same", fingerprint: normalizeBirth(output.slice(8)) };
   return { state: "unknown" };
 }
 

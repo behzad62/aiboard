@@ -67,7 +67,12 @@ for (const path of ["applied", "retired as stale"] as const) {
       writeFileSync(controlPath, JSON.stringify(terminate));
       context.terminate = terminate;
       let signalled = 0;
-      context.signal = () => { signalled += 1; return { state: "signalled" }; };
+      // The signal is applied first: until it returns, state.json still shows the previous handled sequence.
+      context.signal = () => {
+        signalled += 1;
+        assert.equal(JSON.parse(readFileSync(statePath, "utf8")).handledControl, 0, "the sequence is published only after the control is applied");
+        return { state: "signalled" };
+      };
       vm.runInContext("completeControl(terminate, signal)", context);
       assert.equal(signalled, path === "applied" ? 1 : 0, "a stale-fence control is retired, never applied");
       assert.deepEqual(handledAtRelease.at(-1), 1, "state.json already says sequence 1 is handled when the fence is free");

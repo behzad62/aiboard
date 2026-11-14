@@ -147,7 +147,7 @@ async function withRun(label: string, body: (fixture: Fixture) => Promise<void>,
     return "";
   }))).join("\n");
   let closed = false;
-  const closeRun = async () => { if (closed) return; closed = true; await run.close(); await host.close(); await removeRunAsTheRunnerDoes(sessions, runId); };
+  const closeRun = async () => { if (closed) return; closed = true; await run.close(); await host.close(); await removeRunAsTheRunnerDoes(sessions, runId, sessions.runFolder(runId)); };
   const fixture: Fixture = {
     root, project, state, sessions, runId, run, invoke,
     folder: (agent = "worker-a") => sessions.ownerFolder({ runId, sessionId: agent }),
@@ -231,21 +231,29 @@ const AFTER_CLOSE_HARNESS_MS = 25_000;
  * then `removeRun`): a removal that fails closed while a session's browser still runs outside its group is tried
  * again, and succeeds only once its own check finds that browser gone. A browser that leaves a moment after the
  * stop's grace (a loaded host) is that path, so the harness takes it too, up to the close bound; each try returns as
- * soon as removal succeeds, and a browser that never leaves still fails the test with the product's own error.
+ * soon as removal succeeds, and a browser that never leaves still fails the test, with the product's own error as cause.
+ * It reports how many tries were blocked. Once removal succeeds, the test's own census of the run's folder must be
+ * empty within AFTER_STOP_MS (a brief, normal linger of an exiting process passes; a browser still there fails).
  */
-async function removeRunAsTheRunnerDoes(sessions: PlaywrightCliSessions, runId: string): Promise<void> {
+async function removeRunAsTheRunnerDoes(sessions: PlaywrightCliSessions, runId: string, runFolder: string): Promise<void> {
   const started = Date.now();
-  for (let attempt = 1; ; attempt += 1) {
+  let blocked = 0;
+  for (;;) {
     try {
       await sessions.removeRun(runId);
-      if (attempt > 1) console.log(`removeRun for ${runId} succeeded on try ${attempt}, ${Date.now() - started} ms after the first`);
-      return;
+      break;
     } catch (error) {
-      if ((error as { code?: string }).code !== "process_cleanup_unverified" || Date.now() - started > AFTER_CLOSE_HARNESS_MS) throw error;
-      console.log(`removeRun for ${runId} blocked (try ${attempt}): ${(error as Error).message}`);
+      if ((error as { code?: string }).code !== "process_cleanup_unverified") throw error;
+      blocked += 1;
+      console.log(`removeRun for ${runId} blocked (try ${blocked}): ${(error as Error).message}`);
+      if (Date.now() - started > AFTER_CLOSE_HARNESS_MS)
+        throw new Error(`removeRun for ${runId} was still blocked after ${blocked} tries in ${Date.now() - started} ms`, { cause: error });
       await sleep(250);
     }
   }
+  console.log(`removeRun for ${runId}: ${blocked} blocked tries, removed ${Date.now() - started} ms after the first`);
+  const left = await waitFor(() => sessionProcesses(runFolder), (rows) => rows.length === 0, AFTER_STOP_MS);
+  assert.deepEqual(left, [], `nothing of run ${runId} runs once its removal succeeded (${blocked} blocked tries)`);
 }
 
 async function pollUntilStopped(f: Fixture, processId: string, agent = "worker-a"): Promise<Record<string, unknown>> {

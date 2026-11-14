@@ -228,7 +228,7 @@ async function fixture(options: FixtureOptions = {}) {
   // process's own birth identity when it was created; a Runner has it long before its first claim (a launch
   // comes first), while this fixture claims at once. Wait for it here, as the portable backend's binding waits
   // for prepareInspection, so the claim below keeps its own 2 s default deadline and tests only the HTTP race.
-  const prepared = await prepareCurrentProcessBirthFingerprint();
+  const prepared = await prepareCurrentProcessBirthFingerprint(Date.now() + 30_000);
   if (process.platform === "win32") assert.ok(prepared, "this process's birth identity is known before the first claim");
   await first.claimOwnedFence!(processId, owner, firstFence);
   return { root, processId, first, replacement, statusEntered, resumeStatus, signals: () => signals,

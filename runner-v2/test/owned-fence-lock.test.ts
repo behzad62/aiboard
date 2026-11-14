@@ -53,8 +53,9 @@ function selfBirthContext(source: string, globals: Record<string, unknown>, func
     OwnedFenceLockUnavailableError,
     ...globals,
   });
-  const constants = [...source.matchAll(/^const (DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+;/gm)].map((match) => match[0]);
+  const constants = [...source.matchAll(/^const (?:(?:DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+|WINDOWS_BIRTH_PATTERN = \/.+\/);$/gm)].map((match) => match[0]);
   assert.ok(constants.some((line) => line.startsWith("const DEFAULT_DEADLINE_MS")), "bind the actual source default used by the extracted functions");
+  assert.ok(constants.some((line) => line.startsWith("const WINDOWS_BIRTH_PATTERN")), "bind the actual birth format the probe parser checks");
   vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;\nlet preparingCurrentBirth;`, context);
   for (const name of functions) vm.runInContext(extractNamedJsFunction(source, name).replace(/^export\s+/, ""), context);
   return context;
@@ -132,109 +133,7 @@ test("current holder birth escalation is bounded by the caller's deadline and st
   assert.deepEqual(defaultProbe.probeTimeouts, [2_000], "a default 2 s caller still gets exactly one 2 s attempt");
 });
 
-// The Windows Job host's claims take the 2 s default, and the first one in a fresh process used to spend it on its
-// own cold powershell.exe start (CI: "Current owned fence holder birth identity is unavailable."), killing that probe
-// with the failed claim. The background preparation keeps the probe; a claim still fails closed at its own deadline.
-const PREPARATION_FUNCTIONS = [...SELF_BIRTH_PROBE_FUNCTIONS, "prepareCurrentProcessBirthFingerprint", "learnCurrentProcessBirth", "inspectWindowsProcessBirthAsync", "awaitPreparedHolderBirth"];
-const PRESENT_BIRTH = "PRESENT:2026-10-31T00:43:01.1234567Z\r\n";
-function heldProbe() {
-  const calls: { timeout: number; finish: (error: Error | null, stdout?: string) => void }[] = [];
-  const syncCalls: number[] = [];
-  const globals = {
-    execFile: (_file: string, _args: string[], options: { timeout: number }, callback: (error: Error | null, stdout: string) => void) => {
-      calls.push({ timeout: options.timeout, finish: (error, stdout = "") => callback(error, stdout) });
-    },
-    execFileSync: (_file: string, _args: string[], options: { timeout: number }) => {
-      syncCalls.push(options.timeout);
-      throw new Error("the sync probe must not run");
-    },
-    setTimeout, clearTimeout, Promise,
-  };
-  return { calls, syncCalls, globals };
-}
-async function untilCalls(probe: ReturnType<typeof heldProbe>, count: number): Promise<void> {
-  for (let wait = 0; probe.calls.length < count && wait < 400; wait += 1) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
-  assert.ok(probe.calls.length >= count, `probe call ${count} started`);
-}
-
-test("a claim that ends before the background self-birth probe fails closed, and the probe it waited on serves the next claim", async () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = heldProbe();
-  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
-  const started = Date.now();
-  await assert.rejects(vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 50 })", context) as Promise<unknown>,
-    /Current owned fence holder birth identity is unavailable/);
-  assert.ok(Date.now() - started < 1_000, "the claim keeps its own deadline");
-  assert.deepEqual(probe.calls.map((call) => call.timeout), [2_000], "one cold start, with the first 2 s attempt bound");
-  await assert.rejects(vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 20 })", context) as Promise<unknown>,
-    /birth identity is unavailable/);
-  assert.equal(probe.calls.length, 1, "a second claim waits on the same probe instead of starting another cold one");
-  probe.calls[0]!.finish(null, PRESENT_BIRTH);
-  assert.equal(await (vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>), "2026-10-31T00:43:01.123456Z");
-  const options = { deadlineMs: 50 };
-  context.options = options;
-  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(options)", context) as Promise<unknown>), options, "a known identity passes the options through");
-  assert.equal(vm.runInContext("currentProcessBirthFingerprint()", context), "2026-10-31T00:43:01.123456Z");
-  assert.deepEqual(probe.syncCalls, [], "acquire never starts its own cold probe once the identity is known");
-  assert.equal(probe.calls.length, 1);
-});
-
-test("a claim that waited for the self-birth probe keeps its original deadline, never a fresh one", async () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = heldProbe();
-  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
-  const started = Date.now();
-  const waiting = vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 1_000, retryDelayMs: 7 })", context) as Promise<{ deadlineAt: number; deadlineMs: number; retryDelayMs: number }>;
-  await untilCalls(probe, 1);
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 30));
-  probe.calls[0]!.finish(null, PRESENT_BIRTH);
-  const options = await waiting;
-  assert.ok(options.deadlineAt <= started + 1_000 + 5 && options.deadlineAt > Date.now(), `deadlineAt is ${options.deadlineAt - started} ms after the call`);
-  assert.equal(options.deadlineMs, 1_000);
-  assert.equal(options.retryDelayMs, 7);
-
-  vm.runInContext("cachedCurrentBirth = undefined", context);
-  const earlier = Date.now() + 300;
-  context.earlier = earlier;
-  const second = vm.runInContext("awaitPreparedHolderBirth({ deadlineMs: 1_000, deadlineAt: earlier })", context) as Promise<{ deadlineAt: number }>;
-  await untilCalls(probe, 2);
-  probe.calls[1]!.finish(null, PRESENT_BIRTH);
-  assert.equal((await second).deadlineAt, earlier, "an earlier absolute deadline from the caller stays");
-});
-
-test("the background self-birth probe escalates like the sync one, never caches an unknown result, and never rejects", async () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = heldProbe();
-  const context = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
-  const preparing = vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    await untilCalls(probe, attempt);
-    probe.calls[attempt - 1]!.finish(Object.assign(new Error("spawn powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }));
-  }
-  assert.equal(await preparing, undefined);
-  assert.deepEqual(probe.calls.map((call) => call.timeout), [2_000, 4_000, 8_000, 16_000], "the same bounded schedule as currentProcessBirthFingerprint");
-  const again = vm.runInContext("prepareCurrentProcessBirthFingerprint()", context) as Promise<unknown>;
-  await untilCalls(probe, 5);
-  probe.calls[4]!.finish(null, "garbage");
-  await untilCalls(probe, 6);
-  probe.calls[5]!.finish(null, PRESENT_BIRTH);
-  assert.equal(await again, "2026-10-31T00:43:01.123456Z", "an unknown identity is never cached: the next preparation probes again");
-});
-
-test("the self-birth wait is Windows-only and skipped when the caller names its holder birth", async () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = heldProbe();
-  const windows = selfBirthContext(source, probe.globals, PREPARATION_FUNCTIONS);
-  const named = { holderPid: 7, holderBirth: "named", deadlineMs: 50 };
-  windows.named = named;
-  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(named)", windows) as Promise<unknown>), named);
-  const posix = selfBirthContext(source, { ...probe.globals, process: { pid: 4242, platform: "linux" } }, PREPARATION_FUNCTIONS);
-  const plain = { deadlineMs: 50 };
-  posix.plain = plain;
-  assert.equal(await (vm.runInContext("awaitPreparedHolderBirth(plain)", posix) as Promise<unknown>), plain);
-  assert.equal(await (vm.runInContext("prepareCurrentProcessBirthFingerprint()", posix) as Promise<unknown>), undefined);
-  assert.equal(probe.calls.length, 0, "no probe starts off Windows or for a named holder");
-});
+// The background self-birth preparation and its wiring: owned-fence-self-birth.test.ts (in PR CI).
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));

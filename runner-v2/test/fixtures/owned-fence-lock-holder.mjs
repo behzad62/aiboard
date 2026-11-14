@@ -26,7 +26,7 @@ try {
   const gatedRetirement = mode === "retire-gated";
   if (mode === "hold-prepared-async") {
     // The Windows Job host's path: the background self-birth preparation, then the async lock with its default.
-    if (process.platform === "win32" && !(await prepareCurrentProcessBirthFingerprint())) throw new Error("self birth preparation failed");
+    if (process.platform === "win32" && !(await prepareCurrentProcessBirthFingerprint(Date.now() + 30_000))) throw new Error("self birth preparation failed");
     await withOwnedFenceLock(lockPath, async () => {
       process.stdout.write(`${JSON.stringify({ state: "acquired", pid: process.pid })}\n`);
       await new Promise(resolve => setTimeout(resolve, holdMs));

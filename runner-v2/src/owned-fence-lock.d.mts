@@ -24,7 +24,10 @@ export class OwnedFenceAuthorityRetirementError extends Error {}
 export function isOwnedFenceLockContention(error: unknown): boolean;
 export function currentProcessBirthFingerprint(remainingMs?: number): string;
 /** Windows: learn this process's own birth identity in the background; resolves to it, or to undefined. Never rejects. */
-export function prepareCurrentProcessBirthFingerprint(): Promise<string | undefined>;
+/** Windows: learns this process's own birth identity in the background. `waitUntil` (absolute ms) keeps the process alive until then at the latest. */
+export function prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
+/** Diagnostics and tests: whether this process's own birth identity is known, being prepared, or neither. */
+export function currentProcessBirthPreparation(): "known" | "preparing" | "idle";
 export function inspectGenericPosixProcessBirth(
   pid: number,
   operations?: GenericPosixProcessInspectionOperations,
