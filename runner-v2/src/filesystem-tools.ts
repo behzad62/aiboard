@@ -303,6 +303,9 @@ export function createFilesystemTools(
         capability: "filesystem.read",
         paths: [{ path: posix.dirname((input.path as string).replaceAll("\\", "/")) || ".", access: "read" as const }],
       }),
+      // The entry itself still gets the remote syntax refusals (a device name, stream, or trailing dot or space in its
+      // last segment) before anything resolves the parent.
+      namedPaths: (input) => [input.path as string],
       execute: async (input, context) => {
         const path = toolPath(context, input.path as string);
         const deniedStat = await guardDeny(context, path, "read");

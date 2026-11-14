@@ -104,7 +104,7 @@ export function prepareImageForModel(bytes: Uint8Array, options: Readonly<{ crop
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
   if (!options.crop && !needsResize && source.byteLength <= maxBytes) {
-    if (options.complete) assertCompletePng(source, probe);
+    if (options.complete) assertCompletePng(source);
     return Object.freeze({ bytes: source, mediaType: "image/png", width: probe.width, height: probe.height, sourceDigest, digest: sourceDigest,
       source: Object.freeze({ ...probe, byteLength: source.byteLength }), transforms: Object.freeze([]), notes: Object.freeze(notes) });
   }
@@ -142,31 +142,61 @@ function incomplete(detail: string): ImageInspectionError {
   return new ImageInspectionError("image_corrupt", `${detail} The image is truncated or corrupt, so it was not sent; if a command is still writing it, inspect it again once that command has finished.`);
 }
 
-/** The whole PNG is there: every chunk's length and CRC, IHDR first and IEND, and for a non-interlaced PNG pixel data of exactly the header's size. */
-function assertCompletePng(bytes: Buffer, probe: ImageProbe): void {
+/**
+ * The whole PNG is there: every chunk's length and CRC, IEND, pixel data of exactly the header's size (interlaced
+ * too) with a valid filter on every row, and for a palette PNG every index inside its PLTE. The pixels are inflated
+ * but not converted to RGBA, which is the slow part of a decode.
+ */
+function assertCompletePng(bytes: Buffer): void {
   try {
-    if (!probe.interlaced) { decodePng(bytes); return; }
-    // Interlaced pixel data is not decoded here; its chunks and their CRCs still show a cut file.
-    let offset = 8, ended = false;
-    while (offset + 12 <= bytes.length) {
-      const length = bytes.readUInt32BE(offset), type = ascii(bytes, offset + 4, offset + 8);
-      if (offset === 8 && type !== "IHDR") throw new ImageInspectionError("image_corrupt", "PNG does not start with IHDR.");
-      if (offset + 12 + length > bytes.length) throw new ImageInspectionError("image_corrupt", "PNG chunk is truncated.");
-      if ((crc32(bytes.subarray(offset + 4, offset + 8 + length)) >>> 0) !== bytes.readUInt32BE(offset + 8 + length)) throw new ImageInspectionError("image_corrupt", `PNG ${type} chunk checksum is invalid.`);
-      offset += 12 + length;
-      if (type === "IEND") { ended = true; break; }
-    }
-    if (!ended) throw new ImageInspectionError("image_corrupt", "PNG is incomplete.");
+    readPngData(bytes, "check");
   } catch (error) {
     if (error instanceof ImageInspectionError && error.code === "image_corrupt") throw incomplete(error.message);
     throw error;
   }
 }
 
-/** A JPEG ends with its end-of-image marker, and a WebP's RIFF header gives the file's own length. */
+/**
+ * The offset just past a JPEG's real end-of-image marker, found by walking its segments by their lengths and each
+ * scan's entropy-coded data to the next marker; undefined when the file stops first. Bytes after it are left alone.
+ */
+function jpegEnd(bytes: Buffer): number | undefined {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return undefined;
+  let offset = 2;
+  for (;;) {
+    // As libjpeg does ("extraneous bytes before marker"), stray bytes up to the next FF are skipped, then fill bytes.
+    const next = bytes.indexOf(0xff, offset);
+    if (next < 0) return undefined;
+    offset = next;
+    while (bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) return undefined;
+    const marker = bytes[offset]!;
+    offset += 1;
+    if (marker === 0x00) continue; // a stuffed FF00 between segments is stray data too
+    if (marker === 0xd9) return offset;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue; // markers with no length
+    if (marker === 0xd8) return undefined;
+    if (offset + 2 > bytes.length) return undefined;
+    const length = bytes.readUInt16BE(offset);
+    if (length < 2 || offset + length > bytes.length) return undefined;
+    offset += length;
+    if (marker !== 0xda) continue;
+    // A scan's data runs to the next marker: an FF that is not a stuffed FF00, a restart marker or a fill byte.
+    for (;;) {
+      const next = bytes.indexOf(0xff, offset);
+      if (next < 0 || next + 1 >= bytes.length) return undefined;
+      const following = bytes[next + 1]!;
+      if (following === 0x00 || (following >= 0xd0 && following <= 0xd7)) offset = next + 2;
+      else if (following === 0xff) offset = next + 1;
+      else { offset = next; break; }
+    }
+  }
+}
+
+/** A JPEG reaches its real end-of-image marker, and a WebP's RIFF header gives the file's own length. */
 function assertCompleteEncoded(bytes: Buffer, mediaType: InspectableImageType): void {
-  if (mediaType === "image/jpeg" && !(bytes.length >= 4 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9)) {
-    throw incomplete("JPEG does not end with its end-of-image marker (FFD9).");
+  if (mediaType === "image/jpeg" && jpegEnd(bytes) === undefined) {
+    throw incomplete("This is not a complete JPEG: its segments do not reach an end-of-image marker (FFD9).");
   }
   if (mediaType === "image/webp") {
     const riff = bytes.readUInt32LE(4);
@@ -234,8 +264,25 @@ function probeWebp(bytes: Uint8Array): ImageProbe {
 
 export interface RgbaImage { readonly width: number; readonly height: number; readonly data: Uint8Array }
 
-export function decodePng(bytes: Uint8Array): RgbaImage {
-  const view = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+/** A PNG's header facts and its decompressed, still filtered pixel data, proven whole by readPngData. */
+interface PngData {
+  readonly width: number; readonly height: number; readonly bitDepth: number; readonly colorType: number; readonly channels: number;
+  readonly palette?: Buffer; readonly transparency?: Buffer; readonly raw: Buffer; readonly stride: number; readonly bpp: number;
+}
+
+/** Adam7's passes: first column and row, then the step between columns and between rows. */
+const ADAM7_PASSES = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] as const;
+
+/** One reduced image of a PNG's pixel data: the whole image, or one Adam7 pass. */
+interface PngPass { readonly rows: number; readonly columns: number; readonly bytes: number }
+
+/**
+ * Every chunk's length and CRC, IEND, a valid color format, pixel data of exactly the size the header gives (each
+ * Adam7 pass's rows for an interlaced PNG) and a valid filter type on every row, without converting any pixel.
+ * To decode, an interlaced PNG is refused as untransformable. To check a file is whole, an interlaced PNG is checked
+ * like the rest, and a palette PNG's indices are read too, since only the conversion would otherwise see them.
+ */
+function readPngData(view: Buffer, purpose: "decode" | "check"): PngData {
   const probe = probePng(view);
   if (probe.width * probe.height > IMAGE_LIMITS.maxSourcePixels) throw new ImageInspectionError("image_too_large", "PNG exceeds the pixel limit.");
   let offset = 8, bitDepth = 0, colorType = 0, interlace = 0, palette: Buffer | undefined, transparency: Buffer | undefined;
@@ -255,26 +302,74 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
   }
   if (!ended || !idat.length) throw new ImageInspectionError("image_corrupt", "PNG is incomplete.");
   const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[colorType];
-  if (!channels || ![1, 2, 4, 8, 16].includes(bitDepth) || (colorType === 3 && !palette)) throw new ImageInspectionError("image_corrupt", "PNG color format is invalid.");
-  if (interlace !== 0) throw new ImageInspectionError("image_transform_unsupported", "Interlaced PNG cannot be cropped or resized locally; inspect it whole or re-save it non-interlaced.");
-  const bitsPerPixel = channels * bitDepth, stride = Math.ceil(probe.width * bitsPerPixel / 8), bpp = Math.max(1, bitsPerPixel >> 3);
-  const expected = probe.height * (stride + 1);
+  if (!channels || ![1, 2, 4, 8, 16].includes(bitDepth) || (colorType === 3 && (!palette || bitDepth > 8))) throw new ImageInspectionError("image_corrupt", "PNG color format is invalid.");
+  if (interlace !== 0 && purpose === "decode") throw new ImageInspectionError("image_transform_unsupported", "Interlaced PNG cannot be cropped or resized locally; inspect it whole or re-save it non-interlaced.");
+  if (interlace > 1) throw new ImageInspectionError("image_corrupt", "PNG interlace method is invalid.");
+  const bitsPerPixel = channels * bitDepth, bpp = Math.max(1, bitsPerPixel >> 3);
+  const passes: PngPass[] = (interlace ? ADAM7_PASSES : [[0, 0, 1, 1]] as const).map(([column, row, columnStep, rowStep]) => {
+    const columns = Math.ceil((probe.width - column) / columnStep), rows = Math.ceil((probe.height - row) / rowStep);
+    return columns > 0 && rows > 0 ? { rows, columns, bytes: Math.ceil(columns * bitsPerPixel / 8) } : { rows: 0, columns: 0, bytes: 0 };
+  });
+  const expected = passes.reduce((sum, pass) => sum + pass.rows * (pass.bytes + 1), 0);
   let raw: Buffer;
   // The exact decompressed size is known from the header: anything larger is a decompression bomb.
   try { raw = inflateSync(Buffer.concat(idat), { maxOutputLength: expected }); }
   catch { throw new ImageInspectionError("image_corrupt", "PNG pixel data does not match its header (or exceeds it)."); }
   if (raw.length !== expected) throw new ImageInspectionError("image_corrupt", "PNG pixel data length does not match its header.");
+  let rowStart = 0;
+  for (const pass of passes) {
+    for (let row = 0; row < pass.rows; row++, rowStart += pass.bytes + 1) {
+      if (raw[rowStart]! > 4) throw new ImageInspectionError("image_corrupt", "PNG filter type is invalid.");
+    }
+  }
+  if (purpose === "check" && colorType === 3) assertPaletteIndices(raw, passes, bitDepth, Math.floor(palette!.length / 3));
+  return { width: probe.width, height: probe.height, bitDepth, colorType, channels, ...(palette ? { palette } : {}),
+    ...(transparency ? { transparency } : {}), raw, stride: passes[0]!.bytes, bpp };
+}
+
+/** Undoes one row's PNG filter in place, from the row above it (already unfiltered; zeros for a pass's first row). */
+function unfilterRow(line: Uint8Array, previous: Uint8Array, filter: number, bpp: number): void {
+  if (filter === 0) return;
+  for (let index = 0; index < line.length; index++) {
+    const left = index >= bpp ? line[index - bpp]! : 0, up = previous[index]!, upLeft = index >= bpp ? previous[index - bpp]! : 0;
+    const value = filter === 1 ? left : filter === 2 ? up : filter === 3 ? (left + up) >> 1 : filter === 4 ? paeth(left, up, upLeft) : -1;
+    if (value < 0) throw new ImageInspectionError("image_corrupt", "PNG filter type is invalid.");
+    line[index] = (line[index]! + value) & 0xff;
+  }
+}
+
+/**
+ * Every pixel of a palette PNG names an entry of its PLTE. Each row is unfiltered (a filter changes the stored bytes)
+ * and read as indices at its bit depth, padding bits excluded; nothing is converted to RGBA. With at least
+ * 2^bitDepth entries no index can be out of range, so nothing is read.
+ */
+function assertPaletteIndices(raw: Buffer, passes: readonly PngPass[], bitDepth: number, entries: number): void {
+  if (entries >= 1 << bitDepth) return;
+  const mask = (1 << bitDepth) - 1;
+  let rowStart = 0;
+  for (const pass of passes) {
+    let previous = new Uint8Array(pass.bytes);
+    for (let row = 0; row < pass.rows; row++, rowStart += pass.bytes + 1) {
+      const line = new Uint8Array(raw.subarray(rowStart + 1, rowStart + 1 + pass.bytes));
+      unfilterRow(line, previous, raw[rowStart]!, 1);
+      for (let x = 0; x < pass.columns; x++) {
+        const bit = x * bitDepth;
+        if (((line[bit >> 3]! >> (8 - bitDepth - (bit & 7))) & mask) >= entries) throw new ImageInspectionError("image_corrupt", "PNG palette index is out of range.");
+      }
+      previous = line;
+    }
+  }
+}
+
+export function decodePng(bytes: Uint8Array): RgbaImage {
+  const view = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const { width, height, bitDepth, colorType, channels, palette, transparency, raw, stride, bpp } = readPngData(view, "decode");
+  const probe = { width, height };
   const out = new Uint8Array(probe.width * probe.height * 4);
   let previous = new Uint8Array(stride);
   for (let row = 0; row < probe.height; row++) {
-    const filter = raw[row * (stride + 1)]!;
     const line = new Uint8Array(raw.subarray(row * (stride + 1) + 1, (row + 1) * (stride + 1)));
-    for (let index = 0; index < stride; index++) {
-      const left = index >= bpp ? line[index - bpp]! : 0, up = previous[index]!, upLeft = index >= bpp ? previous[index - bpp]! : 0;
-      const value = filter === 0 ? 0 : filter === 1 ? left : filter === 2 ? up : filter === 3 ? (left + up) >> 1 : filter === 4 ? paeth(left, up, upLeft) : -1;
-      if (value < 0) throw new ImageInspectionError("image_corrupt", "PNG filter type is invalid.");
-      line[index] = (line[index]! + value) & 0xff;
-    }
+    unfilterRow(line, previous, raw[row * (stride + 1)]!, bpp);
     for (let x = 0; x < probe.width; x++) {
       const sample = (channel: number) => {
         if (bitDepth === 8) return line[x * channels + channel]!;
