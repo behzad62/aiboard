@@ -114,12 +114,14 @@ test("the lock module imports no process API and starts no powershell.exe or ps"
   assert.ok(identifiers.has("withOwnedFenceLockSync") && strings.length > 0, "the walk saw the module");
   for (const specifier of imports)
     assert.doesNotMatch(specifier, /child_process|worker_threads|^(node:)?cluster$/, `the lock module imports ${specifier}`);
-  for (const name of ["execFile", "execFileSync", "spawn", "spawnSync", "exec", "execSync", "fork"])
+  // createRequire would load child_process past the import check; kill under any receiver signals or probes a PID.
+  for (const name of ["execFile", "execFileSync", "spawn", "spawnSync", "exec", "execSync", "fork", "createRequire", "require", "kill"])
     assert.equal(identifiers.has(name), false, `the lock module names ${name}`);
-  assert.equal(accesses.has("process.kill"), false, "the lock module signals or probes a PID");
+  for (const access of accesses) assert.doesNotMatch(access, /\.kill$/, `the lock module signals or probes a PID: ${access}`);
   for (const text of strings) {
     assert.doesNotMatch(text, /powershell|pwsh/i, `a powershell start: ${text}`);
-    assert.doesNotMatch(text, /^(?:\/bin\/|\/usr\/bin\/)?ps$/, `a ps start: ${text}`);
+    assert.doesNotMatch(text, /(?:^|[\\/])ps(?:\.exe)?$/i, `a ps start: ${text}`);
+    assert.doesNotMatch(text, /child_process/, `a child_process load: ${text}`);
   }
   assert.doesNotMatch(SOURCE, /RUNNER_RAW_PROCESS_BOUNDARY/, "the module is no raw process boundary any more");
 });
