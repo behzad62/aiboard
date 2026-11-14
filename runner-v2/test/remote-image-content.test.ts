@@ -10,7 +10,7 @@ import type { ToolContentBlock, ToolResult } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "../src/execution-host.js";
-import { encodePng, IMAGE_LIMITS, ImageInspectionError, prepareImageForModel } from "../src/image-inspection.js";
+import { decodePng, encodePng, IMAGE_LIMITS, ImageInspectionError, prepareImageForModel } from "../src/image-inspection.js";
 import { createImageTools, mcpImageContent, REMOTE_IMAGE_LIMITS, type McpImageContent } from "../src/image-tools.js";
 import { canonicalJson, RemoteAdmissionStore, remotePayloadDigest, type RemoteRequest } from "../src/remote-admission-store.js";
 import { RemoteAuthenticator, REMOTE_CONNECT_SCOPE, REMOTE_RELAY_AUDIENCE, type RemoteAuthorization } from "../src/remote-auth.js";
@@ -66,6 +66,20 @@ function jpegCutAfterThumbnail(): Buffer {
   const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, length >> 8, length & 0xff]), thumbnail]);
   return Buffer.concat([jpeg(64, 48, 0).subarray(0, -6), app1]); // SOI and SOF (so the probe has its size), then the cut segment
 }
+/** A PNG file from its header fields, the pixel data's rows (each with its filter byte) and any chunks between. */
+function pngFile(header: Readonly<{ width: number; height: number; bitDepth: number; colorType: number; interlace?: number }>,
+  rows: readonly Buffer[], extra: ReadonlyArray<readonly [string, Buffer]> = []): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const framed = Buffer.alloc(body.length + 8);
+    framed.writeUInt32BE(data.length, 0); body.copy(framed, 4); framed.writeUInt32BE(crc32(body) >>> 0, body.length + 4);
+    return framed;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(header.width, 0); ihdr.writeUInt32BE(header.height, 4); ihdr[8] = header.bitDepth; ihdr[9] = header.colorType; ihdr[12] = header.interlace ?? 0;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr),
+    ...extra.map(([type, data]) => chunk(type, data)), chunk("IDAT", deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0))]);
+}
 /** A real interlaced (Adam7) RGBA PNG of one color, each pass's rows unfiltered. */
 function adam7Png(width: number, height: number): Buffer {
   const rows: Buffer[] = [];
@@ -74,15 +88,16 @@ function adam7Png(width: number, height: number): Buffer {
     if (columns <= 0) continue;
     for (let y = row; y < height; y += rowStep) rows.push(Buffer.concat([Buffer.from([0]), Buffer.alloc(columns * 4, 200)]));
   }
-  const chunk = (type: string, data: Buffer) => {
-    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
-    const framed = Buffer.alloc(body.length + 8);
-    framed.writeUInt32BE(data.length, 0); body.copy(framed, 4); framed.writeUInt32BE(crc32(body) >>> 0, body.length + 4);
-    return framed;
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6; header[12] = 1;
-  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", header), chunk("IDAT", deflateSync(Buffer.concat(rows))), chunk("IEND", Buffer.alloc(0))]);
+  return pngFile({ width, height, bitDepth: 8, colorType: 6, interlace: 1 }, rows);
+}
+/**
+ * A 3x2 palette PNG at 4 bits with a three-entry PLTE, its second row stored with the Up filter. Each row is two bytes:
+ * three indices and a padding nibble (F, which is not an index). The first row is 0, 1, 2. `second` is the second
+ * row's stored bytes; unfiltered, they are each added to the byte above.
+ */
+function palettePng(second: readonly [number, number]): Buffer {
+  return pngFile({ width: 3, height: 2, bitDepth: 4, colorType: 3 }, [Buffer.from([0, 0x01, 0x2f]), Buffer.from([2, ...second])],
+    [["PLTE", Buffer.from([255, 0, 0, 0, 255, 0, 0, 0, 255])]]);
 }
 /** The same PNG with its IHDR marked interlaced (and its CRC fixed): its pixel data has the non-interlaced size, not Adam7's. */
 function interlaced(png: Buffer): Buffer {
@@ -204,6 +219,30 @@ test("on an MCP surface only a whole image is sent: a truncated PNG, JPEG or Web
       assert.equal(result.content.some((block) => block.type === "artifact"), false, name);
     }
   } finally { f.cleanup(); }
+});
+
+test("the whole-image check reads a palette PNG's indices and walks past stray bytes between JPEG segments", () => {
+  const remote = { maxBytes: REMOTE_IMAGE_LIMITS.maxBytes, complete: true } as const;
+  const refusedAs = (pattern: RegExp) => (error: unknown) => code("image_corrupt")(error) && pattern.test((error as Error).message);
+  // Unfiltered, this second row is 2, 2, 1: valid, though its stored bytes hold an F, which a raw-byte scan would take
+  // for an index past the PLTE. The padding nibble F is not an index either.
+  const valid = palettePng([0x21, 0xf0]);
+  const sent = prepareImageForModel(valid, remote);
+  assert.deepEqual([sent.width, sent.height, Buffer.from(sent.bytes).equals(valid)], [3, 2, true]);
+  // Unfiltered, this second row is 0, 3, 2: index 3 is past the three-entry PLTE, though every stored nibble is in range.
+  const outOfRange = palettePng([0x02, 0x00]);
+  assert.throws(() => prepareImageForModel(outOfRange, remote), refusedAs(/PNG palette index is out of range\. The image is truncated or corrupt/));
+  // Build's full decode agrees on both.
+  assert.equal(decodePng(valid).width, 3);
+  assert.throws(() => decodePng(outOfRange), refusedAs(/PNG palette index is out of range/));
+
+  // Stray bytes between segments after the frame header, a stray FF00 among them, are skipped as libjpeg skips them.
+  const scan = Buffer.from([0xff, 0xda, 0, 2, 0x55, 0x55]);
+  const stray = Buffer.concat([jpeg(64, 48, 0).subarray(0, -6), Buffer.from([0x00, 0x13, 0x37]), Buffer.from([0xff, 0xc4, 0, 3, 0]),
+    Buffer.from([0x42, 0xff, 0x00]), scan, Buffer.from([0xff, 0xd9])]);
+  assert.equal(prepareImageForModel(stray, remote).width, 64);
+  // The same file cut before its FFD9 is still refused.
+  assert.throws(() => prepareImageForModel(stray.subarray(0, -2), remote), refusedAs(/This is not a complete JPEG: its segments do not reach an end-of-image marker/));
 });
 
 test("image.inspect keeps its path rules on the MCP surfaces: nothing outside the workspace, by .., absolute path or link", async () => {
