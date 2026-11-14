@@ -50,7 +50,6 @@ const GRANT_LABEL = "ai-board.runner-v2.grant";
 const IMAGE_LABEL = "ai-board.runner-v2.image";
 const PROBE_LABEL = "ai-board.runner-v2.probe";
 const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
-const STATE_LOCK_TIMEOUT_MS = 10_000;
 const MAX_LEASE_STATE_BYTES = 1024 * 1024;
 const MAX_DURABLE_LEASES = 1_000;
 const MAX_DURABLE_ACCESS = 256;
@@ -1080,8 +1079,9 @@ function requiresInteractiveAttach(
 async function withStateLock<T>(statePath: string, action: () => Promise<T>): Promise<T> {
   const lockPath = `${statePath}.lock`;
   try {
+    // The lock's own default deadline (OWNED_FENCE_DEFAULT_DEADLINE_MS, set from measured claims). This 10 s was
+    // chosen when that default was 2 s, to outlast a cold Windows self-birth probe; the default now covers it.
     return await withOwnedFenceLock(lockPath, action, {
-      deadlineMs: STATE_LOCK_TIMEOUT_MS,
       retryDelayMs: 10,
       retireAfterEffect: false,
     });

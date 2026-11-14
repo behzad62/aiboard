@@ -160,6 +160,7 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/posix-process-usage.test.ts
           runner-v2/test/managed-process-wait.test.ts
+          runner-v2/test/pattern-cpu-budget.test.ts
           runner-v2/test/managed-process-wait-tracker.test.ts
           runner-v2/test/managed-interaction-native.test.ts
       # VF7b: one browser run (the images ship Chrome; the switch fails instead of skipping if one ever does not).

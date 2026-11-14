@@ -6,7 +6,7 @@ import {
   evaluateCompletion,
   exitProven,
   interactionState,
-  MANAGED_PATTERN_EVAL_TIMEOUT_MS,
+  MANAGED_PATTERN_EVAL_CPU_BUDGET_MS,
   matchKnownPrompt,
   matchOutputPattern,
   renderPlain,
@@ -214,9 +214,13 @@ test("a polynomial pattern that passes the static screen is stopped by the evalu
   // Review finding: `a*a*!` passes validateOutputPattern but takes ~10 s on a 4 KiB tail.
   for (const pattern of ["a*a*!", ".*.*.*.*!", "[a]*[a]*[a]*!"]) {
     assert.deepEqual(validateOutputPattern(pattern), { ok: true }, pattern);
-    const began = Date.now();
-    assert.throws(() => matchOutputPattern(pattern, undefined, "a".repeat(4096)), invalidArguments, pattern);
-    assert.ok(Date.now() - began < MANAGED_PATTERN_EVAL_TIMEOUT_MS * 10, `${pattern} took ${Date.now() - began} ms`);
+    // Load-independent: the bound is the CPU this thread spends, so the check is too (never wall time).
+    const cpuBefore = process.threadCpuUsage();
+    assert.throws(() => matchOutputPattern(pattern, undefined, "a".repeat(4096)), (error: unknown) =>
+      invalidArguments(error) && /used more than its 50 ms CPU evaluation bound/u.test((error as Error).message), pattern);
+    const used = process.threadCpuUsage(cpuBefore);
+    const usedMs = (used.user + used.system) / 1_000;
+    assert.ok(usedMs < MANAGED_PATTERN_EVAL_CPU_BUDGET_MS * 10, `${pattern} used ${usedMs} ms of CPU`);
   }
   assert.equal(matchOutputPattern("ready on port (\\d+)", undefined, "x".repeat(4000) + "ready on port 3000"), "ready on port 3000");
 });

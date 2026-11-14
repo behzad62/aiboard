@@ -3,6 +3,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const POSIX_INSPECTION_DEADLINE_MS = 15_000;
+// The spawn bound for one `ps` or `getconf`. Measured in a 2-CPU Linux container, idle and with 2x and 4x as many
+// busy processes as CPUs: `ps` 3-173 ms, `getconf` 1-67 ms; CI `ps -e` p99 61-201 ms (PR #205). 2 s is about 10x the
+// slowest, so it stays. No macOS measurements were taken.
 const POSIX_CPU_INSPECTION_DEADLINE_MS = 2_000;
 const POSIX_CPU_SAMPLE_INTERVAL_MS = process.platform === "linux" ? 250 : 500;
 const POSIX_CPU_RETRY_INTERVAL_MS = 1_000;
