@@ -942,11 +942,11 @@ test("FL2 released tombstone is flushed before its rename and the rename after i
 });
 
 // The Windows Job host's release record is its only record of a release since FL2, so the release writes it durably.
-test("FL2 Windows Job release record is flushed before its rename and the renamed file after it", () => {
+test("FL2 Windows Job release record is flushed before its rename and the renamed file after it, persisted once in place", () => {
   const source = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
-  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n\s*this\.persist\((\w+)(, true)?\)/g)];
+  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^]*?this\.persist\((\w+)(, \{ afterRename: [^\n]*releaseEffectPersisted = true[^\n]*)?\)/g)];
   assert.equal(releases.length, 1, "one release effect writes the release record");
-  assert.equal(releases[0]![2], ", true", "and it writes it durably");
+  assert.ok(releases[0]![2], "and it writes it durably, marking the release persisted once the record is in place");
   const file = ts.createSourceFile("windows-job-process-host.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
   let persist: ts.MethodDeclaration | undefined;
   const find = (node: ts.Node): void => {
@@ -976,10 +976,11 @@ test("FL2 Windows Job release record is flushed before its rename and the rename
   });
   vm.runInContext(method, context);
   context.host = { containedProcessPath: (id: string, suffix: string) => `root/${id}${suffix}` };
-  vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, true)", context);
+  context.calls = calls;
+  vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, { afterRename: () => calls.push('persisted') })", context);
   assert.deepEqual(calls, [
     "open root/p.json.u.tmp wx", "write root/p.json.u.tmp", "fsync root/p.json.u.tmp", "close root/p.json.u.tmp",
-    "rename root/p.json.u.tmp root/p.json", "open root/p.json r+", "fsync root/p.json", "close root/p.json",
+    "rename root/p.json.u.tmp root/p.json", "persisted", "open root/p.json r+", "fsync root/p.json", "close root/p.json",
   ]);
 });
 

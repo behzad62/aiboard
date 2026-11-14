@@ -32,7 +32,8 @@ export interface PortableChannelAuthority {
   /** Observation only; never authorizes a protected effect. Must settle after cancellation. */
   reattestObservation?(signal: AbortSignal): Promise<"live" | "exited">;
   effect<T>(kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T>;
-  snapshot<T>(read: () => T): PortableFenceSnapshotOutcome<T>;
+  /** Async since FL3: the Runner never blocks its event loop on the lock. `read` itself runs synchronously under it. */
+  snapshot<T>(read: () => T): PortableFenceSnapshotOutcome<T> | Promise<PortableFenceSnapshotOutcome<T>>;
 }
 
 export interface PortableProcessChannelProviderOptions {
@@ -40,7 +41,7 @@ export interface PortableProcessChannelProviderOptions {
   readonly replayCapacityChunks: number;
   readonly replayCapacityBytes: number;
   readonly pollIntervalMs: number;
-  authority(binding: ProcessBackendBinding, fence: ProcessEffectFence): PortableChannelAuthority;
+  authority(binding: ProcessBackendBinding, fence: ProcessEffectFence): PortableChannelAuthority | Promise<PortableChannelAuthority>;
 }
 
 export function createPortableProcessChannelProvider(options: PortableProcessChannelProviderOptions) {
@@ -48,7 +49,7 @@ export function createPortableProcessChannelProvider(options: PortableProcessCha
   const replayCapacityBytes = positive(options.replayCapacityBytes);
   const pollIntervalMs = positive(options.pollIntervalMs);
   const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
-    const channel = new PortableProcessChannel(options.authority(binding, fence), pollIntervalMs, options.clock ?? Date.now);
+    const channel = new PortableProcessChannel(await options.authority(binding, fence), pollIntervalMs, options.clock ?? Date.now);
     await channel.validateForAttach();
     return channel;
   };
@@ -59,7 +60,7 @@ export function createPortableProcessChannelProvider(options: PortableProcessCha
     acquire,
     async reattach(binding: ProcessBackendBinding, fence: ProcessEffectFence) {
       const channel = await acquire(binding, fence);
-      const recoveryOutput = channel.recoveryOutputObservation();
+      const recoveryOutput = await channel.recoveryOutputObservation();
       return {
         version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
         binding,
@@ -262,7 +263,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
         return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
       }
-      const snapshot = this.authority.snapshot(() => {
+      const snapshot = await this.authority.snapshot(() => {
         this.assertOutputDeadline();
         const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
         if (state.nonce !== this.authority.nonce || !["running", "stopping", "stopped"].includes(state.status)) {
@@ -316,13 +317,13 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     }
   }
 
-  retainedWindow(): readonly BackpressuredOutputMetadata[] {
-    return this.outputFiles().map((entry) => entry.metadata);
+  async retainedWindow(): Promise<readonly BackpressuredOutputMetadata[]> {
+    return (await this.outputFiles()).map((entry) => entry.metadata);
   }
-  recoveryOutputObservation() {
+  async recoveryOutputObservation() {
     // One fenced snapshot validates actual retained payloads and rejects an
     // incomplete retirement before projecting this nonce-free private proof.
-    const snapshot = this.requireSnapshot(this.outputSnapshot());
+    const snapshot = this.requireSnapshot(await this.outputSnapshot());
     return {
       retainedWindow: snapshot.output.map((entry) => entry.metadata),
       cleanupBootstrap: {
@@ -352,7 +353,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (this.authority.reattestFence) this.authority.reattestFence();
       else this.reattest(false);
       if (this.outputIsIdle()) return;
-      const snapshot = this.outputSnapshot();
+      const snapshot = await this.outputSnapshot();
       if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return;
       const entries = this.requireSnapshot(snapshot).output;
       const present = new Set(entries.map((entry) => entry.name));
@@ -448,8 +449,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     } catch { return false; }
   }
 
-  private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
-    return [...this.requireSnapshot(this.outputSnapshot()).output];
+  private async outputFiles(): Promise<Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }>> {
+    return [...this.requireSnapshot(await this.outputSnapshot()).output];
   }
 
   // The fenced snapshot is a durable SQLite write transaction with flushes. At this poll rate, taking it with
@@ -470,8 +471,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         this.deliveredOutput.has(entry.name) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata));
     } catch { return false; }
   }
-  private outputSnapshot(): PortableFenceSnapshotOutcome<PortableOutputSnapshot> {
-    return this.authority.snapshot(() => this.readOutputSnapshot());
+  private async outputSnapshot(): Promise<PortableFenceSnapshotOutcome<PortableOutputSnapshot>> {
+    return await this.authority.snapshot(() => this.readOutputSnapshot());
   }
   private readOutputSnapshot(): PortableOutputSnapshot {
     return readPortableOutputSnapshot({
@@ -590,7 +591,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         stage = "live_stopped_fence";
         if (this.authority.reattestFence) this.authority.reattestFence();
         else {
-          const finalFence = this.authority.snapshot(() => true);
+          const finalFence = await this.authority.snapshot(() => true);
           if (finalFence.status === "unavailable" && finalFence.cause === "coordination") return undefined;
           if (finalFence.status !== "applied") throw new Error("Portable terminal fence is unavailable.");
         }
@@ -598,7 +599,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       }
       if (state.status === "stopped") {
         stage = "exited_output";
-        const snapshot = this.outputSnapshot();
+        const snapshot = await this.outputSnapshot();
         if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return undefined;
         const output = this.requireSnapshot(snapshot);
         if (output.output.length > 0 || output.acknowledgements.some((name) => /^(stdout|stderr)-/.test(name))) return undefined;
@@ -607,7 +608,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         // The asynchronous identity wait cannot preserve an earlier output or
         // terminal snapshot. Read both again under the current exact fence.
         stage = "exited_snapshot";
-        const final = this.authority.snapshot(() => ({
+        const final = await this.authority.snapshot(() => ({
           state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")),
           output: this.readOutputSnapshot(),
         }));

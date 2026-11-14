@@ -1028,8 +1028,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.assertJobOutputSettled(current, final);
         const releasedAt = this.clock();
         const candidate = { ...current, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
-        this.persist(candidate, true); this.records.set(processId, candidate);
-        releaseEffectPersisted = true;
+        // Persisted once the rename lands: a failure of the flush after it is the release's own failure, never a
+        // reason to finish the release from the record (the catch below does that only for a release not persisted).
+        this.persist(candidate, { afterRename: () => { this.records.set(processId, candidate); releaseEffectPersisted = true; } });
         return { ...this.snapshot(candidate), ownershipReleased: true };
       });
     } catch (error) {
@@ -1314,9 +1315,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   /**
    * `durable` is for the release record: since FL2 the lock file holds nothing, so `backendOwnershipReleasedAt` is the
    * only record that ownership was released. Its data is flushed before the rename and the renamed file after it
-   * (Node cannot open a directory on Windows, so that is as far as it reaches).
+   * (Node cannot open a directory on Windows, so that is as far as it reaches). `afterRename` runs once the record is
+   * in place, before that last flush.
    */
-  private persist(record: HostRecord, durable = false): void {
+  private persist(record: HostRecord, durable?: { readonly afterRename: () => void }): void {
     const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
     if (!durable) { writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination); return; }
     const content = Buffer.from(JSON.stringify(record, null, 2));
@@ -1326,6 +1328,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       fsyncSync(written);
     } finally { closeSync(written); }
     renameSync(temporary, destination);
+    durable.afterRename();
     const renamed = openSync(destination, "r+");
     try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
