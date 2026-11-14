@@ -170,6 +170,17 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       const started = Date.now();
       const result = await runtime.runCheckV2({ executionProfile: profile, checkId: "home-page" });
       console.log(`final browser check: ${result.check.outcome} in ${Date.now() - started} ms on ${process.platform} with ${BROWSER}`);
+      if (result.check.outcome !== "passed") {
+        // Printed at once: a failed teardown afterwards can turn the assertion into a timeout that hides it.
+        console.log(`final browser check issues:\n${result.check.issues.join("\n")}`);
+        for (const fact of result.check.facts as unknown as Array<{ label?: string; stdoutArtifactHash?: string; stderrArtifactHash?: string }>) {
+          for (const [stream, hash] of [["stdout", fact.stdoutArtifactHash], ["stderr", fact.stderrArtifactHash]] as const) {
+            if (!hash) continue;
+            const text = Buffer.from(await artifacts.get(hash)).toString("utf8").trim();
+            if (text) console.log(`--- ${fact.label} ${stream}:\n${text.slice(-2_000)}`);
+          }
+        }
+      }
       assert.equal(result.check.outcome, "passed", result.check.issues.join("\n"));
 
       // The program is the session, it became ready on its line, and its stop was proven.
