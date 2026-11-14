@@ -904,15 +904,25 @@ export async function readProjectValidationConfig(repositoryRoot: string): Promi
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return undefined;
-    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} could not be inspected: ${unreadableReason(error)}.`, { cause: error });
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} could not be inspected: ${unreadableReason(error)}.`, { cause: error, retryable: readFailureRetryable(error) });
   }
   let text: string;
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
-    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${unreadableReason(error)}.`, { cause: error });
+    throw new ProjectValidationConfigError(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is present but unreadable: ${unreadableReason(error)}.`, { cause: error, retryable: readFailureRetryable(error) });
   }
   return parseProjectValidationConfigText(text);
+}
+
+/**
+ * VF4b review fix: whether a fresh checkout of the same revision may read the file. A folder, a
+ * dangling link or a link loop in its place is what the revision holds; a permission or I/O error
+ * in the Runner's own checkout is not.
+ */
+function readFailureRetryable(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return !(code === "ENOENT" || code === "EISDIR" || code === "ELOOP" || code === "ENOTDIR");
 }
 
 function unreadableReason(error: unknown): string {

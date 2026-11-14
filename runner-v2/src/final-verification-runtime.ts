@@ -23,7 +23,7 @@ import {
   type FinalVerificationStatus,
   type VerificationNotRun,
 } from "./final-verification-contracts.js";
-import { missingCheckTools, type CheckToolLookup, type CheckToolLookupTarget } from "./check-tool-lookup.js";
+import { checkToolLookupFor, missingCheckTools, type CheckToolLookup, type CheckToolLookupTarget } from "./check-tool-lookup.js";
 import {
   captureCommandOutputs,
   outputCaptureBlocker,
@@ -1323,7 +1323,9 @@ export class FinalVerificationRuntime {
   /** VF2/VF4: the shared lookup rule (missingCheckTools) as a not-run record. */
   private async missingToolAt(targets: readonly CheckToolLookupTarget[]): Promise<VerificationNotRun | undefined> {
     if (!this.toolLookup) return undefined;
-    const missing = await missingCheckTools(targets, this.toolLookup);
+    // VF4b: looked up on the PATH of the owner the check's processes run for (its program and its
+    // steps share it), so the Runner's own commands for that owner (playwright-cli-session) are found.
+    const missing = await missingCheckTools(targets, checkToolLookupFor(this.toolLookup, { runId: this.runId, sessionId: this.taskId }));
     if (missing.length === 0) return undefined;
     return {
       reason: "tool_missing",
@@ -2963,7 +2965,14 @@ export function createFinalVerificationManagedProcessAdapter(options: Readonly<{
   actor: AgentActor;
 }>): FinalVerificationManagedProcess {
   if (!options.callScope.trim()) throw new Error("Final verification managed call scope is required.");
-  const sessionId = `final-verification:${options.taskId}`;
+  // VF4b: the program is owned by the same session as the check's one-shot commands (its steps,
+  // provisioning, the other checks: `sessionId: taskId` in executeCommand), so every process of a
+  // final check has one owner, and so one Playwright CLI session and state folder
+  // (PlaywrightCliSessions.environmentFor). The exact owner still includes the actor (sameOwner),
+  // so no agent's close or process tool reaches it; worker and verifier sessions have ids of their
+  // own (worker-identity.ts, native-verifier-runtime.ts), never a bare task id. Before VF4b this was
+  // `final-verification:<taskId>`, which put the program's browser daemon out of its steps' reach.
+  const sessionId = options.taskId;
   const workspaces = new Map<string, string>();
   let sequence = 0;
   const invoke = async <T>(input: Readonly<{

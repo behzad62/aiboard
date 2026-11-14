@@ -35,6 +35,9 @@ const deterministicPrTests = [
   // The owned fence lock's Windows self-birth preparation through withOwnedFenceLock, on a fake clock, plus the
   // Windows Job host's wiring (about 1 s).
   "runner-v2/test/owned-fence-self-birth.test.ts",
+  // VF4b: a final browser check's processes share one owner, and its tool lookup searches that owner's PATH (no
+  // process; a temporary git checkout, about 8 s on Windows).
+  "runner-v2/test/final-check-browser-ownership.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

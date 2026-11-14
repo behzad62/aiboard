@@ -2777,6 +2777,52 @@ test("VF4 a malformed aiboard-validation.json stops a v2 run before planning: it
   }
 });
 
+test("VF4b the config pause names the revision it read: the start one, then the one a mid-run resume continues from; a retryable read says to resume and a resume gets past it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf4b-config-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const error = "Project validation config aiboard-validation.json is malformed: checks[0].mandatory must be true or false.";
+  try {
+    // The run moved on (its integration revision) before the resume read the file again.
+    initializeV2(store, "run_vf4b_moved");
+    let revision = "a".repeat(40);
+    const moved = vf4Runtime(store, "run_vf4b_moved", {
+      inventory: (trigger) => vf4Inventory(trigger, { projectConfigError: error, revision }),
+      onArchitect: () => assert.fail("no model call while the file is malformed"),
+    });
+    assert.deepEqual(await moved.step(), { status: "paused", action: "project_validation_config_invalid" });
+    revision = "b".repeat(40);
+    moved.resume("vf4b-moved-resume");
+    assert.deepEqual(await moved.step(), { status: "paused", action: "project_validation_config_invalid" });
+    const movedPauses = store.readRun("run_vf4b_moved").filter((event) => event.type === "run.paused").map((event) => String(event.payload.detail));
+    assert.match(movedPauses[0]!, /at the revision it started from \(aaaaaaaaaaaa\)/);
+    assert.match(movedPauses[1]!, /^Resuming cannot fix this, so the Build stopped here again\. /);
+    assert.match(movedPauses[1]!, /at its current revision \(bbbbbbbbbbbb\), the one this resume continues from/);
+    assert.doesNotMatch(movedPauses[1]!, /started from/);
+
+    // A permission error in the Runner's checkout: the pause says a resume can help, and one does.
+    initializeV2(store, "run_vf4b_retry");
+    let readable = false;
+    let architectTurns = 0;
+    const unreadable = "Project validation config aiboard-validation.json is present but unreadable: the Runner has no permission to read it.";
+    const retry = vf4Runtime(store, "run_vf4b_retry", {
+      inventory: (trigger) => vf4Inventory(trigger, readable ? { revision: "c".repeat(40) } : { projectConfigError: unreadable, projectConfigErrorRetryable: true, revision: "c".repeat(40) }),
+      onArchitect: () => { architectTurns += 1; },
+    });
+    assert.deepEqual(await retry.step(), { status: "paused", action: "project_validation_config_invalid" });
+    const detail = String(store.readRun("run_vf4b_retry").find((event) => event.type === "run.paused")!.payload.detail);
+    assert.match(detail, /every resume takes a new one, so this can pass on a resume/);
+    assert.doesNotMatch(detail, /Resuming cannot fix this|start a new Build/);
+    assert.equal(architectTurns, 0);
+    readable = true;
+    retry.resume("vf4b-retry-resume");
+    await assert.rejects(() => retry.step(), /without a typed action/i);
+    assert.equal(architectTurns, 1, "the resume's fresh checkout read the file, so the Architect plans");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("VF1 an inventory probe that throws is recorded as unavailable and never fails the step", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-vf1-fail-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));

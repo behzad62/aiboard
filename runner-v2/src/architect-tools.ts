@@ -2028,6 +2028,7 @@ const PLAN_FINAL_VERIFICATION_V2_DESCRIPTION = [
   "The Runner suggests checks (the prefill): the project's own from aiboard-validation.json (origin project), or what it detected when the project declares none; keep each one, change it, or list it in skipped with a reason; then add checks of your own for what the acceptance criteria and README say a user does.",
   "Each check has an id (lowercase, no colon), a label, a kind (build, tests, start or other) and either run {executable, args, cwd?, timeoutMs?} or start {executable, args, ready, steps?}.",
   "start runs the program the user runs: ready is {http: {path, status}} on the Runner-leased port ({port} in args), {outputLine} the program prints, or {exitCode} for a CLI that runs and exits; steps then run in order against it and each must exit 0.",
+  "To check pages in a browser, the program is playwright-cli-session (no args, ready {outputLine: \"Daemon listening on\"}) and the steps run playwright-cli commands (the playwright-cli skill).",
   "outputs keeps files the commands write (screenshots, reports) as evidence. origin, mandatory and environment are the Runner's; a mandatory check cannot be skipped or changed, and a suggested check keeps its environment when you change its command.",
   "Checks whose commands you wrote need full access.",
 ].join(" ");

@@ -46,7 +46,10 @@ export interface InventoryToolRecord {
   version?: string;
   /** Why a found tool has no version line: it timed out, exited non-zero, printed nothing. */
   versionNote?: string;
-  /** Why the lookup could not decide (status `unknown`). */
+  /**
+   * Why the lookup could not decide (status `unknown`), or, for a tool missing where only some of
+   * the checks that run it launch, which checks miss it (VF4b).
+   */
   note?: string;
   /** Which checks launch it: `runner`, `build: package build`, `tier fast: lint`. */
   usedBy: string[];
@@ -90,6 +93,12 @@ export interface EnvironmentInventory {
   mandatoryChecks?: InventoryMandatoryCheck[];
   /** VF4: why the project's aiboard-validation.json could not be read, when it is present but malformed. */
   projectConfigError?: string;
+  /**
+   * VF4b review fix: the file could not be read for a reason a fresh checkout may not repeat (a
+   * permission or I/O error), so a resume, which takes one, can get past it. Absent on a file that
+   * is malformed or not a file at this revision, and on every inventory recorded before VF4b.
+   */
+  projectConfigErrorRetryable?: true;
 }
 
 /** VF4: the pause while a mandatory check's tool is missing. */
@@ -253,17 +262,40 @@ export function mandatoryChecksMissingTools(inventory: Pick<EnvironmentInventory
 }
 
 /**
- * VF4: the owner's pause text for a malformed or unreadable aiboard-validation.json. A Build reads
- * the file at the revision it started from, so a fix made in the project now never reaches it:
- * the honest way on is a new Build. A resume reads the same revision and stops here again, and
- * says so.
+ * VF4: the owner's pause text for a malformed or unreadable aiboard-validation.json.
+ *
+ * - A file that is malformed (or a folder, or a dangling link) at the revision the inventory read
+ *   stays that way at that revision, and a fix made in the project never reaches this Build: the
+ *   honest way on is a new Build. A resume reads the same revision and stops here again, and says
+ *   so. The revision is the one the Build started from at its start, and its current one on a
+ *   resume after it moved on (VF4b review fix: the text said "started from" there too).
+ * - A file the Runner could not read for a reason a fresh checkout may not repeat (`retryable`:
+ *   no permission, a held file) can pass on a resume, which takes a fresh checkout, so the text
+ *   says to resume (VF4b review fix: it said resuming could not help).
  */
-export function projectConfigInvalidDetail(error: string, input: { revision?: string; resumed?: boolean } = {}): string {
+export function projectConfigInvalidDetail(error: string, input: {
+  revision?: string;
+  resumed?: boolean;
+  /** The revision of the run's first inventory: where the Build started. */
+  startRevision?: string;
+  retryable?: boolean;
+} = {}): string {
   const at = input.revision ? ` (${input.revision.slice(0, 12)})` : "";
+  if (input.retryable) {
+    return [
+      input.resumed ? "It could not be read on this resume either." : undefined,
+      error,
+      `The Runner reads it from a fresh checkout of this Build's revision${at}, and every resume takes a new one, so this can pass on a resume.`,
+      "Make sure the Runner can read its own state folder (an antivirus scan or another program can hold a file for a moment), then resume. No model was called.",
+    ].filter((part) => part !== undefined).join(" ");
+  }
+  const movedOn = input.resumed === true && (input.startRevision === undefined || input.revision === undefined || input.startRevision !== input.revision);
   return [
     input.resumed ? "Resuming cannot fix this, so the Build stopped here again." : undefined,
     error,
-    `This Build reads its checks from that file at the revision it started from${at}, so it cannot plan, and a fix made in the project now cannot reach it.`,
+    movedOn
+      ? `This Build reads its checks from that file at its current revision${at}, the one this resume continues from, so it cannot go on, and a fix made in the project now cannot reach it.`
+      : `This Build reads its checks from that file at the revision it started from${at}, so it cannot plan, and a fix made in the project now cannot reach it.`,
     "Fix aiboard-validation.json in the project and start a new Build. No model was called.",
   ].filter((part) => part !== undefined).join(" ");
 }
@@ -294,6 +326,8 @@ export interface CollectEnvironmentInventoryInput {
   nodeExecPath?: string;
   /** VF4: why aiboard-validation.json could not be read (a ProjectValidationConfigError). */
   projectConfigError?: string;
+  /** VF4b: that error's `retryable` (ProjectValidationConfigError). */
+  projectConfigErrorRetryable?: boolean;
   /**
    * VF4: the mandatory checks with their tools, decided by the final check's own lookup
    * (mandatoryProjectCheckTools in check-tool-lookup.ts); recorded as given.
@@ -378,36 +412,59 @@ export async function collectEnvironmentInventory(input: CollectEnvironmentInven
     notes,
     ...(mandatoryChecks.length ? { mandatoryChecks } : {}),
     ...(input.projectConfigError ? { projectConfigError: input.projectConfigError } : {}),
+    ...(input.projectConfigError && input.projectConfigErrorRetryable ? { projectConfigErrorRetryable: true as const } : {}),
   });
 }
 
 /**
  * VF4: a tool looked up the way the final check looks it up (missingCheckTools): in the folder
- * each command that runs it launches in, skipping a command that sets its own PATH. Found in
- * any of those folders, it is found; so a tool a mandatory check finds is never listed missing.
+ * each command that runs it launches in, skipping a command that sets its own PATH.
+ *
+ * VF4b review fix: it is found only when every one of those folders finds it. Missing in any of
+ * them, it is missing, and the note names the checks that miss it (and where another found it),
+ * so the tools list never says found while a check that launches it, a mandatory one in
+ * `mandatoryChecks` included, comes back `not_run: tool_missing`.
  */
-async function lookUpWhereLaunched(target: ToolTarget, input: CollectEnvironmentInventoryInput): Promise<CheckToolLookupResult> {
-  const folders: string[] = [];
+async function lookUpWhereLaunched(
+  target: ToolTarget,
+  input: CollectEnvironmentInventoryInput,
+): Promise<{ status: "found"; path: string } | { status: "missing"; note?: string } | { status: "unknown"; reason: string }> {
+  const folders = new Map<string, string[]>();
   for (const use of target.uses) {
     if (Object.keys(use.environment ?? {}).some((name) => name.toUpperCase() === "PATH")) continue;
     const { folder } = await checkLaunchFolder(input.cwd, use.cwd, use.label);
-    if (!folders.includes(folder)) folders.push(folder);
+    const labels = folders.get(folder) ?? [];
+    if (!labels.includes(use.label)) labels.push(use.label);
+    folders.set(folder, labels);
   }
-  if (folders.length === 0) {
+  if (folders.size === 0) {
     return { status: "unknown", reason: "Every check that runs it sets its own PATH, which the Runner does not search." };
   }
+  let found: string | undefined;
   let undecided: string | undefined;
-  for (const folder of folders) {
+  const missingFor: string[] = [];
+  for (const [folder, labels] of folders) {
     let looked: CheckToolLookupResult;
     try {
       looked = await input.lookup(target.executable, { cwd: folder });
     } catch (error) {
       looked = { status: "unknown", reason: `The lookup failed: ${errorMessage(error)}` };
     }
-    if (looked.status === "found") return looked;
-    if (looked.status === "unknown") undecided ??= looked.reason;
+    if (looked.status === "found") found ??= looked.path;
+    else if (looked.status === "unknown") undecided ??= looked.reason;
+    else missingFor.push(...labels.filter((label) => !missingFor.includes(label)));
   }
-  return undecided ? { status: "unknown", reason: undecided } : { status: "missing" };
+  if (missingFor.length > 0) {
+    // Every folder missed it: the plain missing record, as before.
+    if (!found && !undecided) return { status: "missing" };
+    return {
+      status: "missing",
+      note: `Not found where ${missingFor.join(", ")} launch${missingFor.length === 1 ? "es" : ""} it` +
+        `${found ? `; found at ${found} for the others` : ""}.`,
+    };
+  }
+  if (undecided) return { status: "unknown", reason: undecided };
+  return { status: "found", path: found! };
 }
 
 async function inventoryTool(target: ToolTarget, input: CollectEnvironmentInventoryInput, nodeExecPath: string): Promise<InventoryToolRecord> {
@@ -420,7 +477,7 @@ async function inventoryTool(target: ToolTarget, input: CollectEnvironmentInvent
   } else {
     // VF2's lookup, the one the check makes before it launches: a second resolver would disagree with it.
     const looked = await lookUpWhereLaunched(target, input);
-    if (looked.status === "missing") return { ...base, status: "missing" };
+    if (looked.status === "missing") return { ...base, status: "missing", ...(looked.note ? { note: looked.note } : {}) };
     if (looked.status === "unknown") return { ...base, status: "unknown", note: looked.reason };
     launch = { executable: looked.path, prefix: [], path: looked.path };
   }
@@ -600,6 +657,9 @@ export function parseLddMissingLibraries(output: string): string[] {
  * contained and cleaned up like every command the Runner starts. No new
  * process path: the same executor the checks themselves use.
  */
+/** The session the inventory's probes run for; its tool lookups use the same owner (VF4b). */
+export const ENVIRONMENT_INVENTORY_SESSION_ID = "environment-inventory";
+
 export function oneShotInventoryRunner(execution: OneShotCommandExecutor, identity: { runId: string }): InventoryCommandRunner {
   return async (request) => {
     const executed = await execution.execute({
@@ -612,7 +672,7 @@ export function oneShotInventoryRunner(execution: OneShotCommandExecutor, identi
       freshExecution: true,
       context: {
         runId: identity.runId,
-        sessionId: "environment-inventory",
+        sessionId: ENVIRONMENT_INVENTORY_SESSION_ID,
         actor: { role: "runner_internal", id: "environment-inventory" },
         callId: `environment-inventory-${randomUUID()}`,
         toolName: "environment.inventory",
@@ -672,6 +732,7 @@ export function boundEnvironmentInventory(inventory: EnvironmentInventory): Envi
       })),
     } : {}),
     ...(inventory.projectConfigError ? { projectConfigError: truncate(inventory.projectConfigError, MAX_INVENTORY_CONFIG_ERROR_LENGTH) } : {}),
+    ...(inventory.projectConfigError && inventory.projectConfigErrorRetryable ? { projectConfigErrorRetryable: true as const } : {}),
   };
 }
 
@@ -691,7 +752,7 @@ export function unavailableEnvironmentInventory(trigger: InventoryTrigger, reaso
   });
 }
 
-const TOP_KEYS = new Set(["version", "trigger", "platform", "arch", "runnerNode", "revision", "tools", "toolsOmitted", "browsers", "playwrightBrowser", "notes", "mandatoryChecks", "projectConfigError"]);
+const TOP_KEYS = new Set(["version", "trigger", "platform", "arch", "runnerNode", "revision", "tools", "toolsOmitted", "browsers", "playwrightBrowser", "notes", "mandatoryChecks", "projectConfigError", "projectConfigErrorRetryable"]);
 const MANDATORY_CHECK_KEYS = new Set(["checkId", "label", "configLine", "tools", "missing"]);
 const TOOL_KEYS = new Set(["name", "status", "path", "version", "versionNote", "note", "usedBy"]);
 const BROWSER_KEYS = new Set(["id", "status", "path", "version", "missingLibraries", "note"]);
@@ -784,6 +845,14 @@ export function parseEnvironmentInventory(value: unknown): EnvironmentInventory 
       }),
     } : {}),
     ...optionalString(record, "projectConfigError", MAX_INVENTORY_CONFIG_ERROR_LENGTH),
+    ...(record.projectConfigErrorRetryable !== undefined
+      ? (() => {
+        if (record.projectConfigErrorRetryable !== true || record.projectConfigError === undefined) {
+          throw new Error("Environment inventory projectConfigErrorRetryable is invalid.");
+        }
+        return { projectConfigErrorRetryable: true as const };
+      })()
+      : {}),
   };
 }
 
@@ -798,7 +867,7 @@ export function renderEnvironmentInventory(inventory: EnvironmentInventoryProjec
   for (const tool of inventory.tools) {
     const where = tool.status === "found"
       ? `found${tool.path ? ` at ${tool.path}` : ""}; ${tool.version ?? tool.versionNote ?? "no version line"}`
-      : tool.status === "missing" ? "missing" : `unknown (${tool.note ?? "the lookup could not decide"})`;
+      : tool.status === "missing" ? `missing${tool.note ? ` (${tool.note})` : ""}` : `unknown (${tool.note ?? "the lookup could not decide"})`;
     lines.push(`- ${tool.name}: ${where} [used by: ${tool.usedBy.join(", ")}]`);
   }
   if (inventory.toolsOmitted > 0) lines.push(`- ${inventory.toolsOmitted} more tools were not recorded (cap ${MAX_INVENTORY_TOOLS}).`);

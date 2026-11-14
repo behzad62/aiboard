@@ -40,6 +40,7 @@ on:
           - t8-portable-coverage
           - windows-factory-diagnostic
           - windows-active-job-diagnostic
+          - final-check-browser
 
 permissions:
   contents: read
@@ -55,7 +56,7 @@ jobs:
   # count low: a public repository gets 20 concurrent jobs (5 on macOS), and more only queue.
   portable-contract:
     name: Portable contract (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic' && inputs['qualification-scope'] != 'final-check-browser')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -119,6 +120,7 @@ jobs:
           runner-v2/test/final-verification-managed-authority.test.ts
           runner-v2/test/repository-validation-config.test.ts
           runner-v2/test/owned-fence-self-birth.test.ts
+          runner-v2/test/final-check-browser-ownership.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
@@ -172,7 +174,7 @@ jobs:
 
   package-gate:
     name: Package parity (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic' && inputs['qualification-scope'] != 'final-check-browser')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -254,7 +256,7 @@ jobs:
   package-cross-host:
     name: Cross-host package reproducibility (Node ${{ matrix.node-version }})
     needs: package-gate
-    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic')
+    if: github.event_name != 'workflow_dispatch' || (inputs['qualification-scope'] != 't8-portable-coverage' && inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic' && inputs['qualification-scope'] != 'final-check-browser')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -282,7 +284,7 @@ jobs:
 
   t8-portable-coverage:
     name: T8 portable coverage (${{ matrix.os }}, Node ${{ matrix.node-version }}, ${{ matrix.part }})
-    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic'
+    if: github.event_name != 'workflow_dispatch' || inputs['qualification-scope'] != 'windows-factory-diagnostic' && inputs['qualification-scope'] != 'windows-active-job-diagnostic' && inputs['qualification-scope'] != 'final-check-browser'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -432,3 +434,33 @@ jobs:
           path: ${{ runner.temp }}/t8-active-job-experiment-evidence
           if-no-files-found: error
           retention-days: 14
+
+  # VF4b: a final check's Playwright CLI browser session with a real browser, on every host. Manual only, never on a
+  # pull request (PR CI jobs stay at about three minutes); the in-memory ownership contract runs in portable-contract.
+  final-check-browser:
+    name: Final-check browser session (${{ matrix.os }}, Node 24.x)
+    if: github.event_name == 'workflow_dispatch' && inputs['qualification-scope'] == 'final-check-browser'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup maintained Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # The images ship Chrome; the switch fails instead of skipping if one ever does not.
+      - name: Run the final-check browser session
+        env:
+          AIBOARD_TEST_REQUIRE_PLAYWRIGHT_BROWSER: "1"
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/final-check-browser-session.test.ts
+          runner-v2/test/final-check-browser-ownership.test.ts

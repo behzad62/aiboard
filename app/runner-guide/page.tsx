@@ -158,8 +158,10 @@ aiboard models disable <provider:model>`}
             line. Install the tool and resume.
           </li>
           <li>
-            <code>aiboard-validation.json</code> is malformed or unreadable: the run stops before planning. It reads the
-            file at the revision it started from, so fix the file and start a new Build.
+            <code>aiboard-validation.json</code> is malformed or unreadable: the run stops before planning. A malformed
+            file stays malformed at the revision the run reads, so fix it and start a new Build. A file the Runner
+            could not read (no permission, a file another program held) can pass on a resume, which reads a fresh
+            checkout.
           </li>
           <li>
             A mandatory check still fails after its repairs: the Build pauses. A check that is not mandatory becomes a
@@ -177,7 +179,9 @@ aiboard models disable <provider:model>`}
         <p>
           Builds open and check web pages with the Playwright CLI that ships with the Runner. Workers, the Architect
           and the verifiers run <code>playwright-cli</code> as an ordinary command, with one browser session for each
-          task that stops with the task. A final check cannot open a browser yet.
+          task that stops with the task. A final check opens a browser with a start check whose program is{" "}
+          <code>playwright-cli-session</code>, ready on the line <code>Daemon listening on</code>, and whose steps run{" "}
+          <code>playwright-cli</code>; the Runner stops the browser after the last step.
         </p>
         <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">aiboard browser install</pre>
         <p className="text-sm text-muted-foreground">

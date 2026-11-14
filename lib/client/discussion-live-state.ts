@@ -145,9 +145,9 @@ export function nativeBuildPauseDescription(
   if (reason === "project_validation_config_invalid") {
     return {
       waitingForOwner: true,
-      title: "Can't continue: aiboard-validation.json cannot be read",
+      title: "Stopped: aiboard-validation.json cannot be read",
       detail: projection.pauseReason?.detail
-        ?? "The project's aiboard-validation.json is malformed or unreadable. This Build reads it at the revision it started from, so fix the file in the project and start a new Build.",
+        ?? "The project's aiboard-validation.json is malformed or could not be read, so this Build cannot plan. A malformed file needs a fix in the project and a new Build; a file the Runner could not read can pass on a resume.",
     };
   }
   if (reason === "verifier.selection_required") {

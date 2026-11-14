@@ -1,6 +1,7 @@
 import { lstat, stat } from "node:fs/promises";
 import { isAbsolute, sep } from "node:path";
 
+import type { RunnerProcessEnvironmentResolver } from "./child-environment.js";
 import { languageServerCommandCandidates } from "./language-server-executable.js";
 import {
   resolveProjectCheckForLookup,
@@ -19,14 +20,27 @@ export type CheckToolLookupResult =
   | { status: "missing" }
   | { status: "unknown"; reason: string };
 
+/** VF4b: the session a looked-up command would run for (child-environment.ts processEnvironment). */
+export interface CheckToolOwner {
+  runId: string;
+  sessionId: string;
+}
+
 export type CheckToolLookup = (
   executable: string,
-  input: { cwd: string },
+  input: { cwd: string; owner?: CheckToolOwner },
 ) => Promise<CheckToolLookupResult>;
 
 export interface CheckToolLookupOptions {
   /** The environment the Runner gives its children; read on every lookup. */
   environment: () => Readonly<Record<string, string | undefined>>;
+  /**
+   * VF4b: the Runner's own per-owner values (the Playwright CLI shims' folder). A launch puts the
+   * owner's `pathPrepend` first on PATH, after its install-root filter (child-environment.ts), so
+   * the lookup searches it first too: `playwright-cli-session` is found where the launch finds it.
+   * Read on every lookup, so it follows the run's current configuration.
+   */
+  processEnvironment?: RunnerProcessEnvironmentResolver;
   /** Test seam for platform-specific resolution. */
   platform?: NodeJS.Platform;
 }
@@ -111,11 +125,25 @@ export async function mandatoryProjectCheckTools(input: {
 
 /** A lookup bound to the environment the Runner launches checks with. */
 export function createCheckToolLookup(options: CheckToolLookupOptions): CheckToolLookup {
-  return async (executable, input) => await lookUpCheckTool(executable, {
-    cwd: input.cwd,
-    environment: options.environment(),
-    ...(options.platform ? { platform: options.platform } : {}),
-  });
+  return async (executable, input) => {
+    const runner = input.owner ? options.processEnvironment?.(input.owner) : undefined;
+    return await lookUpCheckTool(executable, {
+      cwd: input.cwd,
+      environment: options.environment(),
+      ...(runner?.pathPrepend.length ? { pathPrepend: runner.pathPrepend } : {}),
+      ...(options.platform ? { platform: options.platform } : {}),
+    });
+  };
+}
+
+/**
+ * VF4b: the lookup for the commands one owner launches, so it searches that owner's PATH. A
+ * final check passes its own owner (the run and the check's task id), which every process of
+ * the check runs for, its program and its steps alike.
+ */
+export function checkToolLookupFor(lookup: CheckToolLookup, owner: CheckToolOwner): CheckToolLookup {
+  const bound = Object.freeze({ runId: owner.runId, sessionId: owner.sessionId });
+  return async (executable, input) => await lookup(executable, { cwd: input.cwd, owner: bound });
 }
 
 /**
@@ -130,6 +158,8 @@ export async function lookUpCheckTool(
   input: {
     cwd: string;
     environment: Readonly<Record<string, string | undefined>>;
+    /** VF4b: folders the launch puts first on PATH (the owner's processEnvironment). */
+    pathPrepend?: readonly string[];
     platform?: NodeJS.Platform;
   },
 ): Promise<CheckToolLookupResult> {
@@ -142,12 +172,17 @@ export async function lookUpCheckTool(
   const platform = input.platform ?? process.platform;
   // With no PATH to search, absence proves nothing; never turn every check into not run.
   const pathName = Object.keys(input.environment).find((name) => platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH");
-  if (!pathName || !input.environment[pathName]?.trim()) {
+  const ambientPath = pathName ? input.environment[pathName] : undefined;
+  const prepend = (input.pathPrepend ?? []).filter((entry) => typeof entry === "string" && entry.length > 0);
+  if (!ambientPath?.trim() && prepend.length === 0) {
     return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   }
+  // The launch's PATH: the owner's folders first, then the Runner's own PATH (child-environment.ts).
+  const searchPath = [...prepend, ...(ambientPath?.trim() ? [ambientPath] : [])].join(platform === "win32" ? ";" : ":");
+  const environment = { ...input.environment, [pathName ?? (platform === "win32" ? "Path" : "PATH")]: searchPath };
   const candidates = languageServerCommandCandidates(executable, {
     commandSearchDirectory: input.cwd,
-    environment: input.environment as NodeJS.ProcessEnv,
+    environment: environment as NodeJS.ProcessEnv,
     platform,
   });
   let undecided: string | undefined;
@@ -158,6 +193,8 @@ export async function lookUpCheckTool(
   }
   // Something with the name exists but could not be judged: launch it and let the result speak.
   if (undecided) return { status: "unknown", reason: undecided };
+  // With only the owner's folders to search, absence there proves nothing about the Runner's PATH.
+  if (!ambientPath?.trim()) return { status: "unknown", reason: "The Runner's environment has no PATH to search." };
   return { status: "missing" };
 }
 

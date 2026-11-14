@@ -7,7 +7,7 @@
  * the start checks that launch processes are in verification-plan-v2.test.ts.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,6 +36,8 @@ import {
   mandatoryChecksMissingTools,
   mandatoryToolMissingDetail,
   parseEnvironmentInventory,
+  projectConfigInvalidDetail,
+  renderEnvironmentInventory,
 } from "../src/verification-inventory.js";
 import {
   completeVerificationPlanV2,
@@ -388,6 +390,124 @@ test("the inventory's tool list looks a check's tool up where it launches, so it
     assert.equal(tool("gradlew")?.path, join(android, "gradlew"));
     assert.deepEqual([tool("rustc")?.status, tool("rustc")?.note], ["unknown", "Every check that runs it sets its own PATH, which the Runner does not search."]);
     assert.equal(tool("eslint")?.status, "missing", "a tool the checkout root lacks is still missing");
+    assert.equal(tool("eslint")?.note, undefined, "missing everywhere it launches: the plain record");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("VF4b the tool list says missing when any check that launches the tool misses it, naming the checks, so it never says found while a mandatory check is blocked", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks tool per check "));
+  try {
+    mkdirSync(join(workspace, "android"));
+    const android = join(workspace, "android");
+    const lookup = async (executable: string, { cwd }: { cwd: string }) =>
+      executable === "gradlew" && cwd === android ? { status: "found" as const, path: join(android, "gradlew") }
+        : executable === "git" || executable === "node" ? { status: "found" as const, path: `/usr/bin/${executable}` }
+          : { status: "missing" as const };
+    // gradlew from android/ (found there) and from the root (missing there), the second one mandatory.
+    const projectChecks: ProjectVerificationCheck[] = [
+      { id: "android", label: "Android build", kind: "build", mandatory: false, run: { executable: "gradlew", args: ["assembleDebug"], cwd: "android" }, line: 4 },
+      { id: "root-build", label: "Root build", kind: "build", mandatory: true, run: { executable: "gradlew", args: ["build"] }, line: 11 },
+    ];
+    const profile: FinalVerificationExecutionProfile = { ...emptyFinalVerificationProfile("9".repeat(40)), projectChecks };
+    const mandatoryChecks = await mandatoryProjectCheckTools({ checks: projectChecks, workspacePath: workspace, lookup });
+    assert.deepEqual(mandatoryChecks, [{ checkId: "root-build", label: "Root build", configLine: 11, tools: ["gradlew"], missing: ["gradlew"] }]);
+    const inventory = await collectEnvironmentInventory({
+      trigger: "planning", cwd: workspace, checks: inventoryCheckCommands(profile), mandatoryChecks, lookup,
+      run: async () => ({ outcome: "exited", exitCode: 0, stdout: "1.0.0\n", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }), platform: "linux",
+    });
+    const gradlew = inventory.tools.find((record) => record.name === "gradlew");
+    assert.equal(gradlew?.status, "missing", "the two lists agree: the mandatory check misses it, so the tool list does too");
+    assert.equal(gradlew?.note, `Not found where check root-build (mandatory): Root build launches it; found at ${join(android, "gradlew")} for the others.`);
+    assert.equal(gradlew?.version, undefined, "a missing tool is never probed");
+    assert.deepEqual(parseEnvironmentInventory(JSON.parse(JSON.stringify(inventory))), inventory, "the record replays");
+    assert.match(renderEnvironmentInventory({ ...inventory, sequence: 1, recordedAt: WHEN }), /gradlew: missing \(Not found where check root-build/);
+    // Every folder that launches it finds it: found, as before.
+    const everywhere = await collectEnvironmentInventory({
+      trigger: "planning", cwd: workspace, checks: inventoryCheckCommands({ ...profile, projectChecks: [projectChecks[0]!] }), lookup,
+      run: async () => ({ outcome: "exited", exitCode: 0, stdout: "1.0.0\n", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }), platform: "linux",
+    });
+    assert.equal(everywhere.tools.find((record) => record.name === "gradlew")?.status, "found");
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test("VF4b the malformed-config pause text: the start, a resume at the same revision, a resume after the run moved on, and a read a fresh checkout can retry", () => {
+  const error = "Project validation config aiboard-validation.json is not valid JSON.";
+  const start = "a".repeat(40);
+  const later = "b".repeat(40);
+  const atStart = projectConfigInvalidDetail(error, { revision: start, startRevision: start });
+  assert.match(atStart, /at the revision it started from \(aaaaaaaaaaaa\), so it cannot plan/);
+  assert.match(atStart, /start a new Build/);
+  assert.doesNotMatch(atStart, /Resuming/);
+  const sameRevision = projectConfigInvalidDetail(error, { revision: start, startRevision: start, resumed: true });
+  assert.match(sameRevision, /^Resuming cannot fix this, so the Build stopped here again\. /);
+  assert.match(sameRevision, /at the revision it started from \(aaaaaaaaaaaa\)/);
+  const movedOn = projectConfigInvalidDetail(error, { revision: later, startRevision: start, resumed: true });
+  assert.match(movedOn, /^Resuming cannot fix this, so the Build stopped here again\. /);
+  assert.match(movedOn, /at its current revision \(bbbbbbbbbbbb\), the one this resume continues from, so it cannot go on/);
+  assert.doesNotMatch(movedOn, /started from/, "a mid-run resume never claims the starting revision");
+  // A resume with no recorded start revision says only what it knows.
+  assert.doesNotMatch(projectConfigInvalidDetail(error, { revision: later, resumed: true }), /started from/);
+
+  const unreadable = "Project validation config aiboard-validation.json is present but unreadable: the Runner has no permission to read it.";
+  for (const resumed of [false, true]) {
+    const retry = projectConfigInvalidDetail(unreadable, { revision: later, startRevision: start, resumed, retryable: true });
+    assert.match(retry, /fresh checkout of this Build's revision \(bbbbbbbbbbbb\), and every resume takes a new one, so this can pass on a resume/);
+    assert.match(retry, /then resume\. No model was called\.$/);
+    assert.doesNotMatch(retry, /Resuming cannot fix this|start a new Build/, "a read a fresh checkout can retry is never called final");
+    assert.equal(retry.startsWith("It could not be read on this resume either."), resumed);
+  }
+});
+
+test("VF4b a read failure a fresh checkout may not repeat is retryable; what the revision holds is not", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "runner-v2 project checks retryable "));
+  try {
+    // A folder in the file's place is what the revision holds.
+    mkdirSync(join(workspace, "aiboard-validation.json"));
+    await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => {
+      assert.ok(error instanceof ProjectValidationConfigError);
+      assert.equal(error.retryable, false);
+      return true;
+    });
+    rmSync(join(workspace, "aiboard-validation.json"), { recursive: true });
+    // Malformed text is never retryable.
+    writeFileSync(join(workspace, "aiboard-validation.json"), "{");
+    await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => error instanceof ProjectValidationConfigError && !error.retryable);
+    // No permission (POSIX, not root): the Runner's own checkout, which a resume replaces.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      writeFileSync(join(workspace, "aiboard-validation.json"), "{}");
+      chmodSync(join(workspace, "aiboard-validation.json"), 0o000);
+      try {
+        await assert.rejects(() => readProjectValidationConfig(workspace), (error: Error) => {
+          assert.ok(error instanceof ProjectValidationConfigError);
+          assert.equal(error.retryable, true);
+          assert.match(error.message, /no permission to read it/);
+          return true;
+        });
+      } finally {
+        chmodSync(join(workspace, "aiboard-validation.json"), 0o644);
+      }
+    }
+    assert.equal(new ProjectValidationConfigError("x", { retryable: true }).retryable, true);
+    assert.equal(new ProjectValidationConfigError("x").retryable, false);
+    // The inventory keeps the flag only with its error, and replays it.
+    const inventory = await collectEnvironmentInventory({
+      trigger: "resume", revision: "c".repeat(40), cwd: tmpdir(), checks: [],
+      projectConfigError: "Project validation config aiboard-validation.json is present but unreadable: the Runner has no permission to read it.",
+      projectConfigErrorRetryable: true,
+      lookup: async () => ({ status: "missing" }), run: async () => ({ outcome: "exited", exitCode: 0, stdout: "", stderr: "" }),
+      browsers: async () => ({ browsers: [], notes: [] }), platform: "linux",
+    });
+    assert.equal(inventory.projectConfigErrorRetryable, true);
+    assert.deepEqual(parseEnvironmentInventory(JSON.parse(JSON.stringify(inventory))), inventory);
+    const { projectConfigError: _error, ...withoutError } = JSON.parse(JSON.stringify(inventory)) as Record<string, unknown>;
+    assert.throws(() => parseEnvironmentInventory(withoutError), /projectConfigErrorRetryable is invalid/);
+    assert.throws(() => parseEnvironmentInventory({ ...JSON.parse(JSON.stringify(inventory)), projectConfigErrorRetryable: false }), /projectConfigErrorRetryable is invalid/);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

@@ -58,6 +58,21 @@ playwright-cli --json console error
 playwright-cli --json screenshot --filename=.aiboard-browser/after-submit.png
 ```
 
+## In a final check
+
+A final check cannot call `process.start`, so the browser is the check's program: a `start` check whose program is `playwright-cli-session`, with no args, ready on its output line, and whose steps run `playwright-cli` commands. The Runner starts the browser before the steps and stops it after them; the steps use that browser. Keep screenshots with each step's `outputs`:
+
+```json
+{"id": "home-page", "label": "home page renders", "kind": "start",
+ "start": {"executable": "playwright-cli-session", "args": [], "ready": {"outputLine": "Daemon listening on"},
+  "steps": [
+   {"label": "open the page", "executable": "playwright-cli", "args": ["--json", "goto", "file:///path/to/dist/index.html"]},
+   {"label": "screenshot", "executable": "playwright-cli", "args": ["--json", "screenshot", "--filename=.aiboard-browser/home.png"], "outputs": [".aiboard-browser/home.png"]}
+  ]}}
+```
+
+A check has one program, so this checks pages that need no server of the check's own: built files, or a URL that is already served. A step passes when it exits 0, and `playwright-cli` exits 0 even when its command failed, so the step's `--json` output and the screenshot are what the reviewers read.
+
 ## Commands
 
 ### Core

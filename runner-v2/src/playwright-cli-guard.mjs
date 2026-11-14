@@ -12,7 +12,9 @@ const require = createRequire(import.meta.url);
 
 export const START_INSTRUCTION =
   "Start this agent session's browser once with process.start: command playwright-cli-session, no args, " +
-  "until {pattern: 'Daemon listening on'}. Then run playwright-cli commands; they use that session.";
+  "until {pattern: 'Daemon listening on'}. Then run playwright-cli commands; they use that session. " +
+  "In a final check, make playwright-cli-session the start check's program (ready {outputLine: 'Daemon listening on'}) " +
+  "and run playwright-cli in its steps.";
 
 /** Commands that start, attach, show, install or kill outside the managed session. */
 const REFUSED_COMMANDS = new Map([
