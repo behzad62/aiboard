@@ -1,6 +1,6 @@
-// The Windows self-birth preparation of the owned fence lock (owned-fence-lock.mjs), driven through the real
-// withOwnedFenceLock: the whole module runs in a vm with a fake clock and a fake cold powershell.exe, so these run
-// on every platform in about a second, with real SQLite under a temporary folder. Plus the Windows Job host's wiring.
+// The Windows self-birth preparation of owned-fence-lock.mjs, which no claim uses since FL2 (FL4 removes it): the whole
+// module runs in a vm with a fake clock and a fake cold powershell.exe, so these run on every platform in about a
+// second, with real SQLite under a temporary folder. Plus the Windows Job host's wiring.
 import assert from "node:assert/strict";
 import * as childProcess from "node:child_process";
 import * as crypto from "node:crypto";
@@ -84,17 +84,18 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
     off: (event: string, listener: () => void) => { if (event === "exit") exitListeners.delete(listener); },
   };
   const context = vm.createContext({
-    ...childProcess, execFile, execFileSync, ...crypto, ...fs, ...path, ...sqlite, ...windowsPathLimits, ...hostTiming,
+    ...childProcess, execFile, execFileSync, ...crypto, ...fs, ...path, ...sqlite, ...windowsPathLimits, ...hostTiming, Buffer,
     process: fakeProcess, Date: { now: () => clock.now }, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout,
   });
   const body = SOURCE
     .replace(/^import \{[^}]*\} from "[^"]+";$/gm, "")
     .replace(/^export (?=(?:async )?function |class |const |let )/gm, "");
   assert.doesNotMatch(body, /^(?:import|export)\b/m, "the whole module loads");
-  vm.runInContext(`${body}\nglobalThis.__module = { withOwnedFenceLock, prepareCurrentProcessBirthFingerprint, currentProcessBirthPreparation, parseWindowsBirthProbe, currentProcessBirthFingerprint };`, context);
+  vm.runInContext(`${body}\nglobalThis.__module = { withOwnedFenceLock, withOwnedFenceLockSync, prepareCurrentProcessBirthFingerprint, currentProcessBirthPreparation, parseWindowsBirthProbe, currentProcessBirthFingerprint };`, context);
   const lockModule = context.__module as {
     currentProcessBirthFingerprint(remainingMs?: number): string;
     withOwnedFenceLock<T>(path: string, effect: () => T, options?: Record<string, unknown>): Promise<T>;
+    withOwnedFenceLockSync<T>(path: string, effect: () => T, options?: Record<string, unknown>): T;
     prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
     currentProcessBirthPreparation(): string;
     parseWindowsBirthProbe(output: string): { state: string; fingerprint?: string };
@@ -141,103 +142,22 @@ function withLockFolder<T>(body: (lockPath: string) => Promise<T>): Promise<T> {
   return body(join(root, "effect.sqlite")).finally(() => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }));
 }
 
-// Review S1: a 10 s caller used to lose to a 6 s cold start, because the background attempts kept fixed 2/4/8 s
-// bounds and each new attempt started cold again. Now one probe lasts until it answers or its cap.
-// Also S2: reverting withOwnedFenceLock to `acquire(path, options)` sends this claim to the sync probe and fails it.
-test("a 10 s claim through withOwnedFenceLock outlasts a 6 s powershell.exe cold start with one probe", async () => {
+// FL2: a claim is SQLite's own file lock (owned-fence-lock.mjs). It neither records nor probes a holder, so it never
+// starts, waits for or reads this process's self-birth, on Windows either; FL4 removes the probe itself.
+test("a claim never starts, waits for or reads a self-birth probe, on Windows too", async () => {
   await withLockFolder(async (lockPath) => {
-    const harness = loadModule({ coldStartMs: 6_000 });
-    const result = await harness.drive(harness.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000 }));
-    assert.ok(result.ok, `the claim succeeded: ${result.ok ? "" : result.error.message}`);
-    assert.equal(result.value, "effect ran");
-    assert.equal(result.at, 6_000, "it ran when the cold start returned, inside its own 10 s");
-    assert.equal(harness.children.length, 1, "one cold start, never killed and restarted");
-    assert.equal(harness.children[0]!.killed, false);
-    assert.deepEqual(harness.syncCalls, [], "acquire never started its own sync probe");
-    assert.equal(harness.module.currentProcessBirthPreparation(), "known");
+    const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
+    for (let index = 0; index < 3; index += 1) {
+      const result = await harness.drive(harness.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000 }));
+      assert.ok(result.ok, `the claim succeeded: ${result.ok ? "" : result.error.message}`);
+      assert.equal(result.value, "effect ran");
+      assert.equal(result.at, 0, "at once: no wait for a cold powershell.exe start");
+    }
+    assert.equal(harness.module.withOwnedFenceLockSync(lockPath, () => "sync effect ran"), "sync effect ran");
+    assert.equal(harness.children.length, 0, "no background probe started");
+    assert.deepEqual(harness.syncCalls, [], "no sync probe");
+    assert.equal(harness.module.currentProcessBirthPreparation(), "idle");
   });
-});
-
-test("a claim whose deadline passes before the cold start fails closed at that deadline, and the probe goes on for the next one", async () => {
-  await withLockFolder(async (lockPath) => {
-    const never = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
-    const failed = await never.drive(never.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000 }));
-    assert.ok(!failed.ok);
-    assert.match(failed.error.message, /Current owned fence holder birth identity is unavailable/);
-    assert.equal(failed.at, 10_000, "exactly at the caller's own deadline, never later");
-    assert.equal(never.children[0]!.killed, false, "the probe is not killed with the claim that gave up");
-    assert.equal(never.module.currentProcessBirthPreparation(), "preparing");
-    assert.deepEqual(never.syncCalls, []);
-
-    // The default deadline (15 s, set from measured claims): a 20 s cold start outlives the first claim, which fails
-    // closed at 15 s; the same probe answers at 20 s and the next claim needs no cold start.
-    const slow = loadModule({ coldStartMs: 20_000 });
-    const first = await slow.drive(slow.module.withOwnedFenceLock(lockPath, () => "effect ran"));
-    assert.ok(!first.ok);
-    assert.match(first.error.message, /birth identity is unavailable/);
-    assert.equal(first.at, 15_000);
-    assert.equal(slow.module.currentProcessBirthPreparation(), "preparing", "the failed claim leaves the probe running");
-    await slow.advance(5_100);
-    assert.equal(slow.module.currentProcessBirthPreparation(), "known");
-    assert.equal(slow.children.length, 1, "one cold start, never killed and restarted");
-    const second = await slow.drive(slow.module.withOwnedFenceLock(lockPath, () => "effect ran"));
-    assert.ok(second.ok, "the next claim needs no cold start");
-    assert.equal(slow.children.length, 1);
-    assert.deepEqual(slow.syncCalls, []);
-
-    // A 9 s cold start (2x load on 16 CPUs measured 4.9-9.1 s) fits the default claim.
-    const loaded = loadModule({ coldStartMs: 9_000 });
-    const ran = await loaded.drive(loaded.module.withOwnedFenceLock(lockPath, () => "effect ran"));
-    assert.ok(ran.ok);
-    assert.equal(ran.at, 9_000, "it ran the moment the probe answered");
-  });
-});
-
-// Review B: the wait spends the claim's own time. acquire gets the original absolute deadline, never a fresh
-// deadlineMs from when the wait ended (a 2 s claim that waited 1.9 s must not get up to 3.9 s in all).
-test("a claim that waited for the probe reaches acquire with its original deadline, never a fresh one", async () => {
-  await withLockFolder(async (lockPath) => {
-    // The probe returns at 1.9 s and the claim gets to run 150 ms later, past its 2 s.
-    const late = loadModule({ coldStartMs: 1_900, completionLagMs: 150 });
-    const result = await late.drive(late.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 2_000 }));
-    assert.ok(!result.ok, "a fresh 2 s in acquire would have run the effect at 2.05 s");
-    assert.equal(result.error.name, "OwnedFenceContentionError");
-    assert.match(result.error.message, /deadline is exhausted/);
-    assert.equal(late.module.currentProcessBirthPreparation(), "known", "the identity it learned stays for the next claim");
-
-    // An earlier absolute deadline from the caller stays as well.
-    const early = loadModule({ coldStartMs: 900, completionLagMs: 150 });
-    const capped = await early.drive(early.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000, deadlineAt: T0 + 1_000 }));
-    assert.ok(!capped.ok);
-    assert.match(capped.error.message, /deadline is exhausted/);
-
-    const onTime = loadModule({ coldStartMs: 1_900 });
-    const ran = await onTime.drive(onTime.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 2_000 }));
-    assert.ok(ran.ok, "inside its deadline the same claim runs");
-  });
-});
-
-// Review A: a probe lasts at most its 30 s cap from its own start, so a busy host whose claims never stop cannot keep
-// a hung probe alive: it is killed at that cap and, while claims still wait, replaced after a short delay.
-test("a stream of overlapping claims cannot keep a hung probe alive past its 30 s cap", async () => {
-  const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
-  const claims: Promise<{ error?: Error; afterMs: number }>[] = [];
-  for (let second = 0; second < 60; second += 1) {
-    const startedAt = harness.clock.now;
-    claims.push(harness.module.withOwnedFenceLock(join(tmpdir(), `aiboard-self-birth-never-${second}.sqlite`), () => "effect ran").then(
-      () => ({ afterMs: harness.clock.now - startedAt }), (error: Error) => ({ error, afterMs: harness.clock.now - startedAt })));
-    await harness.advance(1_000);
-  }
-  await harness.advance(15_000);
-  for (const outcome of await Promise.all(claims)) {
-    assert.match(outcome.error?.message ?? "the claim ran", /birth identity is unavailable/);
-    assert.equal(outcome.afterMs, 15_000, "every claim fails closed at its own 15 s");
-  }
-  const [first, second, third] = harness.children;
-  assert.equal(first!.killedAt! - T0, 30_000, "the probe is killed at its 30 s cap");
-  assert.equal(second!.startedAt - T0, 30_025, "and replaced after the 25 ms retry delay, since claims still wait");
-  assert.equal(second!.killedAt! - second!.startedAt, 30_000, "the next one gets the same cap from its own start");
-  assert.equal(third!.startedAt - second!.killedAt!, 38, "the retry delay grows by half");
 });
 
 test("with no claim waiting, one background probe lasts its 30 s cap and never caches an unknown identity", async () => {
@@ -260,7 +180,7 @@ test("with no claim waiting, one background probe lasts its 30 s cap and never c
   assert.equal(garbled.children[1]!.startedAt - T0, 125, "after the 25 ms retry delay");
 });
 
-// The sync probe (acquire, when the identity is not known yet): one probe gets all of the caller's time.
+// The sync probe (currentProcessBirthFingerprint): one probe gets all of the caller's time.
 test("the sync self-birth probe gets the caller's whole time and returns the moment it answers", () => {
   const slow = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, syncProbe: () => ({ ms: 6_000 }) });
   assert.equal(slow.module.currentProcessBirthFingerprint(10_000), BIRTH);
@@ -299,8 +219,8 @@ test("the Windows birth probe output is accepted only in the round-trip format",
     assert.deepEqual({ ...lockModule.parseWindowsBirthProbe(garbled) }, { state: "unknown" }, garbled);
 });
 
-// Review N5: what acquire refuses, it still refuses with its own error, and without starting a probe.
-test("invalid bounds and a spent deadline reach acquire's own errors without a probe", async () => {
+// Review N5: what a claim refuses, it refuses with its own error, and without starting a probe.
+test("invalid bounds and a spent deadline get the claim's own errors without a probe", async () => {
   await withLockFolder(async (lockPath) => {
     const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
     for (const options of [{ retryDelayMs: 0 }, { retryDelayMs: 1.5 }, { deadlineMs: 0 }, { deadlineAt: Number.NaN }]) {
@@ -317,18 +237,12 @@ test("invalid bounds and a spent deadline reach acquire's own errors without a p
   });
 });
 
-test("the self-birth wait is Windows-only and skipped when the caller names its holder birth", async () => {
-  await withLockFolder(async (lockPath) => {
-    const windows = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
-    const named = await windows.drive(windows.module.withOwnedFenceLock(lockPath, () => "effect ran", { holderBirth: "named-birth" }));
-    assert.ok(named.ok);
-    assert.equal(windows.children.length, 0);
-    const posix = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, platform: "linux" });
-    const prepared = await posix.drive(posix.module.prepareCurrentProcessBirthFingerprint());
-    assert.ok(prepared.ok);
-    assert.equal(prepared.value, undefined);
-    assert.equal(posix.children.length, 0, "no probe starts off Windows");
-  });
+test("the self-birth preparation starts no probe off Windows", async () => {
+  const posix = loadModule({ coldStartMs: Number.POSITIVE_INFINITY, platform: "linux" });
+  const prepared = await posix.drive(posix.module.prepareCurrentProcessBirthFingerprint());
+  assert.ok(prepared.ok);
+  assert.equal(prepared.value, undefined);
+  assert.equal(posix.children.length, 0, "no probe starts off Windows");
 });
 
 // Review N1: the preparation alone never keeps the process alive, and its probe never outlives the process.

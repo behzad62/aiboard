@@ -1,7 +1,7 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: portable/native backend process creation and host probes are confined here.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -1430,17 +1430,43 @@ function hasReleasedFence(identity: Identity): boolean {
   try { return readOwnedFenceRecord(join(identity.directory, "fence.json"), identity).released; }
   catch { return false; }
 }
-/** A release may run at the current fence, or finish over a tombstone at or above its fence (the same owner if equal). */
+/**
+ * A release may run at the current fence, or finish over a tombstone at or above its fence (the same owner if equal).
+ * Above it, any owner: the backend raises no token after a release (every claim refuses the tombstone), but the
+ * durable process store does. A lease takeover (`takeover_lease`, durable-process-store.ts) gives the next owner the
+ * token + 1 without a backend claim, and that owner is the only one that can finish a release whose Runner died after
+ * the tombstone. These are the candidates a live fence at that token would accept for a claim, and over a tombstone
+ * they get only what a release does: its terminal, empty and settled-output checks run again under the lock first,
+ * and then it writes the tombstone again at its own fence and removes the authority. A stale owner (lower, or another
+ * owner at the same token) is refused.
+ */
 function releaseFenceAccepted(current: OwnedFenceRecord, candidate: ProcessEffectFence): boolean {
   if (!current.released) return candidate.ownerId === current.ownerId && candidate.fencingToken === current.fencingToken;
   return candidate.fencingToken > current.fencingToken ||
     (candidate.fencingToken === current.fencingToken && candidate.ownerId === current.ownerId);
 }
+/**
+ * The tombstone is the only record that an authority is released (the lock file holds nothing), so it is durable
+ * before the lock is given back and before anything of the authority is removed: the data is flushed before the
+ * rename, and the rename after it. POSIX flushes the directory. Node cannot open a directory on Windows, so there the
+ * renamed file itself is flushed (FlushFileBuffers), which is as far as Node reaches.
+ */
 function writeReleasedFence(identity: Identity, fence: ProcessEffectFence): void {
   const path = join(identity.directory, "fence.json");
   const temporary = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify({ nonce: identity.nonce, released: { ownerId: fence.ownerId, fencingToken: fence.fencingToken } }), { mode: 0o600 });
+  const content = JSON.stringify({ nonce: identity.nonce, released: { ownerId: fence.ownerId, fencingToken: fence.fencingToken } });
+  const descriptor = openSync(temporary, "wx", 0o600);
+  try {
+    writeSync(descriptor, content);
+    fsyncSync(descriptor);
+  } finally { closeSync(descriptor); }
   renameSync(temporary, path);
+  flushRenamedFence(identity.directory, path);
+}
+function flushRenamedFence(directory: string, path: string): void {
+  const descriptor = openSync(process.platform === "win32" ? path : directory, process.platform === "win32" ? "r+" : "r");
+  try { fsyncSync(descriptor); }
+  finally { closeSync(descriptor); }
 }
 function assertPortableOutputSettledAtFence(identity: Identity, fence: ProcessEffectFence | undefined, inspection?: OwnedFenceLockOptions): void {
   if (!fence) throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");

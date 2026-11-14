@@ -4,11 +4,11 @@ import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js
 import { withInspectionFixture } from "./support/inspection-fixture.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
@@ -462,7 +462,7 @@ test("Windows Job durable release refuses stale post-release fence resurrection 
   } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
-test("Windows Job exact release recovers a durable tombstone after SQLite holder finalization fails", async () => {
+test("Windows Job exact release recovers a durable tombstone after its lock file removal fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-release-recovery-"));
   const processId = "job-release-recovery";
   const ownedDirectory = join(root, processId);
@@ -490,31 +490,28 @@ test("Windows Job exact release recovers a durable tombstone after SQLite holder
   try {
     const host = createWindowsJobProcessHost({ stateDirectory: root, platform: "win32" });
     await host.claimOwnedFence!(processId, owner, fence);
-    const originalExec = DatabaseSync.prototype.exec;
-    let beginTransactions = 0;
-    DatabaseSync.prototype.exec = function exec(sql: string): void {
-      originalExec.call(this, sql);
-      if (sql.trim() === "BEGIN IMMEDIATE" && ++beginTransactions === 3)
-        originalExec.call(this, "CREATE TRIGGER injected_release_delete_fault BEFORE DELETE ON owned_fence_holder BEGIN SELECT RAISE(ABORT, 'injected release holder finalization fault'); END;");
-    };
+    // The release effect commits the record's tombstone; the lock file's removal after it fails once.
+    const originalUnlink = fs.unlinkSync;
+    let removals = 0;
+    fs.unlinkSync = ((path: fs.PathLike) => {
+      if (String(path) === lockPath && ++removals === 1) throw Object.assign(new Error("injected lock removal fault"), { code: "EIO" });
+      return originalUnlink(path);
+    }) as typeof fs.unlinkSync;
+    syncBuiltinESMExports();
     try {
-      await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /fence.*lock|finalization|unavailable/i);
-      assert.equal(beginTransactions, 3, "the fixture must inject only after exact schema authentication and claim");
-    } finally { DatabaseSync.prototype.exec = originalExec; }
+      await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /fence.*lock|retirement|unavailable/i);
+      assert.equal(removals, 1, "the fault hit the lock file's removal, after the release effect");
+    } finally { fs.unlinkSync = originalUnlink; syncBuiltinESMExports(); }
     const releasedRecord = JSON.parse(readFileSync(join(root, `${processId}.json`), "utf8")) as { backendOwnershipReleasedAt?: string };
     assert.match(releasedRecord.backendOwnershipReleasedAt ?? "", /\S/);
-    const retained = new DatabaseSync(lockPath);
-    assert.equal(Number(retained.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), 1);
-    retained.close();
+    assert.equal(existsSync(lockPath), true, "the lock file outlived its failed removal");
     await assert.rejects(host.releaseOwned(processId, owner, startedAt, { ownerId: "foreign", fencingToken: fence.fencingToken }), /fence|identity|stale/i);
     await assert.rejects(host.releaseOwned(processId, { ...owner, sessionId: "foreign" }, startedAt, fence), /another session|owned/i);
     await assert.rejects(host.releaseOwned(processId, owner, new Date(Date.parse(startedAt) + 1).toISOString(), fence), /identity mismatch/i);
-    const corrupt = new DatabaseSync(lockPath);
-    corrupt.prepare("UPDATE owned_fence_protocol SET version = 99").run(); corrupt.close();
+    writeFileSync(lockPath, "foreign bytes in place of an empty lock file, longer than one hundred bytes ".repeat(2));
     await assert.rejects(host.releaseOwned(processId, owner, startedAt, fence), /protocol|corrupt|foreign|unavailable/i);
-    assert.equal(existsSync(lockPath), true, "ambiguous protocol must preserve coordination evidence");
-    const restored = new DatabaseSync(lockPath);
-    restored.prepare("UPDATE owned_fence_protocol SET version = 1").run(); restored.close();
+    assert.equal(existsSync(lockPath), true, "a foreign lock file is preserved");
+    writeFileSync(lockPath, "");
     const terminalStatus = readFileSync(statusPath, "utf8");
     writeFileSync(statusPath, `${JSON.stringify({
       protocol: "aiboard-managed-process/v1", processId, supervisorPid: process.pid, childPid: process.pid, port: 0,
@@ -566,14 +563,11 @@ test("Windows Job release rejects a substituted record before touching another p
     const releasedRecord = { ...record, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
     writeFileSync(targetRecordPath, JSON.stringify(releasedRecord));
     writeFileSync(requestedRecordPath, JSON.stringify(releasedRecord));
-    const before = new DatabaseSync(targetLockPath);
-    const beforeHolders = Number(before.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count);
-    before.close();
+    const before = statSync(targetLockPath, { bigint: true });
     await assert.rejects(host.releaseOwned(requestedId, owner, startedAt, fence), /process.*identity|record.*identity|mismatch/i);
-    assert.equal(existsSync(targetLockPath), true, "the unrelated target coordination database must remain");
-    const after = new DatabaseSync(targetLockPath);
-    assert.equal(Number(after.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), beforeHolders);
-    after.close();
+    assert.equal(existsSync(targetLockPath), true, "the unrelated target lock file must remain");
+    const after = statSync(targetLockPath, { bigint: true });
+    assert.deepEqual([after.ino, after.size, after.mtimeNs], [before.ino, 0n, before.mtimeNs], "and stay the same untouched file");
     for (const suffix of ["-journal", "-wal", "-shm"])
       assert.equal(existsSync(`${targetLockPath}${suffix}`), false);
     assert.equal(readFileSync(targetRecordPath, "utf8"), JSON.stringify(releasedRecord));
@@ -615,24 +609,15 @@ test("Windows Job release rejects hard-link and symbolic-link coordination alias
       await host.claimOwnedFence!(targetId, owner, fence);
       const targetLock = join(root, `${targetId}.fence.lock`);
       const requestedLock = join(root, `${requestedId}.fence.lock`);
-      let inspectionPath = targetLock;
-      if (aliasKind === "hard-link") {
-        linkSync(targetLock, requestedLock);
-        rmSync(targetLock);
-        inspectionPath = requestedLock;
-        assert.equal(statSync(requestedLock).nlink, 1,
-          "the immutable database authority must reject an alias even after its original name disappears");
-      } else symlinkSync(targetLock, requestedLock, "file");
-      const before = new DatabaseSync(inspectionPath);
-      assert.equal(before.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0);
-      const beforeHolders = Number(before.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count);
-      before.close();
+      // An empty lock file carries no state, so only the alias itself matters: a second name or a link is refused.
+      if (aliasKind === "hard-link") linkSync(targetLock, requestedLock);
+      else symlinkSync(targetLock, requestedLock, "file");
+      const before = statSync(targetLock, { bigint: true });
       await assert.rejects(host.releaseOwned(requestedId, owner, startedAt, fence), /authority|alias|identity|protocol|symbolic|link/i);
-      const after = new DatabaseSync(inspectionPath);
-      assert.equal(after.prepare("SELECT retired FROM owned_fence_protocol").get()!.retired, 0,
-        `${aliasKind} must not retire the unrelated target coordination database`);
-      assert.equal(Number(after.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()!.count), beforeHolders);
-      after.close();
+      assert.equal(existsSync(targetLock), true, `${aliasKind} must not remove the unrelated target lock file`);
+      const after = statSync(targetLock, { bigint: true });
+      assert.deepEqual([after.ino, after.size, after.mtimeNs], [before.ino, 0n, before.mtimeNs]);
+      assert.equal(existsSync(requestedLock), true, "the alias is left for the owner to inspect");
     } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
   }
 });
@@ -1726,9 +1711,7 @@ function windowsBirth(pid: number): string {
 function publishWindowsFixtureFenceAuthority(directory: string, nonce: string, holderPid: number): void {
   const holderBirth = windowsBirth(holderPid);
   writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid, holderBirth }));
-  // Establish the same durable SQLite coordination protocol used by production.
-  // The no-op releases this setup acquisition while retaining active protocol metadata
-  // for the supervisor's later exact-holder effect acquisition.
+  // The empty lock file production creates with its first claim (the holder fields are ignored since FL2).
   withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
     holderPid,
     holderBirth,
@@ -2444,7 +2427,7 @@ test("FL1 Windows Job effects held across a release refuse inside the lock even 
     await parkedPromise;
     const { startedAt } = JSON.parse(readFileSync(recordPath, "utf8")) as { startedAt: string };
     assert.equal((await host.releaseOwned(identity.processId, owner, startedAt, fence)).ownershipReleased, true);
-    // A lock that carries no retirement any more (as the OS lock of FL2 will not): a fresh, active one at the same path.
+    // A lock that carries no retirement (the OS lock of FL2): a fresh, active one at the same path.
     const lockPath = join(stateDirectory, `${identity.processId}.fence.lock`);
     rmSync(lockPath, { force: true });
     await withOwnedFenceLock(lockPath, () => undefined);

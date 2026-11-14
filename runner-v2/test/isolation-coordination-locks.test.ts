@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, lstatSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,7 @@ import {
   OciExecutionIsolationError,
   createOciExecutionIsolationProvider,
 } from "../src/oci-execution-isolation-provider.js";
+import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const holderFixture = fileURLToPath(
   new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url),
@@ -120,7 +121,8 @@ test("forged coordination is refused without OCI or projection state mutation", 
 
 async function ociStateFixture(root: string, suffix: string) {
   const stateDirectory = join(root, `oci-${suffix}`);
-  const cliPath = join(root, process.platform === "win32" ? `oci-${suffix}.exe` : `oci-${suffix}`);
+  // Off Windows the executable has no extension, so it needs its own name beside the state directory.
+  const cliPath = join(root, process.platform === "win32" ? `oci-${suffix}.exe` : `oci-${suffix}-cli`);
   await mkdir(stateDirectory, { recursive: true });
   await writeFile(cliPath, "fixture OCI executable identity");
   if (process.platform !== "win32") await chmod(cliPath, 0o700);
@@ -243,13 +245,10 @@ async function waitForExit(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve) => child.once("exit", () => resolve()));
 }
 
+// The lock is SQLite's own file lock on an empty file (owned-fence-lock.mjs): idle means the file is still empty, has
+// nothing beside it, and nobody holds it.
 function assertCoordinationIdle(path: string): void {
-  const database = new DatabaseSync(path, { readOnly: true });
-  try {
-    assert.equal(database.prepare("SELECT retired FROM owned_fence_protocol").get()?.retired, 0);
-    assert.equal(Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_holder").get()?.count), 0);
-    assert.equal(Number(database.prepare("SELECT COUNT(*) AS count FROM owned_fence_acquisition").get()?.count), 0);
-  } finally {
-    database.close();
-  }
+  assert.equal(lstatSync(path).size, 0, "the lock file is never written");
+  for (const suffix of ["-journal", "-wal", "-shm"]) assert.equal(existsSync(`${path}${suffix}`), false, `no ${suffix} beside the lock`);
+  assert.equal(withOwnedFenceLockSync(path, () => "free", { deadlineMs: 1_000 }), "free", "nobody holds it");
 }
