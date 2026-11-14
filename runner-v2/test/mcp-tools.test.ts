@@ -62,32 +62,22 @@ test("C5 round5 strict OCI fixture identities support real SQLite lease locks ac
             "execution-isolation", provider, `oci-leases-${provider}.json`);
           const lockPath = `${statePath}.lock`;
           let effects = 0;
-          let inspections = 0;
           let lockError: unknown;
           mkdirSync(dirname(lockPath), { recursive: true });
           try {
             withOwnedFenceLockSync(lockPath, () => {
               effects++;
               writeFileSync(statePath, "[]");
-            }, {
-              holderPid: 4242,
-              holderBirth: "synthetic-exact-holder-birth",
-              inspectHolder: () => {
-                inspections++;
-                return "same";
-              },
-              deadlineMs: 500, retryDelayMs: 5, retireAfterEffect: false,
-            });
+            }, { deadlineMs: 500, retryDelayMs: 5, retireAfterEffect: false });
           } catch (error) { lockError = error; }
           const lock = existsSync(lockPath) ? readFileSync(lockPath) : undefined;
           console.log(JSON.stringify({ fixture, kind, provider, lockPath, lockLength: lockPath.length,
-            journalLength: `${lockPath}-journal`.length, effects, inspections, lockBytes: lock?.length,
+            journalLength: `${lockPath}-journal`.length, effects, lockBytes: lock?.length,
             leaseStateExists: existsSync(statePath), lockError: lockError instanceof Error ? {
               name: lockError.name, message: lockError.message, cause: lockError.cause,
             } : lockError }));
           assert.equal(lockError, undefined);
           assert.equal(effects, 1);
-          assert.equal(inspections, 0);
           assert.equal(readFileSync(statePath, "utf8"), "[]");
           // FL2: the lock is an OS lock on an empty file; the claim writes nothing to it.
           assert.equal(lock?.length, 0);

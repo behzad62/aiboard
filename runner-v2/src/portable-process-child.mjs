@@ -156,7 +156,6 @@ function consumeExactPosixAnchorRelease(workloadGroup, expectedSupervisor) {
       publishPosixStatus({ status: "released", workloadGroup, anchorRelease: latestRelease });
       return true;
     },
-    lockOptions: { holderPid: process.pid, holderBirth: workloadGroup.leaderBirth },
   });
   return outcome.status === "applied" && outcome.value === true;
 }

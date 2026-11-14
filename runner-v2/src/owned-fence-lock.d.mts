@@ -1,15 +1,8 @@
-export type OwnedFenceHolderInspection = "same" | "absent" | "birth_mismatch" | "unknown";
 export interface OwnedFenceLockOptions {
   readonly deadlineMs?: number;
-  /** Optional original wall-clock deadline, including pre-acquisition identity observation. */
+  /** Optional absolute wall-clock deadline (ms); the claim ends at whichever of the two comes first. */
   readonly deadlineAt?: number;
   readonly retryDelayMs?: number;
-  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
-  readonly holderPid?: number;
-  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
-  readonly holderBirth?: string;
-  /** Ignored: the lock no longer records or probes a holder (FL4 removes these fields). */
-  readonly inspectHolder?: (pid: number, birth: string, remainingMs?: number) => OwnedFenceHolderInspection;
   /** Tests only: runs with the lock held, before the effect. */
   readonly afterClaim?: () => void;
   /** Tests only: a failure here stands for a failed ROLLBACK, so the lock is kept until the process exits. */
@@ -20,32 +13,12 @@ export interface OwnedFenceLockOptions {
   /** Runs right after this claim created the lock file; a refusal removes that file again. */
   readonly assertAuthority?: () => void;
 }
-export interface GenericPosixProcessInspectionOperations {
-  readonly probeExistence: (pid: number) => "live" | "absent" | "permission" | "unknown";
-  readonly inspectBirth: (pid: number, remainingMs?: number) =>
-    | { readonly outcome: "ok"; readonly fingerprint: string }
-    | { readonly outcome: "absent" | "timeout" | "malformed" | "failure" };
-}
 /** The default claim deadline (ms); see the measurements at the constant. */
 export const OWNED_FENCE_DEFAULT_DEADLINE_MS: number;
 export class OwnedFenceLockUnavailableError extends Error {}
 export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {}
 export class OwnedFenceAuthorityRetirementError extends Error {}
 export function isOwnedFenceLockContention(error: unknown): boolean;
-export function currentProcessBirthFingerprint(remainingMs?: number): string;
-/**
- * Windows: learns this process's own birth identity in the background; resolves to it, or to undefined. Never rejects.
- * Without `waitUntil` it holds nothing alive: a top-level await with nothing else running exits the process (code 13).
- * `waitUntil` (absolute ms) resolves by then at the latest and keeps the process alive until then.
- */
-export function prepareCurrentProcessBirthFingerprint(waitUntil?: number): Promise<string | undefined>;
-/** Diagnostics and tests: whether this process's own birth identity is known, being prepared, or neither. */
-export function currentProcessBirthPreparation(): "known" | "preparing" | "idle";
-export function inspectGenericPosixProcessBirth(
-  pid: number,
-  operations?: GenericPosixProcessInspectionOperations,
-  remainingMs?: number,
-): { readonly state: "same"; readonly fingerprint: string } | { readonly state: "absent" | "unknown" };
 export function retryRetiredOwnedFenceCleanup(path: string, cleanup: () => void, options?: Pick<OwnedFenceLockOptions, "deadlineMs" | "retryDelayMs">): Promise<void>;
 export function retiredOwnedFenceCleanupAvailable(path: string): boolean;
 export function recoverRevokedOwnedFenceLock(

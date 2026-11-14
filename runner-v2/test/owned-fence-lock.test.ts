@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 import {
-  inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceAuthorityRetirementError, OwnedFenceContentionError,
+  isOwnedFenceLockContention, OwnedFenceAuthorityRetirementError, OwnedFenceContentionError,
   OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup,
   withOwnedFenceLock, withOwnedFenceLockSync,
 } from "../src/owned-fence-lock.mjs";
@@ -25,33 +25,6 @@ const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", 
 const SOURCE = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
 // The pre-FL2 module, as a Runner of that version calls it: no self-birth probe, no holder probe.
 const V1_OPTIONS = { holderPid: process.pid, holderBirth: "fixture-birth", inspectHolder: () => "same" as const };
-
-test("generic POSIX holder inspection distinguishes exact absence from uncertain process-tool outcomes", () => {
-  const cases = [
-    { name: "ESRCH absent", existence: ["absent"], births: [], expected: { state: "absent" } },
-    { name: "exact live", existence: ["live", "live", "live"], births: ["birth-a", "birth-a"], expected: { state: "same", fingerprint: "birth-a" } },
-    { name: "birth mismatch", existence: ["live", "live", "live"], births: ["birth-b", "birth-b"], expected: { state: "same", fingerprint: "birth-b" } },
-    { name: "EPERM", existence: ["permission"], births: [], expected: { state: "unknown" } },
-    { name: "timeout", existence: ["live", "live"], births: ["timeout"], expected: { state: "unknown" } },
-    { name: "malformed", existence: ["live", "live"], births: ["malformed"], expected: { state: "unknown" } },
-    { name: "generic failure", existence: ["live", "live"], births: ["failure"], expected: { state: "unknown" } },
-    { name: "exit after second birth inspection failure", existence: ["live", "live", "absent"], births: ["birth-a", "failure"], expected: { state: "absent" } },
-    { name: "unresolved exit/reuse race", existence: ["live", "live", "live"], births: ["birth-a", "birth-b"], expected: { state: "unknown" } },
-  ] as const;
-  for (const fixtureCase of cases) {
-    let existenceIndex = 0;
-    let birthIndex = 0;
-    const result = inspectGenericPosixProcessBirth(4242, {
-      probeExistence: () => fixtureCase.existence[Math.min(existenceIndex++, fixtureCase.existence.length - 1)]!,
-      inspectBirth: () => {
-        const value = fixtureCase.births[Math.min(birthIndex++, fixtureCase.births.length - 1)];
-        if (value === "birth-a" || value === "birth-b") return { outcome: "ok" as const, fingerprint: value };
-        return { outcome: (value ?? "failure") as "timeout" | "malformed" | "failure" };
-      },
-    });
-    assert.deepEqual(result, fixtureCase.expected, fixtureCase.name);
-  }
-});
 
 test("a claim never writes the lock file: it stays empty and unchanged, with nothing beside it, while held and after", async () => {
   await withRoot("empty", async (root) => {
@@ -109,15 +82,46 @@ test("no claim path can reach a process spawn, a PID probe or a file write", () 
     };
     visit(declaration);
   }
-  for (const forbidden of ["execFile", "execFileSync", "spawn", "spawnSync", "exec", "fork", "process.kill", "currentProcessBirthFingerprint",
-    "prepareCurrentProcessBirthFingerprint", "inspectProcessBirth", "inspectGenericPosixProcessBirth", "inspectWindowsProcessBirthAsync",
-    "startCurrentBirthPreparation", "waitForPreparedBirth", "writeFileSync", "writeSync", "appendFileSync", "truncateSync", "renameSync",
-    "copyFileSync", "createWriteStream"])
+  for (const forbidden of ["execFile", "execFileSync", "spawn", "spawnSync", "exec", "fork", "process.kill", "writeFileSync", "writeSync",
+    "appendFileSync", "truncateSync", "renameSync", "copyFileSync", "createWriteStream"])
     assert.equal(called.has(forbidden), false, `a claim path calls ${forbidden}`);
   assert.deepEqual([...new Set(openFlags)].sort(), ['"r"', '"wx"'], "the lock file is opened only to create it or to read its header");
   // The one other file a claim reads: /proc/locks, for a contention message on Linux.
   assert.deepEqual([...new Set(reads)], ['"/proc/locks"']);
   assert.ok(reached.has("tryLockOnce") && reached.has("releaseConnection") && reached.has("assertRollbackJournalDatabase"), "the walk saw the claim");
+});
+
+// FL4 acceptance: the module starts no process on any path, claim or not. Self-birth, its Windows prestart and the
+// holder probes are gone, and nothing in it imports child_process or names powershell.exe or ps.
+test("the lock module imports no process API and starts no powershell.exe or ps", () => {
+  const file = ts.createSourceFile("owned-fence-lock.mjs", SOURCE, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  // Code only: identifiers, property accesses and string literals (comments may say what the module never does).
+  const imports: string[] = [];
+  const identifiers = new Set<string>();
+  const accesses = new Set<string>();
+  const strings: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) imports.push(node.moduleSpecifier.text);
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) imports.push(node.arguments[0]?.getText(file) ?? "");
+    // A bare name, not a member name such as SQLite's database.exec(...).
+    if (ts.isIdentifier(node) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) identifiers.add(node.text);
+    if (ts.isPropertyAccessExpression(node)) accesses.add(node.getText(file));
+    if (ts.isStringLiteralLike(node)) strings.push(node.text);
+    if (ts.isTemplateExpression(node)) strings.push(node.getText(file));
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.ok(identifiers.has("withOwnedFenceLockSync") && strings.length > 0, "the walk saw the module");
+  for (const specifier of imports)
+    assert.doesNotMatch(specifier, /child_process|worker_threads|^(node:)?cluster$/, `the lock module imports ${specifier}`);
+  for (const name of ["execFile", "execFileSync", "spawn", "spawnSync", "exec", "execSync", "fork"])
+    assert.equal(identifiers.has(name), false, `the lock module names ${name}`);
+  assert.equal(accesses.has("process.kill"), false, "the lock module signals or probes a PID");
+  for (const text of strings) {
+    assert.doesNotMatch(text, /powershell|pwsh/i, `a powershell start: ${text}`);
+    assert.doesNotMatch(text, /^(?:\/bin\/|\/usr\/bin\/)?ps$/, `a ps start: ${text}`);
+  }
+  assert.doesNotMatch(SOURCE, /RUNNER_RAW_PROCESS_BOUNDARY/, "the module is no raw process boundary any more");
 });
 
 test("a live holder in another process is never displaced: sync and async claims wait, then fail closed as contention", { timeout: 20_000 }, async () => {

@@ -1715,12 +1715,8 @@ function windowsBirth(pid: number): string {
 function publishWindowsFixtureFenceAuthority(directory: string, nonce: string, holderPid: number): void {
   const holderBirth = windowsBirth(holderPid);
   writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid, holderBirth }));
-  // The empty lock file production creates with its first claim (the holder fields are ignored since FL2).
-  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
-    holderPid,
-    holderBirth,
-    inspectHolder: () => "same",
-  });
+  // The empty lock file production creates with its first claim.
+  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined);
   writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
 }
 

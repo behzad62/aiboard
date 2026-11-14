@@ -1734,7 +1734,6 @@ test("C4 POSIX child-crash anchor release: the kernel frees the dead anchor's lo
   const childBirth = "anchor-child-birth";
   const supervisorPid = 9001;
   const supervisorBirth = "live-supervisor-birth";
-  const reclaimerPid = 9003;
   const workloadGroup = { groupId: childPid, leaderPid: childPid, leaderBirth: childBirth } as const;
   const expectedSupervisor = { supervisorPid, supervisorBirth } as const;
   const currentFence = { ownerId: "owner", fencingToken: 1 } as const;
@@ -1751,13 +1750,6 @@ test("C4 POSIX child-crash anchor release: the kernel frees the dead anchor's lo
     "publishPosixStatus",
     "publishAtomic",
   ].map((name) => extractNamedFunction(childSource, name)).join("\n");
-  const observations: Array<{ pid: number; birth: string }> = [];
-  const inspectHolder = (pid: number, birth: string) => {
-    observations.push({ pid, birth });
-    if (pid === childPid && birth === childBirth) return "absent" as const;
-    if (pid === supervisorPid && birth === supervisorBirth) return "same" as const;
-    return "unknown" as const;
-  };
   try {
     writeFileSync(anchorReleasePath, JSON.stringify({
       protocol: "aiboard-portable-process/v2-posix-anchor-release",
@@ -1811,13 +1803,8 @@ test("C4 POSIX child-crash anchor release: the kernel frees the dead anchor's lo
       expectedFence: currentFence,
       readCurrentFence: () => currentFence,
       effect: () => "reclaimed",
-      // The product's default acquisition bound. The holder fields are ignored since FL2: nothing is inspected.
-      lockOptions: {
-        holderPid: reclaimerPid,
-        holderBirth: "reclaimer-birth",
-        inspectHolder,
-        retryDelayMs: 1,
-      },
+      // The product's default acquisition bound; the lock probes no process.
+      lockOptions: { retryDelayMs: 1 },
     });
 
     assert.deepEqual(
@@ -1825,7 +1812,6 @@ test("C4 POSIX child-crash anchor release: the kernel frees the dead anchor's lo
       { status: "applied", value: "reclaimed" },
       "a crashed anchor must be reclaimed even while the logical supervisor remains live",
     );
-    assert.deepEqual(observations, [], "no process is inspected: the dead anchor's lock was freed by the kernel");
   } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
