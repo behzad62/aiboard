@@ -15,12 +15,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { withResolvedVerificationPlan } from "../src/final-verification-profile.js";
+import { createFinalVerificationManagedProcessAdapter } from "../src/final-verification-runtime.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
   installPlaywrightCliShims,
@@ -43,6 +44,23 @@ import { captureGitBaseline, FinalVerificationRuntime, IntegrationManager, Verif
 
 const WINDOWS = process.platform === "win32";
 const TASK_ID = "final-verification-0123456789ab";
+
+/** An error with its causes and aggregated errors, for a failure that would otherwise show only its top message. */
+function describeError(error: unknown, depth = 0): string {
+  if (depth > 4 || error === undefined || error === null) return "";
+  const pad = "  ".repeat(depth);
+  const value = error as { name?: string; message?: string; code?: string; cause?: unknown; errors?: unknown[] };
+  const lines = [`${pad}${value.name ?? "Error"}${value.code ? ` [${value.code}]` : ""}: ${value.message ?? String(error)}`];
+  for (const inner of value.errors ?? []) lines.push(describeError(inner, depth + 1));
+  if (value.cause !== undefined) lines.push(`${pad}cause:`, describeError(value.cause, depth + 1));
+  return lines.filter(Boolean).join("\n");
+}
+
+// A check whose program's cleanup could not be proven leaves that program to the Runner's fail-closed cleanup, and
+// its handles can keep this file's process alive after the failure is reported. Exit with the failure instead of
+// hanging the job until its timeout; a passing run never reaches this.
+let failed = false;
+after(() => { if (failed) setTimeout(() => process.exit(1), 15_000).unref(); });
 
 function installedBrowser(): PlaywrightCliBrowser | undefined {
   try {
@@ -171,6 +189,7 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
       const result = await runtime.runCheckV2({ executionProfile: profile, checkId: "home-page" });
       console.log(`final browser check: ${result.check.outcome} in ${Date.now() - started} ms on ${process.platform} with ${BROWSER}`);
       if (result.check.outcome !== "passed") {
+        failed = true;
         // Printed at once: a failed teardown afterwards can turn the assertion into a timeout that hides it.
         console.log(`final browser check issues:\n${result.check.issues.join("\n")}`);
         for (const fact of result.check.facts as unknown as Array<{ label?: string; stdoutArtifactHash?: string; stderrArtifactHash?: string }>) {
@@ -178,6 +197,23 @@ test("a final check starts a Playwright CLI session as its program, drives it fr
             if (!hash) continue;
             const text = Buffer.from(await artifacts.get(hash)).toString("utf8").trim();
             if (text) console.log(`--- ${fact.label} ${stream}:\n${text.slice(-2_000)}`);
+          }
+        }
+        // Which managed starts fail here, with their whole error chain: the session command, then a plain node.
+        for (const [label, executable, args] of [
+          ["session", PLAYWRIGHT_CLI_SESSION_COMMAND, []],
+          ["node", process.execPath, ["-e", "setTimeout(() => {}, 20000)"]],
+        ] as const) {
+          const adapter = createFinalVerificationManagedProcessAdapter({
+            service: run.managedProcesses, executionGrants: run.executionGrants, permissionProfile: "full",
+            runId, taskId: `diagnostic-${label}`, callScope: "diagnostic", actor: { role: "architect", id: "final-verification-runtime" },
+          });
+          try {
+            const started = await adapter.start({ executable, args: [...args], cwd: project });
+            console.log(`diagnostic ${label} start: ${started.status}`);
+            console.log(`diagnostic ${label} stop: ${(await adapter.stop(started.processId)).status}`);
+          } catch (error) {
+            console.log(`diagnostic ${label} start failed:\n${describeError(error)}`);
           }
         }
       }
