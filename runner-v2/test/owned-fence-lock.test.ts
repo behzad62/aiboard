@@ -43,97 +43,7 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
   }
 });
 
-const SELF_BIRTH_PROBE_FUNCTIONS = ["normalizeBirth", "windowsBirthProbeArguments", "parseWindowsBirthProbe", "inspectProcessBirth", "currentProcessBirthFingerprint"];
-function selfBirthContext(source: string, globals: Record<string, unknown>, functions: readonly string[]): vm.Context {
-  const context = vm.createContext({
-    process: { pid: 4242, platform: "win32" },
-    Date,
-    Atomics,
-    waiter: new Int32Array(new SharedArrayBuffer(4)),
-    OwnedFenceLockUnavailableError,
-    ...globals,
-  });
-  const constants = [...source.matchAll(/^const (?:(?:DEFAULT_DEADLINE_MS|SELF_BIRTH_[A-Z_]+) = [0-9_]+|WINDOWS_BIRTH_PATTERN = \/.+\/);$/gm)].map((match) => match[0]);
-  assert.ok(constants.some((line) => line.startsWith("const DEFAULT_DEADLINE_MS")), "bind the actual source default used by the extracted functions");
-  assert.ok(constants.some((line) => line.startsWith("const WINDOWS_BIRTH_PATTERN")), "bind the actual birth format the probe parser checks");
-  vm.runInContext(`${constants.join("\n")}\nlet cachedCurrentBirth;\nlet preparingCurrentBirth;`, context);
-  for (const name of functions) vm.runInContext(extractNamedJsFunction(source, name).replace(/^export\s+/, ""), context);
-  return context;
-}
-
-test("current holder birth never caches an unknown self-inspection and fails closed when the caller's deadline is spent", () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  let inspections = 0;
-  let recovered = false;
-  const context = selfBirthContext(source, {
-    inspectProcessBirth: () => {
-      inspections += 1;
-      return recovered ? { state: "same", fingerprint: "birth-recovered" } : { state: "unknown" };
-    },
-  }, ["currentProcessBirthFingerprint"]);
-
-  assert.throws(
-    () => vm.runInContext("currentProcessBirthFingerprint(60)", context),
-    /Current owned fence holder birth identity is unavailable/,
-  );
-  const failedInspections = inspections;
-  assert.ok(failedInspections >= 1);
-  recovered = true;
-  assert.equal(vm.runInContext("currentProcessBirthFingerprint()", context), "birth-recovered");
-  assert.equal(inspections, failedInspections + 1, "an unknown self-birth result is never cached; the next acquisition re-inspects");
-});
-
-// T8 slow-machine reproduction (profile A): on two contended CPUs a cold powershell.exe start took
-// 5.3-7.4 s (155-218 ms idle), so the single 2 s self-probe failed every fence acquisition although
-// withProjectionLock granted 10 s. Each attempt is a fresh cold start that a timeout kills, so the
-// fake clock charges every attempt its full bound: a schedule that never gives one attempt the cold
-// start fails here.
-function coldStartProbe(coldStartMs: number) {
-  const clock = { now: 1_000_000 };
-  const probeTimeouts: number[] = [];
-  const execFileSync = (_file: string, _args: string[], options: { timeout: number }) => {
-    probeTimeouts.push(options.timeout);
-    if (options.timeout < coldStartMs) {
-      clock.now += options.timeout;
-      throw Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
-    }
-    clock.now += coldStartMs;
-    return "PRESENT:2026-10-31T00:43:01.1234567Z\r\n";
-  };
-  return { clock, probeTimeouts, globals: { execFileSync, Date: { now: () => clock.now } } };
-}
-
-test("current holder birth is obtained within the caller's deadline when the Windows probe cold start exceeds 2 s", () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = coldStartProbe(6_000);
-  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
-  const started = probe.clock.now;
-
-  assert.equal(vm.runInContext("currentProcessBirthFingerprint(10_000)", context), "2026-10-31T00:43:01.123456Z");
-  assert.equal(probe.probeTimeouts[0], 2_000, "the first attempt keeps the 2 s probe bound");
-  assert.ok(probe.clock.now - started <= 10_000, `the probe stays inside the caller's deadline: ${probe.probeTimeouts.join(",")}`);
-});
-
-test("current holder birth escalation is bounded by the caller's deadline and still fails closed", () => {
-  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
-  const probe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const context = selfBirthContext(source, probe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
-  const started = probe.clock.now;
-
-  assert.throws(
-    () => vm.runInContext("currentProcessBirthFingerprint(10_000)", context),
-    /Current owned fence holder birth identity is unavailable/,
-  );
-  assert.ok(probe.clock.now - started <= 10_000, `an always-failing probe never runs past the caller's deadline: ${probe.probeTimeouts.join(",")}`);
-  assert.ok(probe.probeTimeouts.length <= 4, `attempts are bounded: ${probe.probeTimeouts.join(",")}`);
-
-  const defaultProbe = coldStartProbe(Number.POSITIVE_INFINITY);
-  const defaultContext = selfBirthContext(source, defaultProbe.globals, SELF_BIRTH_PROBE_FUNCTIONS);
-  assert.throws(() => vm.runInContext("currentProcessBirthFingerprint()", defaultContext), /birth identity is unavailable/);
-  assert.deepEqual(defaultProbe.probeTimeouts, [2_000], "a default 2 s caller still gets exactly one 2 s attempt");
-});
-
-// The background self-birth preparation and its wiring: owned-fence-self-birth.test.ts (in PR CI).
+// The self-birth probe, sync and background, and its wiring: owned-fence-self-birth.test.ts (in PR CI).
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));
@@ -257,6 +167,54 @@ test("an exact live holder is never stolen through the full contention window", 
     await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
+});
+
+// An async claim polls for seconds on a busy host, so its waits must be timers, never a blocked thread.
+test("an async claim waiting on a live holder leaves the event loop free and still fails closed", { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-async-wait-"));
+  const lockPath = join(root, "effect.sqlite");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000);
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    let ticks = 0;
+    const ticker = setInterval(() => { ticks += 1; }, 10);
+    let effects = 0;
+    try {
+      await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }, { deadlineMs: 600 }), /live holder|unavailable|contended/i);
+    } finally { clearInterval(ticker); }
+    assert.equal(effects, 0);
+    assert.ok(ticks >= 5, `timers ran while the claim waited (${ticks} ticks in 600 ms)`);
+    assert.equal(readDurableHolder(lockPath).holderPid, holder.pid);
+  } finally {
+    await stop(holder);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+// A sync wait blocks the thread, so it can never outlast a lock this same thread holds through a live async
+// acquisition (or a nested claim): it fails at once instead of stalling the event loop until its own deadline.
+test("a sync claim on a lock this thread holds through a live async acquisition fails at once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-self-held-"));
+  const lockPath = join(root, "effect.sqlite");
+  try {
+    let inner: unknown;
+    let elapsedMs = 0;
+    await withOwnedFenceLock(lockPath, async () => {
+      await new Promise<void>((resolvePromise) => setTimeout(() => {
+        const startedAt = Date.now();
+        try { withOwnedFenceLockSync(lockPath, () => assert.fail("the nested sync effect must not run"), { deadlineMs: 5_000 }); }
+        catch (error) { inner = error; }
+        elapsedMs = Date.now() - startedAt;
+        resolvePromise();
+      }, 10));
+    });
+    assert.ok(isOwnedFenceLockContention(inner), `contention, not another failure: ${String(inner)}`);
+    assert.match(String((inner as Error).message), /another live acquisition of this thread/);
+    assert.ok(elapsedMs < 2_000, `it failed at once, not at its 5 s deadline (${elapsedMs} ms)`);
+    let effects = 0;
+    withOwnedFenceLockSync(lockPath, () => { effects += 1; });
+    assert.equal(effects, 1, "once the async holder released, a sync claim succeeds");
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }); }
 });
 
 test("protocol observation identity replacement remains terminal instead of retryable contention", () => {
@@ -508,13 +466,14 @@ test("t8: an unstarted holder whose release could not commit is replaced by the 
   let effects = 0;
   try {
     await withOwnedFenceLock(lockPath, () => undefined);
-    // Held past both the 150 ms acquisition deadline and the bounded 2 s release window.
-    const blocker = boundaryBlocker(lockPath, 3_000);
+    // Held past both the 150 ms acquisition deadline and the release window (1 s here; the default is the lock's
+    // measured claim deadline, too long to wait out in a test).
+    const blocker = boundaryBlocker(lockPath, 2_000);
     let failure: unknown;
     try {
       await withOwnedFenceLock(lockPath, () => { effects += 1; }, {
-        deadlineMs: 150, afterClaim: blocker.afterClaim,
-      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void }).catch((error: unknown) => { failure = error; });
+        deadlineMs: 150, afterClaim: blocker.afterClaim, releaseWindowMs: 1_000,
+      } as Parameters<typeof withOwnedFenceLock>[2] & { afterClaim: () => void; releaseWindowMs: number }).catch((error: unknown) => { failure = error; });
     } finally { await blocker.exited(); }
     assert.ok(failure instanceof AggregateError, "both the boundary failure and the failed release are reported");
     assert.equal(effects, 0);

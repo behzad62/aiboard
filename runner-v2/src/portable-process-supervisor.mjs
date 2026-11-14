@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 // RUNNER_RAW_PROCESS_BOUNDARY: portable lifecycle supervisor launches, inspects, and terminates owned child trees.
 import { createHash } from "node:crypto";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
+import { OWNED_FENCE_DEFAULT_DEADLINE_MS } from "./owned-fence-lock.mjs";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "node:stream";
@@ -58,10 +59,19 @@ const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
 const OUTPUT_CHUNK_MAX_BYTES = 256 * 1024;
 const WINDOWS_TREE_FAILURE_LIMIT = 3;
 const WINDOWS_TREE_REFRESH_INTERVAL_MS = 250;
-const WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS = 2_000;
-const WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS = 15_000;
-const WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS = 2_000;
+// One Windows process inventory (WINDOWS_TREE_SCRIPT, a CIM process query in a cold powershell.exe), measured on 16 CPUs:
+// 0.9-1.25 s idle; 12.2-26.6 s with 2x as many busy processes as CPUs, and once 105.7 s. It used to start at a 2 s
+// watchdog that doubled after each kill, so on a loaded host every inventory was killed and started cold again.
+// Now one inventory gets the whole bound and returns the moment it is done. 60 s is over 2x the slowest usual
+// loaded run; the 105.7 s outlier is not covered and still fails closed (an inspection failure). No data was taken
+// on slower or smaller hosts: the owner decides this number.
+const WINDOWS_TREE_INSPECTION_DEADLINE_MS = 60_000;
+// One Windows birth probe (Get-Process in a cold powershell.exe): 155-413 ms idle; 4.9-9.1 s with 2x as many busy
+// processes as CPUs (5.3-7.4 s on two contended CPUs in T8). 15 s, the existing bound, is 1.6x the slowest at 2x load.
+// One probe gets the whole time left; one that ends early unknown is retried after a short delay.
 const WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS = 15_000;
+const WINDOWS_BIRTH_INSPECTION_RETRY_DELAY_MS = 25;
+// At most this many probes, as before; the cap matters only for a probe that fails at once.
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 const POSIX_GROUP_INSPECTION_DEADLINE_MS = 15_000;
 const POSIX_CONTROL_INSPECTION_FAILURE_LIMIT = 3;
@@ -90,9 +100,9 @@ let lastWindowsTreeRefreshFinishedAt = Number.NEGATIVE_INFINITY;
 let windowsTreeRefreshCount = 0;
 let windowsTreeRefreshMinimumGapMs = null;
 let windowsTreeFailures = 0;
-let windowsTreeInspectionDeadlineMs = WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS;
+const windowsTreeInspectionDeadlineMs = WINDOWS_TREE_INSPECTION_DEADLINE_MS;
 let windowsBirthInspectionAttempts = 0;
-let windowsBirthInspectionDeadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
+let windowsBirthInspectionDeadlineMs = WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS;
 let launchEffect = config.platform === "windows" ? "prepared" : "prepared";
 let windowsLaunchUnknownDetail = "Initial Windows process identity was not captured before discovery.";
 let rootProcess = null;
@@ -797,7 +807,7 @@ function withCurrentFenceEffect(ownerId, fencingToken, effect) {
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
       throw new Error("Portable fence holder identity is invalid.");
     const lockOptions = inspectionOwner
-      ? inspectionOwner.fenceOptions(Date.now() + 2_000)
+      ? inspectionOwner.fenceOptions(Date.now() + OWNED_FENCE_DEFAULT_DEADLINE_MS)
       : { holderPid: holder.holderPid, holderBirth: holder.holderBirth };
     if (!sameBirth(lockOptions.holderBirth, holder.holderBirth)) throw new Error("Portable fence holder birth changed.");
     return runPortableFenceEffectSync({
@@ -1275,7 +1285,6 @@ function requestWindowsTreeRefresh() {
     : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TREE_SCRIPT];
   const hasConfiguredDeadline = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0;
   const inspectorDeadlineMs = hasConfiguredDeadline ? configuredInspector.deadlineMs : windowsTreeInspectionDeadlineMs;
-  const startedAt = Date.now();
   const inspector = spawn(inspectorCommand, inspectorArguments, {
     encoding: "utf8",
     windowsHide: true,
@@ -1290,12 +1299,6 @@ function requestWindowsTreeRefresh() {
     clearTimeout(watchdog);
     windowsTreeRefreshInFlight = false;
     const finalError = error ?? inspectionError;
-    if (!hasConfiguredDeadline) {
-      const elapsed = Math.max(1, Date.now() - startedAt);
-      windowsTreeInspectionDeadlineMs = code === 0 && !finalError
-        ? Math.min(WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS, Math.max(WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS, elapsed * 4))
-        : Math.min(WINDOWS_TREE_INSPECTION_MAX_DEADLINE_MS, windowsTreeInspectionDeadlineMs * 2);
-    }
     acceptWindowsTreeResult(code, finalError, Buffer.concat(stdout).toString("utf8"), inspector.pid);
     lastWindowsTreeRefreshFinishedAt = Date.now();
   };
@@ -1454,21 +1457,25 @@ function inspectWindowsBirthWithRetry(pid) {
   const configuredInspector = config.windowsBirthInspector;
   const hasConfiguredDeadline = Number.isSafeInteger(configuredInspector?.deadlineMs) && configuredInspector.deadlineMs > 0;
   const absoluteDeadline = Math.min(Date.now() + WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS, startupDeadlineAt);
-  const maximumAttempts = hasConfiguredDeadline ? 1 : WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS;
-  let attemptDeadlineMs = hasConfiguredDeadline ? configuredInspector.deadlineMs : WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
   let inspection = { state: "unknown" };
-  for (let attempt = 0; attempt < maximumAttempts && Date.now() < absoluteDeadline; attempt += 1) {
-    attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, absoluteDeadline - Date.now()));
+  // One probe with all the time left; a probe ended early without an answer is tried again, never one cut short.
+  for (let attempt = 1; attempt <= WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS && Date.now() < absoluteDeadline; attempt += 1) {
+    const attemptDeadlineMs = Math.max(1, hasConfiguredDeadline
+      ? Math.min(configuredInspector.deadlineMs, absoluteDeadline - Date.now())
+      : absoluteDeadline - Date.now());
     windowsBirthInspectionAttempts += 1;
     windowsBirthInspectionDeadlineMs = attemptDeadlineMs;
     inspection = inspectWindowsBirth(pid, attemptDeadlineMs);
-    if (inspection.state !== "unknown") return inspection;
-    attemptDeadlineMs = Math.min(WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS, attemptDeadlineMs * 2);
+    if (inspection.state !== "unknown" || hasConfiguredDeadline || attempt === WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS) return inspection;
+    const left = absoluteDeadline - Date.now();
+    if (left <= WINDOWS_BIRTH_INSPECTION_RETRY_DELAY_MS) break;
+    Atomics.wait(waiter, 0, 0, WINDOWS_BIRTH_INSPECTION_RETRY_DELAY_MS);
   }
   return inspection;
 }
 
-function inspectWindowsBirth(pid, deadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS) {
+function inspectWindowsBirth(pid, deadlineMs = WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS) {
   if (inspectionOwner) {
     try { return inspectionOwner.operations().inspectProcessBirth(pid, "windows", deadlineMs); }
     catch { return { state: "unknown" }; }

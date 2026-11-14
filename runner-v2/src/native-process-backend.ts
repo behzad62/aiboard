@@ -19,17 +19,23 @@ import { createPortableProcessChannelProvider, validatePortableAcknowledgementEv
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
-import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import { OWNED_FENCE_DEFAULT_DEADLINE_MS, OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 import type { OwnedFenceLockOptions } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
 
+// One POSIX birth probe (`ps -o lstart=`): measured 4-173 ms idle and up to 104 ms loaded in a 2-CPU Linux container;
+// CI `ps -e` p99 61-201 ms (PR #205). 2 s is about 10x the slowest. Windows probes use the bound below instead.
 const PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS = 2_000;
+// One Windows birth probe (cold powershell.exe Get-Process): 155-413 ms idle; 4.9-9.1 s with 2x as many busy
+// processes as CPUs (5.3-7.4 s in T8). 15 s is 1.6x the slowest at 2x load. A probe gets all of the time left.
 const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
 const PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS = 15_000;
+// Windows birth probes per discovery, as before. Each gets all of the time left, so the cap matters only for a probe
+// that fails at once (it stops a powershell.exe spawn every poll).
+const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
 const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
-const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 /** A healthy supervisor refreshes CPU evidence every 500 ms at most; much older means it can no longer read it. */
 const POSIX_USAGE_MAX_AGE_MS = 5_000;
 
@@ -202,7 +208,8 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     await this.inspectionOwner?.closeInspection(absoluteDeadline);
   }
   private inspectionFenceOptions(): OwnedFenceLockOptions | undefined {
-    return this.inspectionOwner?.fenceOptions();
+    // The lock's measured default deadline, not fenceOptions' own 2 s default.
+    return this.inspectionOwner?.fenceOptions(Date.now() + OWNED_FENCE_DEFAULT_DEADLINE_MS);
   }
 
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
@@ -977,24 +984,21 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   private async waitForBirth(pid: number, startupDeadline: number): Promise<ProcessBirthDiscovery> {
     const discoveryLimitMs = this.options.platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : 1_000;
     const deadline = Math.min(startupDeadline, Date.now() + discoveryLimitMs);
-    const maximumAttempts = this.options.platform === "windows" ? WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS : Number.MAX_SAFE_INTEGER;
-    let attempts = 0;
-    let attemptDeadlineMs = Math.min(
-      discoveryLimitMs,
-      PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
-      Math.max(1, deadline - Date.now()),
-    );
-    while (Date.now() < deadline && attempts < maximumAttempts) {
-      attemptDeadlineMs = Math.max(1, Math.min(attemptDeadlineMs, deadline - Date.now()));
+    // Windows: one probe gets all of the time left, never a 2 s slice that is killed and started cold again (a cold
+    // powershell.exe start took 4.9-9.1 s on a loaded host). It is retried only when it ended early without an answer.
+    // POSIX keeps its short polled probes inside the 1 s discovery window.
+    const windows = this.options.platform === "windows";
+    const maximumAttempts = windows ? WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS : Number.MAX_SAFE_INTEGER;
+    let attemptDeadlineMs = Math.min(discoveryLimitMs, PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS, Math.max(1, deadline - Date.now()));
+    for (let attempts = 1; Date.now() < deadline && attempts <= maximumAttempts; attempts += 1) {
+      attemptDeadlineMs = Math.max(1, windows ? deadline - Date.now() : Math.min(attemptDeadlineMs, deadline - Date.now()));
       const inspection = this.operations.inspectProcessBirth(pid, this.options.platform, attemptDeadlineMs);
-      attempts += 1;
       const deadlineExpired = Date.now() >= deadline;
       if (inspection.state === "present") return { ...inspection, deadlineExpired };
       if (inspection.state === "absent") return { state: "absent", deadlineExpired };
       if (deadlineExpired) return { state: "unknown", deadlineExpired: true };
       attemptDeadlineMs = Math.min(discoveryLimitMs, attemptDeadlineMs * 2);
-      if (attempts >= maximumAttempts) break;
-      await delay(this.pollIntervalMs);
+      if (attempts < maximumAttempts) await delay(this.pollIntervalMs);
     }
     return { state: "unknown", deadlineExpired: Date.now() >= deadline };
   }
@@ -1083,7 +1087,8 @@ async function osProcessBirthAsync(pid: number, platform: "posix" | "windows", s
   return new Promise((resolveInspection) => {
     let inspection: ProcessBirthInspection = { state: "unknown" };
     const child = execFile(command, args, {
-      encoding: "utf8", windowsHide: true, timeout: PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
+      encoding: "utf8", windowsHide: true,
+      timeout: platform === "windows" ? WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS : PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
       maxBuffer: 64 * 1024, signal,
     }, (error, stdout) => {
       if (signal.aborted) return;
