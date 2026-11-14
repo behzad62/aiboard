@@ -23,12 +23,13 @@ const BIRTH = "2026-10-31T00:43:01.123456Z";
 const T0 = 1_000_000;
 
 interface FakeTimer { at: number; seq: number; callback: () => void; refed: boolean; cleared: boolean }
-interface FakeChild { startedAt: number; killed: boolean; unrefed: Set<string>; done: boolean }
+interface FakeChild { startedAt: number; killed: boolean; killedAt?: number; unrefed: Set<string>; done: boolean }
 
 // One module instance: a fake clock and timers, a fake execFile whose powershell.exe starts take `coldStartMs`
 // (Infinity: never), honouring its own `timeout` option as node does, and an execFileSync that throws (the sync
 // probe would be a cold start too; a test that needs it to run has to say so).
-function loadModule(options: { coldStartMs: number | ((call: number) => number); output?: (call: number) => string; platform?: string }) {
+// `completionLagMs`: how much later than the probe's exit its caller gets to run (a busy event loop).
+function loadModule(options: { coldStartMs: number | ((call: number) => number); output?: (call: number) => string; platform?: string; completionLagMs?: number }) {
   const clock = { now: T0 };
   const timers = new Set<FakeTimer>();
   let seq = 0;
@@ -56,8 +57,8 @@ function loadModule(options: { coldStartMs: number | ((call: number) => number);
       Promise.resolve().then(() => callback(error, stdout));
     };
     const coldStartMs = typeof options.coldStartMs === "function" ? options.coldStartMs(call) : options.coldStartMs;
-    const started = Number.isFinite(coldStartMs) ? fakeSetTimeout(() => exit(null, options.output?.(call) ?? PRESENT_BIRTH), coldStartMs) : undefined;
-    const kill = () => { child.killed = true; exit(Object.assign(new Error("Command failed: powershell.exe"), { killed: true, signal: "SIGTERM" })); };
+    const started = Number.isFinite(coldStartMs) ? fakeSetTimeout(() => { clock.now += options.completionLagMs ?? 0; exit(null, options.output?.(call) ?? PRESENT_BIRTH); }, coldStartMs) : undefined;
+    const kill = () => { if (child.done) return; child.killed = true; child.killedAt = clock.now; exit(Object.assign(new Error("Command failed: powershell.exe"), { killed: true, signal: "SIGTERM" })); };
     const timedOut = execOptions.timeout ? fakeSetTimeout(kill, execOptions.timeout) : undefined;
     const pipe = (name: string) => ({ unref: () => { child.unrefed.add(name); } });
     return { unref: () => { child.unrefed.add("child"); }, kill, stdin: pipe("stdin"), stdout: pipe("stdout"), stderr: pipe("stderr") };
@@ -170,6 +171,53 @@ test("a claim whose deadline passes before the cold start fails closed at that d
     assert.equal(slow.children.length, 2);
     assert.deepEqual(slow.syncCalls, []);
   });
+});
+
+// Review B: the wait spends the claim's own time. acquire gets the original absolute deadline, never a fresh
+// deadlineMs from when the wait ended (a 2 s claim that waited 1.9 s must not get up to 3.9 s in all).
+test("a claim that waited for the probe reaches acquire with its original deadline, never a fresh one", async () => {
+  await withLockFolder(async (lockPath) => {
+    // The probe returns at 1.9 s and the claim gets to run 150 ms later, past its 2 s.
+    const late = loadModule({ coldStartMs: 1_900, completionLagMs: 150 });
+    const result = await late.drive(late.module.withOwnedFenceLock(lockPath, () => "effect ran"));
+    assert.ok(!result.ok, "a fresh 2 s in acquire would have run the effect at 2.05 s");
+    assert.equal(result.error.name, "OwnedFenceContentionError");
+    assert.match(result.error.message, /deadline is exhausted/);
+    assert.equal(late.module.currentProcessBirthPreparation(), "known", "the identity it learned stays for the next claim");
+
+    // An earlier absolute deadline from the caller stays as well.
+    const early = loadModule({ coldStartMs: 900, completionLagMs: 150 });
+    const capped = await early.drive(early.module.withOwnedFenceLock(lockPath, () => "effect ran", { deadlineMs: 10_000, deadlineAt: T0 + 1_000 }));
+    assert.ok(!capped.ok);
+    assert.match(capped.error.message, /deadline is exhausted/);
+
+    const onTime = loadModule({ coldStartMs: 1_900 });
+    const ran = await onTime.drive(onTime.module.withOwnedFenceLock(lockPath, () => "effect ran"));
+    assert.ok(ran.ok, "inside its deadline the same claim runs");
+  });
+});
+
+// Review A: waiters extend an attempt only up to the schedule's longest attempt bound (16 s) from its start, so a
+// busy host whose claims never stop cannot keep a hung probe alive: it is killed at that cap and replaced.
+test("a stream of overlapping claims cannot keep a hung probe alive past 16 s from its start", async () => {
+  const harness = loadModule({ coldStartMs: Number.POSITIVE_INFINITY });
+  const claims: Promise<{ error?: Error; afterMs: number }>[] = [];
+  for (let second = 0; second < 60; second += 1) {
+    const startedAt = harness.clock.now;
+    claims.push(harness.module.withOwnedFenceLock(join(tmpdir(), `aiboard-self-birth-never-${second}.sqlite`), () => "effect ran").then(
+      () => ({ afterMs: harness.clock.now - startedAt }), (error: Error) => ({ error, afterMs: harness.clock.now - startedAt })));
+    await harness.advance(1_000);
+  }
+  await harness.advance(2_000);
+  for (const outcome of await Promise.all(claims)) {
+    assert.match(outcome.error?.message ?? "the claim ran", /birth identity is unavailable/);
+    assert.equal(outcome.afterMs, 2_000, "every claim fails closed at its own 2 s");
+  }
+  const [first, second, third] = harness.children;
+  assert.equal(first!.killedAt! - T0, 16_000, "the 2 s attempt, extended by the waiting claims, is killed at its 16 s cap");
+  assert.equal(second!.startedAt - T0, 16_025, "and replaced after the retry delay");
+  assert.equal(second!.killedAt! - second!.startedAt, 16_000, "the next one gets the same cap from its own start");
+  assert.equal(third!.startedAt - T0, 32_050);
 });
 
 test("with no claim waiting, the background attempts keep their 2, 4, 8 and 16 s bounds and never cache an unknown identity", async () => {

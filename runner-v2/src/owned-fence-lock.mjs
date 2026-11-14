@@ -307,16 +307,21 @@ export function currentProcessBirthFingerprint(remainingMs = DEFAULT_DEADLINE_MS
  * that start was the whole budget: the first claim of a fresh process failed with "birth identity is unavailable",
  * and its sync probe was killed with it, so the next claim started cold again. This runs the same escalating
  * schedule as currentProcessBirthFingerprint (2 s, 4 s, ... up to SELF_BIRTH_MAX_ATTEMPTS attempts), except that an
- * attempt is never ended while a claim waiting on it still has time: it lasts until its own bound or the latest
+ * attempt is not ended while a claim waiting on it still has time: it lasts until its own bound or the latest
  * waiting claim's own deadline, whichever is later, so a 10 s caller keeps the whole 10 s for a slow start, as the
- * sync schedule gives its last attempt everything left. It authorizes nothing: a claim still fails closed when the
+ * sync schedule gives its last attempt everything left. Waiters extend an attempt only up to the schedule's longest
+ * attempt bound (16 s) from its start, so a hung probe is still killed and replaced while claims keep arriving.
+ * It authorizes nothing: a claim still fails closed when the
  * identity is not known by its own deadline. Only a well-formed read identity is cached; an unknown one never is, and
  * a later call starts again.
  *
  * Nothing here keeps the process alive or outlives it: the probe, its pipes and its timers are unref'd, and a probe
  * still running when the process exits is killed. A waiting claim keeps the loop alive with its own deadline timer.
- * Without `waitUntil` it resolves when the preparation ends; with it, at that absolute time at the latest, keeping the
- * process alive until then. Resolves to the fingerprint, or to undefined when it is not known; never rejects.
+ * Without `waitUntil` it resolves when the preparation ends, but holds nothing alive meanwhile: a top-level
+ * `await prepareCurrentProcessBirthFingerprint()` with nothing else running exits the process (code 13, unsettled
+ * top-level await). A caller that awaits it passes `waitUntil`, an absolute time: it resolves then at the latest,
+ * keeping the process alive until then. Resolves to the fingerprint, or to undefined when it is not known; never
+ * rejects.
  * Elsewhere the sync probe is a /proc read or one `ps`, and this resolves to undefined at once.
  */
 export function prepareCurrentProcessBirthFingerprint(waitUntil) {
@@ -346,7 +351,7 @@ async function learnCurrentProcessBirth(preparation) {
   let attemptMs = SELF_BIRTH_FIRST_ATTEMPT_MS;
   for (let attempt = 1; attempt <= SELF_BIRTH_MAX_ATTEMPTS; attempt += 1) {
     if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
-    const inspected = await inspectWindowsProcessBirthAsync(process.pid, Date.now() + attemptMs, preparation);
+    const inspected = await inspectWindowsProcessBirthAsync(process.pid, Date.now(), attemptMs, preparation);
     if (inspected.state === "same") {
       cachedCurrentBirth ??= inspected;
       return cachedCurrentBirth.fingerprint;
@@ -364,7 +369,11 @@ function latestWaitingDeadline(preparation) {
   return latest;
 }
 
-function inspectWindowsProcessBirthAsync(pid, boundAt, preparation) {
+function inspectWindowsProcessBirthAsync(pid, startedAt, attemptMs, preparation) {
+  const boundAt = startedAt + attemptMs;
+  // Waiters extend an attempt at most to the schedule's longest attempt bound from its start: the last attempt's.
+  const extensionCapAt = startedAt + SELF_BIRTH_FIRST_ATTEMPT_MS * 2 ** (SELF_BIRTH_MAX_ATTEMPTS - 1);
+  const endAt = () => Math.max(boundAt, Math.min(latestWaitingDeadline(preparation), extensionCapAt));
   return new Promise((resolvePromise) => {
     let settled = false;
     let timer;
@@ -378,16 +387,15 @@ function inspectWindowsProcessBirthAsync(pid, boundAt, preparation) {
       if (preparation.attempt?.finish === finish) preparation.attempt = undefined;
       resolvePromise(result);
     };
-    // The attempt ends at its own bound, or later while a waiting claim still has time.
+    // The attempt ends at its own bound, or later while a waiting claim still has time, up to the cap.
     const arm = () => {
       if (settled) return;
       clearTimeout(timer);
-      const endAt = Math.max(boundAt, latestWaitingDeadline(preparation));
       timer = setTimeout(() => {
-        if (Math.max(boundAt, latestWaitingDeadline(preparation)) > Date.now()) { arm(); return; }
+        if (endAt() > Date.now()) { arm(); return; }
         kill();
         finish({ state: "unknown" });
-      }, Math.max(0, endAt - Date.now()));
+      }, Math.max(0, endAt() - Date.now()));
       timer.unref?.();
     };
     try {
