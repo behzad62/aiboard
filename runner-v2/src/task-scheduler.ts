@@ -614,7 +614,9 @@ export class TaskScheduler {
     taskId: string,
     attempt: number,
     workerId: string,
-    outcome: WorkerOutcome
+    outcome: WorkerOutcome,
+    /** A stable key for a kept pause replayed after a proven stop, so a crash and a second settle never pause twice. */
+    pauseKey?: string,
   ): void {
     if (outcome.type === "submitted") {
       // T4: the worker is done writing — release the packet claim so later
@@ -692,7 +694,7 @@ export class TaskScheduler {
         type: "run.paused",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "scheduler" },
-        idempotencyKey: `worker-pause:${taskId}:${attempt}:${lastSequence}`,
+        idempotencyKey: pauseKey ?? `worker-pause:${taskId}:${attempt}:${lastSequence}`,
         payload: { reason: outcome.reason, taskId },
       });
       return;
@@ -800,7 +802,8 @@ export class TaskScheduler {
       if (!stop.aborted && current?.status === "running" && current.attempt === stop.attempt) {
         const kept = structuredClone(stop.outcome) as SettledWorkerOutcome;
         try {
-          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept);
+          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept,
+            `worker-pause:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`);
         } catch (error) {
           // As in dispatch: an outcome that cannot be recorded is a failure.
           this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {

@@ -19,6 +19,7 @@ import {
   type SchedulerProjection,
   type SchedulerStore,
 } from "../src/scheduler-store.js";
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
@@ -1923,6 +1924,37 @@ test("a kept outcome that cannot be recorded after a proven stop fails the attem
     assert.ok(projection.tasks.U7.failureReason, "the reason the submission could not be recorded is kept");
     assert.equal(projection.unprovenWorkerStops, undefined);
     assert.equal(claimStatus(fixture.store, "U7")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a context recording failure with an unproven stop keeps its recording event and its own pause after the proof", async () => {
+  const fixture = openFixture("stop-unproven-context");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U8", files: ["src/u8.ts"] },
+    ], { revisionId: "revision_u8", reviewId: "coverage_u8" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    const events = fixture.store.readRun("run_t4");
+    assert.ok(events.some((event) => event.type === "context_manifest.recording_failed"), "the recording failure is recorded as on the catch path");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U8");
+    assert.deepEqual(projection.unprovenWorkerStops?.U8?.outcome, { type: "paused", reason: "context_recording_failed" });
+    scheduler.resume("resume:u8");
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "context_recording_failed", "after the proof the attempt goes on to its own pause");
+    assert.equal(claimStatus(fixture.store, "U8")[0]?.status, "stopped_fenced");
   } finally {
     fixture.close();
   }
