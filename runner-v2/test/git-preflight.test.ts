@@ -24,7 +24,8 @@ test("bounded Git execution times out by policy and verifies that its process is
   const root = await mkdtemp(join(tmpdir(), "runner-git-bounded-"));
   t.diagnostic(`exact Git fixture acquired: ${root}`);
   const kernelDirectory = join(root, "process-kernel");
-  const processKernel = createRunnerInternalProcessKernel({ stateDirectory: kernelDirectory });
+  // As in the Runner, the kernel's Windows birth helper lives outside its state directory, which must end empty.
+  const processKernel = createRunnerInternalProcessKernel({ stateDirectory: kernelDirectory, windowsBirthHelperDirectory: join(root, "windows-birth-helper") });
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   const marker = join(root, "pid.txt");
   const execute = createBoundedGitCommandExecutor({
@@ -65,7 +66,8 @@ test("bounded Git execution verifies the complete process tree, including detach
   const root = await mkdtemp(join(tmpdir(), "runner-git-tree-bounded-"));
   t.diagnostic(`exact Git fixture acquired: ${root}`);
   const kernelDirectory = join(root, "process-kernel");
-  const processKernel = createRunnerInternalProcessKernel({ stateDirectory: kernelDirectory });
+  // As in the Runner, the kernel's Windows birth helper lives outside its state directory, which must end empty.
+  const processKernel = createRunnerInternalProcessKernel({ stateDirectory: kernelDirectory, windowsBirthHelperDirectory: join(root, "windows-birth-helper") });
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   const marker = join(root, "tree.json");
   const execute = createBoundedGitCommandExecutor({

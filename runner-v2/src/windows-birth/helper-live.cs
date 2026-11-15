@@ -1,5 +1,6 @@
-// External qualification candidate. Build-time compilation only; no runtime compiler.
-// Targets the CLR 4.0 BCL. LIVE source proposal; execution and shipping remain unqualified.
+// Windows birth inspection helper. No binary ships with AIBoard: the Runner compiles this source into helper.exe
+// with Windows' own C# compiler (csc.exe, CLR 4 BCL, C# 5) after checking its pin, and reuses that exe until this
+// source changes.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;

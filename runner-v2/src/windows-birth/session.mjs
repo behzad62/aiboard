@@ -1,5 +1,5 @@
 // Creator-owned Windows inspection scope. No process, Worker or filesystem I/O on import/constructor.
-// RUNNER_RAW_PROCESS_BOUNDARY: Spawn only the pinned installed inspection helper; retain its original handle, Worker and streams through bounded owned cleanup.
+// RUNNER_RAW_PROCESS_BOUNDARY: Spawn only the pinned, locally compiled inspection helper; retain its original handle, Worker and streams through bounded owned cleanup.
 import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { createHash,randomBytes } from 'node:crypto';

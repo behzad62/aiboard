@@ -346,7 +346,8 @@ import {
   WindowsProcessBackend,
   type WindowsJobProcessService,
 } from "../src/windows-process-backend.js";
-import { createWindowsJobProcessHost, WindowsJobHostError } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, provideWindowsBirthHelperAssembly, WindowsJobHostError } from "../src/windows-job-process-host.js";
+
 import { NativeProcessLaunchBlockedError, type NativeProcessOperations } from "../src/native-process-backend.js";
 import { probeProcessHostSemantics } from "../src/process-host-semantic-probes.js";
 import {
@@ -360,6 +361,17 @@ import {
   type ProcessLaunchResult,
   type ProcessEffectFence,
 } from "../src/process-backend.js";
+
+/** Supervisors started directly here run the real inspection, so they get the helper the Runner would hand them. */
+let birthAssemblyState: string | undefined;
+// Best effort: a helper a leftover supervisor still runs cannot be removed on Windows.
+test.after(() => { if (birthAssemblyState) try { rmSync(birthAssemblyState, { recursive: true, force: true }); } catch {} });
+async function windowsBirthAssemblyConfig(): Promise<{ windowsBirthAssembly?: unknown }> {
+  if (process.platform !== "win32") return {};
+  birthAssemblyState ??= mkdtempSync(join(tmpdir(), "aiboard-test-birth-assembly-"));
+  const source = readFileSync(new URL("../src/windows-birth/helper-live.cs", import.meta.url));
+  return { windowsBirthAssembly: await provideWindowsBirthHelperAssembly(birthAssemblyState, source, createHash("sha256").update(source).digest("hex")) };
+}
 
 test("portable and Job fence owners share the crash-recoverable exact-identity lock authority", () => {
   const native = readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8");
@@ -1082,7 +1094,7 @@ test("Windows portable supervisor preserves historical proof without traversing 
     arguments: ["-e", "process.exit(0)"],
     workingDirectory: process.cwd(),
     environment: fixtureEnvironment(),
-    platform: "windows",
+    platform: "windows", ...(await windowsBirthAssemblyConfig()),
     pollIntervalMs: 20,
     windowsTreeInspector: { command: process.execPath, arguments: ["-e", inspector, statePath], deadlineMs: 2_000 },
   })).toString("base64url");
@@ -1131,7 +1143,7 @@ test("Windows portable supervisor rejects a child edge whose birth predates its 
     arguments: ["-e", "setInterval(()=>{},1000)"],
     workingDirectory: process.cwd(),
     environment: fixtureEnvironment(),
-    platform: "windows",
+    platform: "windows", ...(await windowsBirthAssemblyConfig()),
     pollIntervalMs: 20,
     windowsTreeInspector: { command: process.execPath, arguments: ["-e", inspector, statePath], deadlineMs: 2_000 },
   })).toString("base64url");
@@ -1494,7 +1506,7 @@ test("Windows supervisor treats unavailable CIM inspection as unknown and ignore
     arguments: ["-e", "setInterval(()=>{},1000)"],
     workingDirectory: process.cwd(),
     environment: fixtureEnvironment(),
-    platform: "windows",
+    platform: "windows", ...(await windowsBirthAssemblyConfig()),
     pollIntervalMs: 20,
     windowsTreeInspector: { command: join(root, "missing-cim-inspector.exe") },
     windowsControlInspector: { command: join(root, "missing-cim-inspector.exe") },
@@ -1537,7 +1549,7 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
   const nonce = "cim-watchdog";
   const encoded = Buffer.from(JSON.stringify({
     nonce, directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"],
-    workingDirectory: process.cwd(), environment: fixtureEnvironment(), platform: "windows", pollIntervalMs: 20,
+    workingDirectory: process.cwd(), environment: fixtureEnvironment(), platform: "windows", ...(await windowsBirthAssemblyConfig()), pollIntervalMs: 20,
     windowsTreeInspector: {
       command: process.execPath,
       arguments: ["-e", "require('node:fs').appendFileSync(process.argv[1],process.pid+'\\n');setInterval(()=>{},1000)", inspectorPids],
@@ -1583,7 +1595,7 @@ test("Windows portable startup gives one exact birth inspection its whole bounde
     arguments: ["-e", "setInterval(()=>{},1000)"],
     workingDirectory: process.cwd(),
     environment: fixtureEnvironment(),
-    platform: "windows",
+    platform: "windows", ...(await windowsBirthAssemblyConfig()),
     pollIntervalMs: 20,
     windowsBirthInspector: { command: process.execPath, arguments: ["-e", inspector] },
   })).toString("base64url");
@@ -1641,7 +1653,7 @@ test("Windows supervisor gives a slow default inventory its whole bound, with no
     arguments: ["-e", "setInterval(()=>{},1000)"],
     workingDirectory: process.cwd(),
     environment: fixtureEnvironment(),
-    platform: "windows",
+    platform: "windows", ...(await windowsBirthAssemblyConfig()),
     pollIntervalMs: 20,
     windowsTreeInspector: { command: process.execPath, arguments: ["-e", inspector, statePath] },
   })).toString("base64url");
@@ -1653,7 +1665,9 @@ test("Windows supervisor gives a slow default inventory its whole bound, with no
     const recovered = await waitForPortableState(directory, (state) =>
       state.status === "running" && (state.windowsTreeRefreshCount ?? 0) >= 2 &&
       (state.windowsTreeFailures ?? 0) === 0 && state.windowsTreeInspectionDeadlineMs === 60_000,
-    8_000);
+    // A ceiling, polled fast: two 3 s inventories, their Node starts and the supervisor's own startup take about 7 s,
+    // which left the old 8 s about 1 s of margin; suite load has passed it (a 9.2 s run). It still returns at once.
+    20_000);
     assert.ok(recovered.rootProcess);
     assert.equal(processIsAlive(recovered.rootProcess.pid), true);
   } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
@@ -1674,7 +1688,7 @@ test("Windows destructive control bounds a hung fresh inspector and never signal
   const nonce = "control-query-watchdog";
   const encoded = Buffer.from(JSON.stringify({
     nonce, directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"], workingDirectory: process.cwd(),
-    environment: fixtureEnvironment(), platform: "windows", pollIntervalMs: 20,
+    environment: fixtureEnvironment(), platform: "windows", ...(await windowsBirthAssemblyConfig()), pollIntervalMs: 20,
     windowsControlInspector: { command: process.execPath, arguments: ["-e", "require('node:fs').appendFileSync(process.argv[1],process.pid+'\\n');setInterval(()=>{},1000)", inspectorPids], deadlineMs: 100 },
   })).toString("base64url");
   const child = await spawnContainedWindowsFixture(root, process.execPath, [join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), encoded], { stdio: "ignore", windowsHide: true });
@@ -1728,7 +1742,7 @@ test("Windows destructive control bounds taskkill and treats timeout as durable 
   const nonce = "taskkill-watchdog";
   const encoded = Buffer.from(JSON.stringify({
     nonce, directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"], workingDirectory: process.cwd(),
-    environment: fixtureEnvironment(), platform: "windows", pollIntervalMs: 20,
+    environment: fixtureEnvironment(), platform: "windows", ...(await windowsBirthAssemblyConfig()), pollIntervalMs: 20,
     windowsTaskkill: { command: process.execPath, arguments: ["-e", "require('node:fs').appendFileSync(process.argv[1],process.pid+'\\n');setInterval(()=>{},1000)", taskkillPids], deadlineMs: 100 },
   })).toString("base64url");
   const child = await spawnContainedWindowsFixture(root, process.execPath, [join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), encoded], { stdio: "ignore", windowsHide: true });
@@ -1770,7 +1784,7 @@ test("Windows supervisor reattests exact live members before a higher-sequence f
   ].join(";");
   const encoded = Buffer.from(JSON.stringify({
     nonce, directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"], workingDirectory: process.cwd(),
-    environment: fixtureEnvironment(), platform: "windows", pollIntervalMs: 20,
+    environment: fixtureEnvironment(), platform: "windows", ...(await windowsBirthAssemblyConfig()), pollIntervalMs: 20,
     windowsTaskkill: { command: process.execPath, arguments: ["-e", taskkill, attempts], deadlineMs: 1_000 },
   })).toString("base64url");
   const child = await spawnContainedWindowsFixture(root, process.execPath, [join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), encoded], { stdio: "ignore", windowsHide: true });
@@ -1806,7 +1820,7 @@ test("Windows supervisor rejects successful empty CIM inventory as consecutive u
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cim-empty-")); const directory = join(root, "owned-empty-query"); mkdirSync(directory);
   const supervisor = join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs");
   const encoded = Buffer.from(JSON.stringify({
-    nonce: "cim-empty", directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"], workingDirectory: process.cwd(), environment: fixtureEnvironment(), platform: "windows", pollIntervalMs: 20,
+    nonce: "cim-empty", directory, executable: process.execPath, arguments: ["-e", "setInterval(()=>{},1000)"], workingDirectory: process.cwd(), environment: fixtureEnvironment(), platform: "windows", ...(await windowsBirthAssemblyConfig()), pollIntervalMs: 20,
     windowsTreeInspector: { command: process.execPath, arguments: ["-e", "process.exit(0)"], deadlineMs: 500 },
   })).toString("base64url");
   const child = await spawnContainedWindowsFixture(root, process.execPath, [supervisor, encoded], { stdio: "ignore", windowsHide: true }); assert.ok(child.pid);

@@ -130,6 +130,14 @@ jobs:
           runner-v2/test/owned-fence-lock.test.ts
           runner-v2/test/owned-fence-close-guard.test.ts
           runner-v2/test/runner-async-fence-claims.test.ts
+      # The Windows birth helper is compiled into an exe on the host with Windows' own csc.exe (no shipped binary): the
+      # real compile, placement, helper and owner, and their fail-closed paths (about 15 s on Windows).
+      - name: Run Windows birth helper contracts on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/windows-birth-assembly.test.ts
+          runner-v2/test/windows-birth-exit-race.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

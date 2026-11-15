@@ -21,6 +21,7 @@ import { PortableOutputRetirementBlockedError, runPortableFenceSnapshot } from "
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
+import { provideWindowsBirthHelperAssembly } from "./windows-job-process-host.js";
 
 // One POSIX birth probe (`ps -o lstart=`): measured 4-173 ms idle and up to 104 ms loaded in a 2-CPU Linux container;
 // CI `ps -e` p99 61-201 ms (PR #205). 2 s is about 10x the slowest. Windows probes use the bound below instead.
@@ -53,6 +54,12 @@ export interface NativeOwnedProcessBackendOptions {
   readonly beforeFenceEffect?: (kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "release") => void | Promise<void>;
   /** Test seam for a bounded post-retirement authority-directory removal fault. */
   readonly removeRetiredAuthority?: (directory: string) => void;
+  /**
+   * Windows: the Runner's own birth helper directory in the per-user AIBoard home (`<state>/windows-birth-helper`),
+   * trusted as the installation is. The helper compiled there is reused across Runner starts and backends until its
+   * source or recipe changes. Never a shared directory such as one under TEMP.
+   */
+  readonly windowsBirthHelperDirectory?: string;
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows", attemptDeadlineMs?: number): ProcessBirthInspection;
@@ -161,8 +168,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
+    // The birth helper is compiled on this machine (no binary ships). In the Runner's own helper directory it is kept
+    // for later starts and every backend until its source or recipe changes; without one, this backend's state
+    // directory gets its own copy and never reuses a recorded one. Either outlives the Runner, as supervisors may.
+    const helperDirectory = options.windowsBirthHelperDirectory === undefined ? undefined : resolve(options.windowsBirthHelperDirectory);
     this.inspectionOwner = !options.operations && options.platform === "windows"
-      ? new WindowsBirthInspectionOwner() : undefined;
+      ? new WindowsBirthInspectionOwner(undefined, {
+        assembly: (source, sourceSha256) => provideWindowsBirthHelperAssembly(helperDirectory ?? this.stateDirectory, source, sourceSha256,
+          { reuseRecorded: helperDirectory !== undefined }),
+      }) : undefined;
     const owner = this.inspectionOwner;
     this.operations = options.operations ?? (owner ? {
       ...DEFAULT_OPERATIONS,
@@ -224,7 +238,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...request.fence }), { mode: 0o600 });
     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
     const windowsHelpers = this.options.platform === "windows"
-      ? windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined)
+      ? {
+          ...windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined),
+          // The supervisor runs this Runner's compiled helper exe (its session re-checks the digest) instead of compiling one.
+          ...(this.inspectionOwner ? { windowsBirthAssembly: this.inspectionOwner.assembly() } : {}),
+        }
       : {};
     const encoded = Buffer.from(JSON.stringify({
       nonce,

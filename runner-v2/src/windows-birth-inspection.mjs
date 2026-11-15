@@ -1,5 +1,7 @@
-// Creator-owned Windows birth observation. Installation code/assets are trusted.
-// Hash/descriptor checks do not make path execution atomic against installation writers.
+// Creator-owned Windows birth observation. Installation code/assets and the backend state directory are trusted.
+// Hash/descriptor checks do not make path execution atomic against installation or state-directory writers.
+// No binary ships: the helper source (helper-live.cs, pinned below) is compiled into helper.exe on this machine by
+// the assembly provider, and the session starts that exe (windows-birth/session.mjs).
 import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync, openSync, fstatSync, readSync, closeSync, readdirSync } from 'node:fs';
 import { dirname, join, win32 } from 'node:path';
@@ -10,10 +12,8 @@ const ASSETS = Object.freeze({
   'protocol.mjs':'b10e5c11ba3b404f57572c4b898b48e8a3ee99f7731747b784ef2f0bad2e64bb',
   'queue.mjs':'51cfea81aee122fd92e1a241ae435e96de83e1987aa55eec5efd16f6b17d8788',
   'runtime-worker.mjs':'3f35034f63a56c2727dab0459af05449177424a0b652e64667506dc96f3e45ce',
-  'session.mjs':'4d590ec9c8974e07c5dfc1518db61bfb2d824f1327cc7dc3d0167366ee55576b',
-  'helper-live.cs':'05e35d52f59eee05427c2f09d28a9aa233439d39e342aad55e553710c832dd38',
-  'provenance.json':'55ac94658e15524ad020d6dcf87e13b3835cde08504f6a44fe68b92809fe0595',
-  'native/win-x64/helper.exe':'ce317a9f8694c2f5b4c99ceb6062bd893cd34fad78310015991d317c48543750',
+  'session.mjs':'75a0982e346b1e69afd3e90da8d39264e96743d2ea29ac06b214f9a46631be42',
+  'helper-live.cs':'c7a4c7f799f59f84755a3bb666679f3616d4e79f9b1e8f3ecc40d6813d475742',
 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const unknown = () => ({state:'unknown'});
@@ -54,24 +54,36 @@ function readAsset(path, expected) {
     return bytes;
   } finally { closeSync(fd); }
 }
-async function loadInstalledSession() {
+function assemblyRecord(value, sourceSha256) {
+  if (!value || Object.keys(value).sort().join(',')!=='path,sha256,sourceSha256' || typeof value.path!=='string' ||
+    !/^[A-Za-z]:\\/.test(value.path) || !value.path.endsWith('\\helper.exe') || !/^[0-9a-f]{64}$/.test(value.sha256) ||
+    value.sourceSha256!==sourceSha256) throw Error('Inspection helper assembly does not match its pinned source');
+  return Object.freeze({path:value.path,sha256:value.sha256,sourceSha256:value.sourceSha256});
+}
+/**
+ * `assemblyProvider(source, sourceSha256)` returns the compiled helper `{ path, sha256, sourceSha256 }`: the Runner
+ * compiles it once per process and places it in the backend state directory (provideWindowsBirthHelperAssembly); a
+ * portable supervisor is handed that assembly.
+ */
+export async function loadInstalledSession(assemblyProvider) {
+  if (typeof assemblyProvider!=='function') throw Error('Inspection helper assembly provider required');
   if (process.platform!=='win32' || process.arch!=='x64' || !/^v24\./.test(process.version)) throw Error('Windows x64 certified Node24 required');
   const root=join(dirname(fileURLToPath(import.meta.url)),'windows-birth'), held={};
   for (const [relative,sha256] of Object.entries(ASSETS)) {
     const path=join(root,...relative.split('/'));
     held[relative]={path,sha256,bytes:readAsset(path,sha256)};
   }
-  const binary=held['native/win-x64/helper.exe'];
-  // Managed configuration, DLL probing and .local redirection are not selected.
-  if (JSON.stringify(readdirSync(dirname(binary.path)).sort())!==JSON.stringify(['helper.exe'])) throw Error('Unexpected native helper sidecar');
+  const source=held['helper-live.cs'];
   const sources={};
   for (const [name,file] of [['protocol','protocol.mjs'],['queue','queue.mjs'],['worker','runtime-worker.mjs']]) {
     sources[name]={sha256:held[file].sha256,base64:held[file].bytes.toString('base64')};
   }
-  const config={binary:{path:binary.path,sha256:binary.sha256,sourceSha256:held['helper-live.cs'].sha256},
-    buildPins:['helper-live.cs','provenance.json'].map(file=>({path:held[file].path,sha256:held[file].sha256})),sources};
   // All four modules are checked before their first standard module import.
   const {WindowsBirthSession}=await import(pathToFileURL(held['session.mjs'].path).href);
+  const assembly=assemblyRecord(await assemblyProvider(source.bytes,source.sha256),source.sha256);
+  // Managed configuration, DLL probing and .local redirection are not selected.
+  if (JSON.stringify(readdirSync(dirname(assembly.path)).sort())!==JSON.stringify(['helper.exe'])) throw Error('Unexpected native helper sidecar');
+  const config={binary:assembly,buildPins:[{path:source.path,sha256:source.sha256}],sources};
   return {Session:WindowsBirthSession,config};
 }
 
@@ -79,11 +91,16 @@ export class WindowsBirthInspectionOwner {
   #state='NEW'; #registered=false; #load; #session=null; #lease=null;
   #preparePromise=null; #closePromise=null; #cleanup=null; #operations=null; #selfBirth=null;
   #observationSequence=0; #observations=[]; #observationsDropped=0; #diagnosticFailures=0;
-  // The loader seam is for trusted injected tests, never runtime user configuration.
-  constructor(load=loadInstalledSession) {
+  #assemblyProvider; #assembly=null;
+  // The loader seam is for trusted injected tests, never runtime user configuration. `options.assembly` is the
+  // helper assembly provider handed to the loader (see loadInstalledSession).
+  constructor(load=loadInstalledSession, options={}) {
     if (typeof load!=='function') throw Error('Trusted inspection loader required');
-    this.#load=load;
+    if (options.assembly!==undefined && typeof options.assembly!=='function') throw Error('Inspection helper assembly provider');
+    this.#load=load; this.#assemblyProvider=options.assembly;
   }
+  /** The compiled helper this prepared inspection runs, for a supervisor to reuse; null until ready. */
+  assembly() { return this.#state==='READY' ? this.#assembly : null; }
   registerCleanup(register) {
     if (this.#state!=='NEW' || this.#registered || typeof register!=='function') throw Error('Inspection cleanup registration phase');
     register(deadline=>this.closeInspection(deadline)); this.#registered=true;
@@ -103,13 +120,14 @@ export class WindowsBirthInspectionOwner {
   }
   async #prepareOnce(deadline) {
     try {
-      const loaded=await until(this.#load(),deadline,'Inspection assets');
+      const loaded=await until(this.#load(this.#assemblyProvider),deadline,'Inspection assets');
       if (this.#state!=='PREPARING' || performance.now()>=deadline) throw Error('Inspection preparation retired');
       this.#session=new loaded.Session(loaded.config);
       this.#session.registerCleanup(cleanup=>{this.#cleanup=cleanup;});
       const session=this.#session, lease=await session.prepare(deadline);
       if (this.#state!=='PREPARING' || !session.validLease(lease) || performance.now()>=deadline) throw Error('Inspection preparation retired');
       this.#lease=lease;
+      this.#assembly=loaded.config?.binary ?? null;
       const ready=()=>this.#state==='READY' && session.validLease(lease);
       const sync=(pid,platform,attemptMs=2000)=>{
         if (platform!=='windows' || !ready() || !Number.isFinite(attemptMs) || attemptMs<=0) return unknown();

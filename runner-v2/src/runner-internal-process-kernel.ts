@@ -76,6 +76,8 @@ export function createRunnerInternalProcessKernel(options: {
   readonly platform?: NodeJS.Platform;
   /** Deterministic backend seam for focused fault injection; production omits it. */
   readonly backend?: ProcessBackend;
+  /** Windows: the Runner's own birth helper directory, reused across starts (NativeOwnedProcessBackendOptions). */
+  readonly windowsBirthHelperDirectory?: string;
 }): RunnerInternalProcessKernel {
   const stateDirectory = resolve(options.stateDirectory);
   const platform = options.platform ?? process.platform;
@@ -83,6 +85,7 @@ export function createRunnerInternalProcessKernel(options: {
     platform === "win32"
       ? createWindowsProcessBackend({
           stateDirectory,
+          ...(options.windowsBirthHelperDirectory === undefined ? {} : { windowsBirthHelperDirectory: options.windowsBirthHelperDirectory }),
           jobObjects: "unavailable",
           replayCapacityChunks: 16,
           replayCapacityBytes: 256 * 1024,

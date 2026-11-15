@@ -2,7 +2,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -334,6 +334,262 @@ async function compileJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssem
     return { path: dllPath, sha256 };
   } catch {
     return null;
+  }
+}
+
+/** The Windows birth inspection helper, compiled on this machine from its hash-pinned source. */
+export interface WindowsBirthHelperAssembly { readonly path: string; readonly sha256: string; readonly sourceSha256: string }
+interface WindowsBirthHelperBuild { readonly bytes: Buffer; readonly sha256: string; readonly sourceSha256: string }
+// The name the inspection loader and session accept (windows-birth-inspection.mjs, windows-birth/session.mjs).
+const BIRTH_HELPER_FILENAME = "helper.exe";
+// Windows' own C# compiler, part of the in-box .NET Framework 4.8: a fixed path, never a PATH or current-directory
+// lookup. It compiles C# 5 against the CLR 4 BCL, which is what helper-live.cs targets.
+const WINDOWS_CSC = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe";
+const WINDOWS_SYSTEM32 = "C:\\Windows\\System32";
+/**
+ * The flags of the helper.exe that used to ship: a windowless program (never a console of its own), x64, optimized,
+ * no debug file, no csc.rsp, and only these three framework references. Warnings are not errors here: this compiles
+ * against the machine's own framework, which a later update may change, and a warning must not stop inspection. CI
+ * keeps the source warning-free with these flags and `/warnaserror+` (windows-birth-assembly.test.ts).
+ */
+export const WINDOWS_BIRTH_HELPER_COMPILE_FLAGS: readonly string[] = Object.freeze([
+  "/nologo", "/noconfig", "/target:winexe", "/platform:x64", "/optimize+", "/debug-", "/warn:4", "/utf8output",
+  "/reference:System.dll", "/reference:System.Core.dll", "/reference:System.Security.dll",
+]);
+// Everything besides the source that decides the compiled program. A recorded exe is reused only for the same source
+// and the same recipe, so a change to the compiler path or flags compiles again even when helper-live.cs is unchanged.
+const BIRTH_HELPER_RECIPE_SHA256 = createHash("sha256")
+  .update(JSON.stringify({ compiler: WINDOWS_CSC, flags: WINDOWS_BIRTH_HELPER_COMPILE_FLAGS })).digest("hex");
+const BIRTH_HELPER_RECORD_MAX_BYTES = 4096;
+// The kernel's own `\SystemRoot` link to the running Windows directory, read without the environment. Where Windows
+// lives elsewhere, `C:\Windows` may be an ordinary folder any local user could have created, so the compiler there is
+// never run.
+const SYSTEM_ROOT_LINK = "\\\\?\\GLOBALROOT\\SystemRoot";
+// A new exe can be held by an antivirus scan for a moment, as a new Runner bundle is (self-update.ts): about 4.5 s.
+const BIRTH_HELPER_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800, 1000, 1000, 1000];
+// As the inspection loader requires of its installation: a local drive, never a share, where another writer or a
+// client cache could change the helper between its digest check and its start.
+function assertLocalBirthPath(path: string, label: string): void {
+  if (!/^[A-Za-z]:\\/.test(path)) throw new Error(`Windows birth helper ${label} must be on a local drive: ${path}`);
+}
+// Measured one-time compile of helper-live.cs on Windows 10: 90-96 ms warm and 306 ms on a first run. The ceiling is
+// the Job host's compile ceiling; each caller also has its own preparation deadline.
+const BIRTH_HELPER_COMPILE_TIMEOUT_MS = JOB_HOST_COMPILE_TIMEOUT_MS;
+const birthHelperBuilds = new Map<string, Promise<WindowsBirthHelperBuild>>();
+
+// One record per build in the birth directory: the digest of the exe compiled from one source with one recipe.
+const BIRTH_HELPER_RECORD_SCHEMA = "aiboard-windows-birth-helper-record-v1";
+
+/** The Runner's own Windows birth helper directory under its state directory in the per-user AIBoard home. */
+export function windowsBirthHelperDirectory(runnerStateDirectory: string): string {
+  return join(runnerStateDirectory, "windows-birth-helper");
+}
+
+/** How a process backend places its birth helper. */
+export interface WindowsBirthHelperPlacementOptions {
+  /**
+   * Reuse an intact recorded exe across Runner starts instead of compiling. Only for a state directory the Runner was
+   * given in the per-user AIBoard home, which is trusted as the installation is. Never for a shared default such as
+   * one under TEMP, where another local user could have planted a record and an exe. Off by default.
+   */
+  readonly reuseRecorded?: boolean;
+}
+
+/**
+ * The birth helper for one process backend, in that backend's own state directory: the exe at
+ * `<state>/birth/<exe digest prefix>/helper.exe`, and, with `reuseRecorded`, `<state>/birth/build-<build key>.json`,
+ * which records the digest of the exe compiled from this source with this recipe (compiler path and flags). The state
+ * directory outlives the Runner, as the supervisors that run this helper may.
+ *
+ * With `reuseRecorded`, a Runner start uses the recorded exe without compiling when it is intact. Intact means the
+ * record names this exact source and recipe, and the file is a regular, singly linked, canonical file, alone in its
+ * directory, with the recorded digest. The state directory is trusted as the installation is: anyone who can rewrite it
+ * can rewrite the Runner's own code, whose pins main's shipped helper relied on. So the record is this helper's pin, and
+ * a record and exe planted there would be used until the source or recipe changes, just as rewritten Runner code would.
+ *
+ * Otherwise the source, checked against its pin, is compiled (at most once per Runner process), placed in a new digest
+ * directory and, with `reuseRecorded`, recorded. That happens when the source or recipe changes, or the exe is missing
+ * or changed. The compiler is not deterministic, so a new compile never rewrites the exe a supervisor started by an
+ * earlier Runner may still run. The inspection loader checks the directory holds only the helper; the session refuses a
+ * `.config` beside it, a linked path component, and a file whose held descriptor digest differs, before it starts the
+ * helper. Any mismatch or failure throws, and inspection then fails closed.
+ */
+export async function provideWindowsBirthHelperAssembly(
+  stateDirectory: string, source: Uint8Array, sourceSha256: string, options: WindowsBirthHelperPlacementOptions = {},
+): Promise<WindowsBirthHelperAssembly> {
+  if (process.platform !== "win32") throw new Error("Windows birth helper compile requires Windows.");
+  if (!/^[0-9a-f]{64}$/.test(sourceSha256) || createHash("sha256").update(source).digest("hex") !== sourceSha256)
+    throw new Error("Windows birth helper source does not match its pin.");
+  mkdirSync(join(stateDirectory, "birth"), { recursive: true, mode: 0o700 });
+  // Canonical (long-name) form: the session refuses any path whose canonical form differs, an 8.3 TEMP included.
+  const birth = realpathSync.native(join(stateDirectory, "birth"));
+  assertLocalBirthPath(birth, "state directory");
+  // A .NET Framework program is started from a long path only where long paths are enabled; never depend on that.
+  // Checked before the compile, which works under this directory and whose failure is remembered for the process.
+  const expectedLength = Math.max(birthHelperPath(birth, "0".repeat(64)).length, join(birth, ".compile-XXXXXX", "helper-live.cs").length);
+  if (expectedLength >= 260) throw new Error(`Windows birth helper path is too long to start (${expectedLength} characters) under: ${birth}`);
+  const reuse = options.reuseRecorded === true;
+  const buildKey = createHash("sha256").update(`${sourceSha256}\n${BIRTH_HELPER_RECIPE_SHA256}`).digest("hex").slice(0, 16);
+  const recordPath = join(birth, `build-${buildKey}.json`);
+  const recorded = reuse ? readBirthHelperRecord(recordPath, sourceSha256) : undefined;
+  if (recorded !== undefined && birthHelperIntact(birth, recorded))
+    return Object.freeze({ path: birthHelperPath(birth, recorded), sha256: recorded, sourceSha256 });
+  // The compile works inside this local directory, never TEMP, which may be on a share.
+  const build = await compileWindowsBirthHelper(source, sourceSha256, birth);
+  const path = await placeBirthHelper(birth, build);
+  // Best effort: without its record the next start compiles again, which is slower but never unsafe.
+  if (reuse && recorded !== build.sha256) {
+    try { await writeBirthHelperRecord(birth, recordPath, sourceSha256, build.sha256); } catch {}
+  }
+  return Object.freeze({ path, sha256: build.sha256, sourceSha256 });
+}
+
+function birthHelperPath(birth: string, sha256: string): string {
+  return join(birth, sha256.slice(0, 16), BIRTH_HELPER_FILENAME);
+}
+
+/** The recorded exe digest for exactly this source and recipe, or undefined for a missing, foreign or malformed record. */
+function readBirthHelperRecord(recordPath: string, sourceSha256: string): string | undefined {
+  try {
+    const stat = lstatSync(recordPath);
+    if (!stat.isFile() || stat.size > BIRTH_HELPER_RECORD_MAX_BYTES) return undefined;
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as Record<string, unknown>;
+    if (!record || typeof record !== "object" || Array.isArray(record) ||
+        Object.keys(record).sort().join(",") !== "recipeSha256,schema,sha256,sourceSha256" || record.schema !== BIRTH_HELPER_RECORD_SCHEMA ||
+        record.sourceSha256 !== sourceSha256 || record.recipeSha256 !== BIRTH_HELPER_RECIPE_SHA256 ||
+        typeof record.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sha256)) return undefined;
+    return record.sha256;
+  } catch { return undefined; }
+}
+
+/** Whether the recorded exe is exactly what the loader and session accept, with the recorded digest. */
+function birthHelperIntact(birth: string, sha256: string): boolean {
+  const path = birthHelperPath(birth, sha256);
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.nlink !== 1) return false;
+    if (JSON.stringify(readdirSync(dirname(path))) !== JSON.stringify([BIRTH_HELPER_FILENAME])) return false;
+    if (realpathSync.native(path) !== path) return false;
+    return createHash("sha256").update(readFileSync(path)).digest("hex") === sha256;
+  } catch { return false; }
+}
+
+async function writeBirthHelperRecord(birth: string, recordPath: string, sourceSha256: string, sha256: string): Promise<void> {
+  const temporary = join(birth, `.${randomUUID()}.tmp`);
+  const record = { schema: BIRTH_HELPER_RECORD_SCHEMA, sourceSha256, recipeSha256: BIRTH_HELPER_RECIPE_SHA256, sha256 };
+  writeFileSync(temporary, `${JSON.stringify(record)}\n`, { flag: "wx", mode: 0o600 });
+  try { await renameBirthHelperFile(temporary, recordPath); }
+  catch (error) { rmSync(temporary, { force: true }); throw error; }
+}
+
+/** Places a build's bytes at `<birth>/<digest prefix>/helper.exe` and returns that canonical path. */
+async function placeBirthHelper(birth: string, build: WindowsBirthHelperBuild): Promise<string> {
+  const path = birthHelperPath(birth, build.sha256);
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  // Each compile has its own digest, so this directory is this build's alone. Configuration, DLL probing and .local
+  // redirection beside the helper are never selected: anything else here fails closed instead of being removed.
+  const sidecars = readdirSync(directory).filter((name) => name.toLowerCase() !== BIRTH_HELPER_FILENAME);
+  if (sidecars.length > 0) throw new Error(`Unexpected Windows birth helper sidecar: ${sidecars.slice(0, 4).join(", ")}`);
+  // The session accepts only a regular, singly linked file, so anything else here is removed and written again.
+  const placed = (): boolean => {
+    let stat;
+    try { stat = lstatSync(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+    if (!stat.isFile() || stat.nlink !== 1) { rmSync(path, { force: true }); return false; }
+    return createHash("sha256").update(readFileSync(path)).digest("hex") === build.sha256;
+  };
+  if (!placed()) {
+    // Written beside the digest directory, never inside it, then renamed into place.
+    const temporary = join(birth, `.${randomUUID()}.tmp`);
+    writeFileSync(temporary, build.bytes, { flag: "wx", mode: 0o700 });
+    try { await renameBirthHelperFile(temporary, path); }
+    catch (error) { rmSync(temporary, { force: true }); if (!placed()) throw error; }
+    if (!placed()) throw new Error("Windows birth helper changed after it was placed.");
+  }
+  // The digest directory or the helper must not be a link or junction to somewhere else.
+  if (realpathSync.native(path) !== path) throw new Error(`Windows birth helper path is not canonical: ${path}`);
+  return path;
+}
+
+async function renameBirthHelperFile(temporary: string, destination: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { renameSync(temporary, destination); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const wait = BIRTH_HELPER_RENAME_RETRY_DELAYS_MS[attempt];
+      if (wait === undefined || !code || !["EPERM", "EACCES", "EBUSY"].includes(code)) throw error;
+      await new Promise((resolveWait) => setTimeout(resolveWait, wait));
+    }
+  }
+}
+
+/**
+ * Compiles `windows-birth/helper-live.cs` into an exe with Windows' own C# compiler, at most once per Runner process
+ * and source, and keeps the bytes in memory. No binary ships with AIBoard. The compile runs in System32 with a minimal
+ * environment whose TEMP is its own private directory under `compileRoot` (the first caller's local, canonical birth
+ * directory), and without csc.rsp (`/noconfig`), so only the three named framework references are used. The compiler
+ * is not deterministic, so each compile has its own digest. As with the Job host's helper, a failed compile is
+ * remembered for the process lifetime: a retry would give a process alive at that moment a second chance to have its
+ * own bytes compiled and pinned.
+ */
+function compileWindowsBirthHelper(source: Uint8Array, sourceSha256: string, compileRoot: string): Promise<WindowsBirthHelperBuild> {
+  if (process.platform !== "win32") return Promise.reject(new Error("Windows birth helper compile requires Windows."));
+  if (!/^[0-9a-f]{64}$/.test(sourceSha256) || createHash("sha256").update(source).digest("hex") !== sourceSha256)
+    return Promise.reject(new Error("Windows birth helper source does not match its pin."));
+  const cached = birthHelperBuilds.get(sourceSha256);
+  if (cached) return cached;
+  const flight = compileWindowsBirthHelperExecutable(Buffer.from(source), sourceSha256, compileRoot);
+  birthHelperBuilds.set(sourceSha256, flight);
+  return flight;
+}
+
+/** Test-only: forget this process's birth helper builds, so the next call without an intact record compiles again. */
+export function resetWindowsBirthHelperBuildsForTests(): void {
+  birthHelperBuilds.clear();
+}
+
+async function compileWindowsBirthHelperExecutable(source: Buffer, sourceSha256: string, compileRoot: string): Promise<WindowsBirthHelperBuild> {
+  const generationDir = realpathSync.native(mkdtempSync(join(compileRoot, ".compile-")));
+  try {
+    assertLocalBirthPath(generationDir, "compile directory");
+    // Case-insensitive, as Windows names are: an upgraded install may be `C:\WINDOWS`.
+    if (realpathSync.native(SYSTEM_ROOT_LINK).toLowerCase() !== "c:\\windows" || realpathSync.native(WINDOWS_CSC).toLowerCase() !== WINDOWS_CSC.toLowerCase())
+      throw new Error("Windows' own C# compiler is not at its fixed path in the running Windows directory.");
+    const sourcePath = join(generationDir, "helper-live.cs");
+    const exePath = join(generationDir, BIRTH_HELPER_FILENAME);
+    writeFileSync(sourcePath, source, { flag: "wx", mode: 0o600 });
+    const environment = {
+      SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", PATH: WINDOWS_SYSTEM32, PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      TEMP: generationDir, TMP: generationDir,
+    };
+    const outcome = await new Promise<{ code: number | null; output: string; error?: Error }>((resolvePromise) => {
+      let settled = false; let output = "";
+      const finish = (code: number | null, error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        resolvePromise({ code, output, ...(error ? { error } : {}) });
+      };
+      const child = spawn(WINDOWS_CSC, [
+        ...WINDOWS_BIRTH_HELPER_COMPILE_FLAGS,
+        `/out:${exePath}`, sourcePath,
+      ], { cwd: WINDOWS_SYSTEM32, env: environment, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], timeout: BIRTH_HELPER_COMPILE_TIMEOUT_MS, killSignal: "SIGKILL" });
+      // csc reports errors on stdout.
+      const collect = (chunk: Buffer): void => { if (output.length < 4096) output += chunk.toString("utf8"); };
+      child.stdout?.on("data", collect);
+      child.stderr?.on("data", collect);
+      child.once("error", (error) => finish(null, error));
+      child.once("close", (code) => finish(code));
+    });
+    if (outcome.code !== 0)
+      throw new Error(`Windows birth helper compile failed (exit ${String(outcome.code)}): ${outcome.output.slice(0, 1024)}`, outcome.error ? { cause: outcome.error } : undefined);
+    if (createHash("sha256").update(readFileSync(sourcePath)).digest("hex") !== sourceSha256)
+      throw new Error("Windows birth helper source changed during its compile.");
+    const bytes = readFileSync(exePath);
+    if (bytes.byteLength < 512) throw new Error("Windows birth helper compile produced no program.");
+    return Object.freeze({ bytes, sha256: createHash("sha256").update(bytes).digest("hex"), sourceSha256 });
+  } finally {
+    try { rmSync(generationDir, { recursive: true, force: true }); } catch {}
   }
 }
 
