@@ -808,16 +808,14 @@ function withCurrentFenceEffect(ownerId, fencingToken, effect) {
     const holder = readFenceHolderForEffect();
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
       throw new Error("Portable fence holder identity is invalid.");
-    const lockOptions = inspectionOwner
-      ? inspectionOwner.fenceOptions(Date.now() + OWNED_FENCE_DEFAULT_DEADLINE_MS)
-      : { holderPid: holder.holderPid, holderBirth: holder.holderBirth };
-    if (!sameBirth(lockOptions.holderBirth, holder.holderBirth)) throw new Error("Portable fence holder birth changed.");
+    // Windows: the record must still name this process's own birth (learned once). The lock itself needs neither.
+    if (inspectionOwner && !sameBirth(inspectionOwner.selfBirth(Date.now() + OWNED_FENCE_DEFAULT_DEADLINE_MS), holder.holderBirth))
+      throw new Error("Portable fence holder birth changed.");
     return runPortableFenceEffectSync({
       lockPath: lock,
       expectedFence: { ownerId, fencingToken },
       readCurrentFence: readCurrentFenceStrict,
       effect,
-      lockOptions,
     });
   } catch (error) {
     return { status: "unavailable", cause: "authority", error: new PortableAuthorityUnavailableError("Portable fence holder identity is unavailable.", { cause: error }) };

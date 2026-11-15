@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
 
@@ -14,7 +16,7 @@ import {
   resumePortableOutputRetirement,
   retirePortableOutputAcknowledgement,
   runPortableFenceEffectSync,
-  runPortableFenceSnapshotSync,
+  runPortableFenceSnapshot,
   settlePortableSupervisorCommand,
 } from "../src/portable-process-protocol.mjs";
 import { createPortableProcessChannelProvider } from "../src/portable-process-channel.js";
@@ -449,7 +451,7 @@ ${extractFunction(supervisorSource, "handleControl")}`, context);
   }
 });
 
-test("channel snapshot does not classify an ACK retirement between filename list and checkpoint read as corruption", () => {
+test("channel snapshot does not classify an ACK retirement between filename list and checkpoint read as corruption", async () => {
   const metadata = outputMetadata();
   const bytes = Buffer.from("data");
   const context = vm.createContext({
@@ -486,8 +488,8 @@ test("channel snapshot does not classify an ACK retirement between filename list
     },
   };
 
-  assert.doesNotThrow(
-    () => (context.outputFiles as (this: typeof channel) => unknown).call(channel),
+  await assert.doesNotReject(
+    async () => await (context.outputFiles as (this: typeof channel) => Promise<unknown>).call(channel),
     "a valid concurrent filename/checkpoint transition must be retried or serialized",
   );
 });
@@ -617,10 +619,10 @@ test("portable fence effect distinguishes missing authority from an indeterminat
   } finally { removeFixture(fixture.root); }
 });
 
-test("portable read snapshot reports corrupt evidence as blocked rather than an indeterminate effect", () => {
+test("portable read snapshot reports corrupt evidence as blocked rather than an indeterminate effect", async () => {
   const fixture = protocolFixture("snapshot-outcomes");
   try {
-    const result = runPortableFenceSnapshotSync({
+    const result = await runPortableFenceSnapshot({
       lockPath: fixture.lockPath,
       expectedFence: oldFence,
       readCurrentFence: () => oldFence,
@@ -740,9 +742,12 @@ test("portable snapshot validates one coherent checkpoint, retained suffix, and 
   } finally { removeFixture(fixture.root); }
 });
 
-test("portable snapshot and ACK retirement share the real owned lock and never expose a torn state", () => {
+// The Runner's snapshot is async (FL3); the retirement is the supervisor's sync effect, in the supervisor's own process.
+// While that retirement holds the lock between deleting the output and advancing the checkpoint, a snapshot cannot
+// enter: a short one reports coordination, and a long one settles only after the retirement, with all of it.
+test("portable snapshot and ACK retirement share the real owned lock and never expose a torn state", async () => {
   const fixture = outputFixture("real-lock-snapshot-retirement");
-  const snapshot = (deadlineMs = 2_000) => runPortableFenceSnapshotSync({
+  const snapshot = (deadlineMs = 2_000) => runPortableFenceSnapshot({
     lockPath: fixture.lockPath,
     expectedFence: oldFence,
     readCurrentFence: () => readFence(fixture),
@@ -753,36 +758,66 @@ test("portable snapshot and ACK retirement share the real owned lock and never e
     }),
     lockOptions: { deadlineMs, retryDelayMs: 1 },
   });
+  const assertRetired = (outcome: Awaited<ReturnType<typeof snapshot>> | undefined, label: string) => {
+    assert.equal(outcome?.status, "applied", label);
+    if (outcome?.status === "applied") {
+      assert.deepEqual(outcome.value.output, [], label);
+      assert.deepEqual(outcome.value.acknowledgements, [], label);
+      assert.deepEqual(outcome.value.checkpoint.stdout, { sequence: 1, endOffset: 4 }, label);
+    }
+  };
   try {
-    const before = snapshot();
+    const before = await snapshot();
     assert.equal(before.status, "applied");
     if (before.status === "applied") {
       assert.deepEqual(before.value.output.map((entry) => entry.metadata.sequence), [1]);
       assert.deepEqual(before.value.checkpoint.stdout, { sequence: 0, endOffset: 0 });
     }
-    let during: ReturnType<typeof snapshot> | undefined;
-    const retirement = runPortableFenceEffectSync({
-      lockPath: fixture.lockPath,
-      expectedFence: oldFence,
-      readCurrentFence: () => readFence(fixture),
-      effect: () => retirePortableOutputAcknowledgement({
-        ...fixture.retirement,
-        afterBoundary: (boundary) => {
-          if (boundary === "output") during = snapshot(25);
-        },
-      }),
-    });
-    assert.equal(retirement.status, "applied");
-    assert.equal(during?.status, "unavailable", "a reader cannot enter between output deletion and checkpoint publication");
-    if (during?.status === "unavailable") assert.equal(during.cause, "coordination");
 
-    const after = snapshot();
-    assert.equal(after.status, "applied");
-    if (after.status === "applied") {
-      assert.deepEqual(after.value.output, []);
-      assert.deepEqual(after.value.acknowledgements, []);
-      assert.deepEqual(after.value.checkpoint.stdout, { sequence: 1, endOffset: 4 });
+    const resumePath = join(fixture.root, "resume-retirement");
+    const supervisor = spawn(process.execPath, [
+      fileURLToPath(new URL("./fixtures/portable-retirement-pause.mjs", import.meta.url)),
+      fixture.lockPath, fixture.fencePath, JSON.stringify(fixture.retirement), resumePath,
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const messages: Array<Record<string, unknown>> = [];
+    let output = "";
+    const waiters: Array<() => void> = [];
+    supervisor.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      for (let newline = output.indexOf("\n"); newline >= 0; newline = output.indexOf("\n")) {
+        messages.push(JSON.parse(output.slice(0, newline)) as Record<string, unknown>);
+        output = output.slice(newline + 1);
+      }
+      for (const wake of waiters.splice(0)) wake();
+    });
+    let exited = false;
+    supervisor.once("close", () => { exited = true; for (const wake of waiters.splice(0)) wake(); });
+    const message = async (state: string) => {
+      for (;;) {
+        const found = messages.find((entry) => entry.state === state);
+        if (found) return found;
+        if (exited) throw new Error(`the retirement process exited before "${state}": ${JSON.stringify(messages)}`);
+        await new Promise<void>((resolvePromise) => waiters.push(resolvePromise));
+      }
+    };
+    try {
+      await message("paused");
+      const blocked = await snapshot(25);
+      assert.equal(blocked.status, "unavailable", "a reader cannot enter between output deletion and checkpoint publication");
+      if (blocked.status === "unavailable") assert.equal(blocked.cause, "coordination");
+      let settled = false;
+      const late = snapshot(20_000);
+      void late.then(() => { settled = true; });
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+      assert.equal(settled, false, "a snapshot asked for mid-retirement waits for it");
+      writeFileSync(resumePath, "");
+      assert.equal((await message("retired")).status, "applied");
+      assertRetired(await late, "asked for mid-retirement, it reads the whole retirement");
+    } finally {
+      if (!exited) supervisor.kill("SIGKILL");
+      if (!exited) await new Promise((resolvePromise) => supervisor.once("close", resolvePromise));
     }
+    assertRetired(await snapshot(), "after");
   } finally { removeFixture(fixture.root); }
 });
 
@@ -824,7 +859,7 @@ test("portable attach validates inside its existing effect lock and snapshots on
       }),
     });
     const channel = await provider.acquire(syntheticBinding(fixture.root, fixture.nonce), oldFence);
-    assert.deepEqual(channel.retainedWindow().map((entry) => entry.sequence), [1]);
+    assert.deepEqual((await channel.retainedWindow()).map((entry) => entry.sequence), [1]);
     const delivered = new Promise<void>((resolve) => {
       const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata) => {
         assert.equal(inSnapshot, false, "the output snapshot lock must release before invoking the consumer");
@@ -888,8 +923,9 @@ function compiledFunction(source: string, name: string): string {
 }
 
 function compiledClassMethod(source: string, name: string): string {
-  const marker = `private ${name}(`;
-  const start = source.indexOf(marker);
+  // A method of either kind: `private name(` or (FL3's snapshot readers) `private async name(`.
+  const starts = [`private ${name}(`, `private async ${name}(`].map((marker) => source.indexOf(marker)).filter((index) => index >= 0);
+  const start = starts.length === 0 ? -1 : Math.min(...starts);
   if (start < 0) throw new Error(`missing method ${name}`);
   const statementCandidates = [source.indexOf("\n    let names:", start), source.indexOf("\n    return ", start)].filter((index) => index >= 0);
   const firstStatement = Math.min(...statementCandidates);

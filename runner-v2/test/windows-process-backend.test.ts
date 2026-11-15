@@ -366,13 +366,17 @@ test("portable and Job fence owners share the crash-recoverable exact-identity l
   const supervisor = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), "utf8");
   const job = readFileSync(join(process.cwd(), "runner-v2", "src", "windows-job-process-host.ts"), "utf8");
   const protocol = readFileSync(new URL("../src/portable-process-protocol.mjs", import.meta.url), "utf8");
-  assert.equal((native.match(/withOwnedFenceLockSync\(lock,/g) ?? []).length, 2);
+  // FL3: the Runner's claim and effect take the same lock through the async driver, and none of its claims is sync.
+  assert.equal((native.match(/withOwnedFenceLock\(lock,/g) ?? []).length, 2);
+  assert.doesNotMatch(native, /withOwnedFenceLockSync/);
   // C1 delegates the supervisor's transactions to the shared protocol layer.
   // Follow that layer to the same lock authority rather than requiring the
   // superseded direct call in the supervisor itself.
   assert.equal((supervisor.match(/runPortableFenceEffectSync\(\{/g) ?? []).length, 1);
   assert.match(supervisor, /from "\.\/portable-process-protocol\.mjs"/);
-  assert.equal((protocol.match(/withOwnedFenceLockSync\(options\.lockPath,/g) ?? []).length, 2);
+  // The supervisor's effect (sync, in its own process) and the Runner's snapshot (async) take the same lock path.
+  assert.equal((protocol.match(/withOwnedFenceLockSync\(options\.lockPath,/g) ?? []).length, 1);
+  assert.equal((protocol.match(/withOwnedFenceLock\(options\.lockPath,/g) ?? []).length, 1);
   assert.match(protocol, /from "\.\/owned-fence-lock\.mjs"/);
   assert.equal((job.match(/withOwnedFenceLock\(lockPath,/g) ?? []).length, 2);
   for (const source of [native, supervisor, protocol, job]) assert.doesNotMatch(source, /openSync\(lock(?:Path)?,\s*["']wx["']/);
@@ -1711,12 +1715,8 @@ function windowsBirth(pid: number): string {
 function publishWindowsFixtureFenceAuthority(directory: string, nonce: string, holderPid: number): void {
   const holderBirth = windowsBirth(holderPid);
   writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid, holderBirth }));
-  // The empty lock file production creates with its first claim (the holder fields are ignored since FL2).
-  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
-    holderPid,
-    holderBirth,
-    inspectHolder: () => "same",
-  });
+  // The empty lock file production creates with its first claim.
+  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined);
   writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
 }
 

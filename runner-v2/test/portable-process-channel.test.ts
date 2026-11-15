@@ -14,7 +14,7 @@ import { WindowsProcessBackend } from "../src/windows-process-backend.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBackendBinding, type ProcessEffectFence } from "../src/process-backend.js";
 import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
 import { createPortableProcessChannelProvider, type PortableChannelAuthority } from "../src/portable-process-channel.js";
-import { retirePortableOutputAcknowledgement, runPortableFenceEffectSync, runPortableFenceSnapshotSync } from "../src/portable-process-protocol.mjs";
+import { retirePortableOutputAcknowledgement, runPortableFenceEffectSync, runPortableFenceSnapshot } from "../src/portable-process-protocol.mjs";
 import { OwnedFenceContentionError, OwnedFenceLockUnavailableError } from "../src/owned-fence-lock.mjs";
 
 for (const mode of ["replacement", "removal", "detach"] as const) {
@@ -899,13 +899,13 @@ async function settlementFixture() {
         if (result.status !== "applied") throw new Error("effect refused");
         return result.value;
       },
-      snapshot: (read) => {
+      snapshot: async (read) => {
         if (coordinationBlips > 0) {
           coordinationBlips -= 1;
           return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("transient sidecar") };
         }
         if (coordination) return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("held lock") };
-        const result = runPortableFenceSnapshotSync({ lockPath: join(root, "effect.lock"), expectedFence: fence,
+        const result = await runPortableFenceSnapshot({ lockPath: join(root, "effect.lock"), expectedFence: fence,
           readCurrentFence: () => current, read });
         if (takeoverAfterSnapshot) current = { ownerId: "successor", fencingToken: 8 };
         return result;
@@ -946,7 +946,7 @@ test("portable channel ignores only the exact supervisor atomic output publicati
   try {
     writeFileSync(exactTemporary, "partial authenticated publication");
     const channel = await provider.acquire(binding, fence);
-    assert.deepEqual(channel.retainedWindow(), []);
+    assert.deepEqual(await channel.retainedWindow(), []);
     await channel.detach();
     writeFileSync(join(root, "channel/output/stdout-000000000001.json.999.tmp"), "foreign publication");
     await assert.rejects(provider.acquire(binding, fence), /output filename is invalid/i);

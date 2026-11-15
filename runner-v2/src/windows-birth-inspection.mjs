@@ -17,7 +17,6 @@ const ASSETS = Object.freeze({
 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const unknown = () => ({state:'unknown'});
-const normalize = birth => birth.replace(/(\.\d{6})\d+(Z)$/, '$1$2');
 const inspection = result => result?.status === 'same' && typeof result.fingerprint === 'string'
   ? {state:'present',fingerprint:result.fingerprint}
   : result?.status === 'absent' ? {state:'absent'} : unknown();
@@ -78,7 +77,7 @@ async function loadInstalledSession() {
 
 export class WindowsBirthInspectionOwner {
   #state='NEW'; #registered=false; #load; #session=null; #lease=null;
-  #preparePromise=null; #closePromise=null; #cleanup=null; #operations=null; #holderBirth=null;
+  #preparePromise=null; #closePromise=null; #cleanup=null; #operations=null; #selfBirth=null;
   #observationSequence=0; #observations=[]; #observationsDropped=0; #diagnosticFailures=0;
   // The loader seam is for trusted injected tests, never runtime user configuration.
   constructor(load=loadInstalledSession) {
@@ -141,22 +140,16 @@ export class WindowsBirthInspectionOwner {
     if (this.#state!=='READY' || !this.#operations) throw Error('Inspection must be explicitly prepared');
     return this.#operations;
   }
-  fenceOptions(absoluteDeadline=Date.now()+2000) {
-    if(!Number.isFinite(absoluteDeadline) || absoluteDeadline<=Date.now()) throw Error('Owned fence inspection deadline exhausted');
+  /** This process's own birth identity, learned once through the prepared inspection. */
+  selfBirth(absoluteDeadline=Date.now()+2000) {
+    if(!Number.isFinite(absoluteDeadline) || absoluteDeadline<=Date.now()) throw Error('Self birth inspection deadline exhausted');
     const operations=this.operations();
-    if (!this.#holderBirth) {
+    if (!this.#selfBirth) {
       const result=operations.inspectProcessBirth(process.pid,'windows',absoluteDeadline-Date.now());
-      if (result.state!=='present') throw Error('Owned fence holder birth is unavailable');
-      this.#holderBirth=result.fingerprint;
+      if (result.state!=='present') throw Error('This process\'s birth identity is unavailable');
+      this.#selfBirth=result.fingerprint;
     }
-    const remaining=absoluteDeadline-Date.now();
-    if(remaining<=0) throw Error('Owned fence inspection deadline exhausted');
-    return Object.freeze({holderPid:process.pid,holderBirth:this.#holderBirth,deadlineMs:Math.ceil(remaining),deadlineAt:absoluteDeadline,inspectHolder:(pid,birth,remainingMs=2000)=>{
-      const budget=Math.min(remainingMs,absoluteDeadline-Date.now());
-      if(!Number.isFinite(budget) || budget<=0)return 'unknown';
-      const result=operations.inspectProcessBirth(pid,'windows',budget);
-      return result.state==='absent' ? 'absent' : result.state==='present' ? normalize(result.fingerprint)===normalize(birth) ? 'same' : 'birth_mismatch' : 'unknown';
-    }});
+    return this.#selfBirth;
   }
   async closeInspection(absoluteDeadline=Date.now()+5000) {
     if (this.#state==='CLOSED') return;

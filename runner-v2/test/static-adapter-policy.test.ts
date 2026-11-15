@@ -16,7 +16,6 @@ const allowedRawProcessBoundaries = new Set([
   "src/windows-process-semantic-probes.ts",
   "src/windows-birth/session.mjs",
   "src/managed-process-supervisor.mjs",
-  "src/owned-fence-lock.mjs",
   "src/portable-process-child.mjs",
   "src/portable-process-posix-control.mjs",
   "src/portable-process-supervisor.mjs",

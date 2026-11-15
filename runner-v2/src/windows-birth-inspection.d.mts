@@ -1,5 +1,4 @@
 import type { NativeProcessOperations } from './native-process-backend.js';
-import type { OwnedFenceLockOptions } from './owned-fence-lock.mjs';
 
 export class WindowsBirthInspectionOwner {
   constructor();
@@ -7,6 +6,7 @@ export class WindowsBirthInspectionOwner {
   prepareInspection(absoluteDeadline?: number): Promise<void>;
   closeInspection(absoluteDeadline?: number): Promise<void>;
   operations(): Pick<NativeProcessOperations,'inspectProcessBirth'|'inspectProcessBirthAsync'|'inspectProcessBirths'>;
-  fenceOptions(absoluteDeadline?: number): OwnedFenceLockOptions;
+  /** This process's own birth identity, learned once through the prepared inspection. */
+  selfBirth(absoluteDeadline?: number): string;
   receipt(): {readonly state:string;readonly session:unknown};
 }

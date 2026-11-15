@@ -119,17 +119,17 @@ jobs:
           runner-v2/test/handoff-not-verified.test.ts
           runner-v2/test/final-verification-managed-authority.test.ts
           runner-v2/test/repository-validation-config.test.ts
-          runner-v2/test/owned-fence-self-birth.test.ts
           runner-v2/test/final-check-browser-ownership.test.ts
           runner-v2/test/remote-path-syntax-first.test.ts
           runner-v2/test/remote-image-content.test.ts
-      # FL2: the OS-lock core on every host (about 10 s); its own step so the claim p95 it reports is not measured
+      # FL2/FL3: the OS-lock core and the Runner's async claims on every host (about 15 s); its own step so the claim p95 it reports is not measured
       # under the parallel contract files above.
       - name: Run owned fence lock contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/owned-fence-lock.test.ts
           runner-v2/test/owned-fence-close-guard.test.ts
+          runner-v2/test/runner-async-fence-claims.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

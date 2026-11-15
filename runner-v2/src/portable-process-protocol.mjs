@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import { withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
 const RETIREMENT_PROTOCOL = "aiboard-portable-output-retirement/v1";
 const OUTPUT_NAME = /^(stdout|stderr)-(\d{12})\.json$/;
@@ -42,9 +42,13 @@ export function runPortableFenceEffectSync(options) {
   }
 }
 
-export function runPortableFenceSnapshotSync(options) {
+/**
+ * The Runner's fenced read: async, so it never blocks the Runner's event loop while it waits for the lock (FL3). The
+ * supervisor and the POSIX child, which run in their own processes, keep the sync runPortableFenceEffectSync.
+ */
+export async function runPortableFenceSnapshot(options) {
   try {
-    return withOwnedFenceLockSync(options.lockPath, () => {
+    return await withOwnedFenceLock(options.lockPath, () => {
       let current;
       try { current = options.readCurrentFence(); }
       catch (error) {

@@ -32,9 +32,6 @@ const deterministicPrTests = [
   "runner-v2/test/final-verification-managed-authority.test.ts",
   // VF9: this repository's aiboard-validation.json and the guide's example, read with the Runner's parser (no process, about 2 s).
   "runner-v2/test/repository-validation-config.test.ts",
-  // The owned fence lock's Windows self-birth preparation through withOwnedFenceLock, on a fake clock, plus the
-  // Windows Job host's wiring (about 1 s).
-  "runner-v2/test/owned-fence-self-birth.test.ts",
   // VF4b: a final browser check's processes share one exact owner, its tool lookup searches the launch's PATH, and a
   // failed step or an escaped browser fails it (no process; temporary git checkouts, about 20 s on Windows).
   "runner-v2/test/final-check-browser-ownership.test.ts",
@@ -117,7 +114,7 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   const ociStep = portable.indexOf("      - name: Run OCI canonical path contracts");
   assert.ok(ociStep > 0, "Public OCI path contracts require their own host-birth inspection step.");
   assert.equal(portable.slice(0, ociStep).includes("runner-v2/test/oci-canonical-paths.test.ts"), false,
-    "Native fence self-birth inspection must not overlap the concurrent deterministic files.");
+    "Host birth inspection must not overlap the concurrent deterministic files.");
   assert.match(portable.slice(ociStep), /--test --test-concurrency=1\s+runner-v2\/test\/oci-canonical-paths\.test\.ts/);
   for (const testPath of posixHostedTests) {
     assert.equal(source.includes(testPath), true, `Required POSIX PR CI omits ${testPath}.`);

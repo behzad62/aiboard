@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { prepareCurrentProcessBirthFingerprint, recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-path-limits.mjs";
 
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
@@ -395,10 +395,6 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
     this.platform = options.platform ?? process.platform;
-    // Every writer fence claim and effect of this host takes the owned fence lock with its 2 s default, and the
-    // first one in a process also needs this process's own birth identity, a cold powershell.exe start. Learn it
-    // now, off that path, as the portable backend prepares its inspection before coordination.
-    if (this.platform === "win32" && process.platform === "win32") void prepareCurrentProcessBirthFingerprint();
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
@@ -1028,8 +1024,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.assertJobOutputSettled(current, final);
         const releasedAt = this.clock();
         const candidate = { ...current, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
-        this.persist(candidate, true); this.records.set(processId, candidate);
-        releaseEffectPersisted = true;
+        // Persisted once the rename lands: a failure of the flush after it is the release's own failure, never a
+        // reason to finish the release from the record (the catch below does that only for a release not persisted).
+        this.persist(candidate, { afterRename: () => { this.records.set(processId, candidate); releaseEffectPersisted = true; } });
         return { ...this.snapshot(candidate), ownershipReleased: true };
       });
     } catch (error) {
@@ -1314,9 +1311,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   /**
    * `durable` is for the release record: since FL2 the lock file holds nothing, so `backendOwnershipReleasedAt` is the
    * only record that ownership was released. Its data is flushed before the rename and the renamed file after it
-   * (Node cannot open a directory on Windows, so that is as far as it reaches).
+   * (Node cannot open a directory on Windows, so that is as far as it reaches). `afterRename` runs once the record is
+   * in place, before that last flush.
    */
-  private persist(record: HostRecord, durable = false): void {
+  private persist(record: HostRecord, durable?: { readonly afterRename: () => void }): void {
     const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
     if (!durable) { writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination); return; }
     const content = Buffer.from(JSON.stringify(record, null, 2));
@@ -1326,7 +1324,12 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       fsyncSync(written);
     } finally { closeSync(written); }
     renameSync(temporary, destination);
-    const renamed = openSync(destination, "r+");
+    durable.afterRename();
+    this.flushRecord(record.processId);
+  }
+  /** Flushes a record file in place: the renamed release record, and again before a release is finished from it. */
+  private flushRecord(processId: string): void {
+    const renamed = openSync(this.containedProcessPath(processId, ".json"), "r+");
     try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
   private applyStatus(record: HostRecord, status: SupervisorStatus, persistRecord = true): void {
@@ -1434,6 +1437,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   }
   private async recoverReleasedFence(requestedProcessId: string, record: HostRecord, owner: WindowsJobOwnershipKey, expectedStartedAt: string, fence: WindowsJobWriterFence | undefined): Promise<void> {
     this.assertEmbeddedProcessId(requestedProcessId, record);
+    // The release record may be one whose flush after its rename failed: flush it before the release is finished.
+    try { this.flushRecord(requestedProcessId); }
+    catch (error) { throw new WindowsJobHostError("process_control_unavailable", `Windows Job release record cannot be flushed: ${String(error)}`); }
     const lockPath = this.containedProcessPath(requestedProcessId, ".fence.lock");
     const assertRevoked = (): void => {
       const current = this.ownedRecord(requestedProcessId, owner);

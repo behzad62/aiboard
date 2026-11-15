@@ -733,8 +733,7 @@ async function withProjectionLock<T>(path: string, action: () => Promise<T>): Pr
   await mkdir(dirname(path), { recursive: true });
   const lockPath = `${path}.lock`;
   try {
-    // The lock's own default deadline (OWNED_FENCE_DEFAULT_DEADLINE_MS, set from measured claims). This 10 s was
-    // chosen when that default was 2 s, to outlast a cold Windows self-birth probe; the default now covers it.
+    // The lock's own default deadline (OWNED_FENCE_DEFAULT_DEADLINE_MS, set from measured claims).
     return await withOwnedFenceLock(lockPath, action, {
       retryDelayMs: 10,
       retireAfterEffect: false,
