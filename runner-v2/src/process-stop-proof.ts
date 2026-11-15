@@ -1,3 +1,5 @@
+import type { ManagedProcessOwner } from "./managed-process-transport.js";
+
 /**
  * An agent's stop that could not be proven: one of its cleanups (managed
  * processes, MCP servers, language servers, managed Build tools) failed, so
@@ -32,4 +34,22 @@ export function isProcessStopUnprovenError(error: unknown, depth = 0): boolean {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Stops every managed process the exact agent owner started once the agent
+ * ends, keeping a primary failure visible. A stop that is not proven throws
+ * {@link AgentCleanupUnverifiedError}.
+ */
+export async function withManagedProcessAgentLifecycle<T>(
+  processes: { closeAgent(owner: ManagedProcessOwner): Promise<void> } | undefined,
+  owner: ManagedProcessOwner,
+  perform: () => Promise<T>,
+): Promise<T> {
+  let failed = false; let primary: unknown; let result: T | undefined;
+  try { result = await perform(); } catch (error) { failed = true; primary = error; }
+  try { await processes?.closeAgent(owner); }
+  catch (cleanup) { throw new AgentCleanupUnverifiedError(failed ? [primary, cleanup] : [cleanup], "Agent managed-process cleanup remains unverified."); }
+  if (failed) throw primary;
+  return result!;
 }

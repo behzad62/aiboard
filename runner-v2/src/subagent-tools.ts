@@ -2,6 +2,7 @@ import { createImageTools } from "./image-tools.js";
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
 import { ManagedBuildToolRuntime, withManagedBuildToolLifecycle, type ManagedBuildToolSource } from "./managed-build-tools.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
+import { AgentCleanupUnverifiedError, withManagedProcessAgentLifecycle } from "./process-stop-proof.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
@@ -84,6 +85,11 @@ export interface SubagentToolsOptions {
   language?: LanguageIntelligenceProvider;
   execution?: OneShotCommandExecutor;
   executionGrants?: ExecutionGrantAuthority;
+  /**
+   * Receives, per subagent, a retry of every cleanup of its exact owner, so
+   * the parent attempt's unproven stop can be retried for its subagents too.
+   */
+  retainCleanup?: (close: () => Promise<void>) => void;
 }
 
 export function createSubagentTools(
@@ -290,7 +296,18 @@ function spawnSubagentTool(
             clock,
           })
         : managedRuntime ?? broker;
-      const result = await withManagedBuildToolLifecycle(managedRuntime, () => withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => runAgentLoop({
+      const owner = Object.freeze({ runId: options.runId, sessionId, actor: Object.freeze({ role: "subagent" as const, id: `${options.parentActorId}:${callId}` }) });
+      // Everything this subagent starts runs under its own owner: stopping
+      // only the parent worker's owner would leave it running.
+      options.retainCleanup?.(async () => {
+        const failures: unknown[] = [];
+        try { await managedRuntime?.close(); } catch (error) { failures.push(error); }
+        try { await options.language?.closeAgent?.(owner); } catch (error) { failures.push(error); }
+        try { await options.mcpManager?.closeAgent(owner); } catch (error) { failures.push(error); }
+        try { await options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
+        if (failures.length > 0) throw new AgentCleanupUnverifiedError(failures, "The subagent's stop is still not proven.");
+      });
+      const result = await withManagedBuildToolLifecycle(managedRuntime, () => withManagedProcessAgentLifecycle(options.managedProcesses, owner, () => withLanguageAgentLifecycle(options.language, owner, () => withMcpAgentLifecycle(options.mcpManager, owner, () => runAgentLoop({
         model,
         registry: toolRuntime,
         beforeModelTurn: () => managedRuntime?.prepare() ?? Promise.resolve(),
@@ -307,7 +324,7 @@ function spawnSubagentTool(
         onCheckpoint: async (checkpoint) => {
           await options.sessions.checkpoint(sessionId, checkpoint, clock());
         },
-      }))));
+      })))));
       if (result.status !== "subagent_returned") {
         const reason = result.status === "suspended"
           ? `${result.reason}${result.error ? `: ${result.error}` : ""}`

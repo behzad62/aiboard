@@ -1151,6 +1151,8 @@ export interface UnprovenWorkerStopProjection {
   workerId: string;
   reason: string;
   outcome: Record<string, unknown>;
+  /** The attempt was aborted (owner pause, steering): a proven stop only releases the claim. */
+  aborted?: boolean;
   sequence: number;
 }
 
@@ -5209,13 +5211,17 @@ export function reduceSchedulerEvent(
       if (!task || task.attempt !== attempt) {
         throw new Error(`Unproven worker stop does not match task ${taskId} attempt.`);
       }
+      if (task.assignedWorkerId !== undefined && task.assignedWorkerId !== workerId) {
+        throw new Error(`Unproven worker stop names ${workerId}, not the worker ${task.assignedWorkerId} of task ${taskId}.`);
+      }
+      const aborted = event.payload.aborted === true;
       const prior = next.unprovenWorkerStops?.[taskId];
       if (prior && prior.attempt !== attempt) {
         throw new Error(`Task ${taskId} already has an unproven stop for attempt ${prior.attempt}.`);
       }
       next.unprovenWorkerStops = {
         ...(next.unprovenWorkerStops ?? {}),
-        [taskId]: prior ?? { taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>, sequence: event.sequence },
+        [taskId]: prior ?? { taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>, ...(aborted ? { aborted: true } : {}), sequence: event.sequence },
       };
       break;
     }

@@ -16,6 +16,8 @@ export interface ManagedBuildToolSource {
 export class ManagedBuildToolRuntime implements AgentToolRuntime {
   private current?: { generation: number; revision: number | string | undefined; broker: ToolBroker; names: Set<string>; close(): Promise<void> };
   private inFlight = 0;
+  /** A candidate whose disposal failed during a transition; close() retries it, so its stop is never assumed. */
+  private readonly orphans: Array<() => Promise<void>> = [];
 
   constructor(private readonly base: AgentToolRuntime, private readonly source: ManagedBuildToolSource,
     private readonly brokerOptions: ToolBrokerOptions, private readonly admit: (tool: NativeTool<unknown>) => boolean) {}
@@ -43,7 +45,10 @@ export class ManagedBuildToolRuntime implements AgentToolRuntime {
       // A failed exact cleanup prevents this agent from admitting the new surface.
       await this.current?.close();
     } catch (error) {
-      try { await resource.close(); } catch (cleanup) { throw new AggregateError([error, cleanup], "Managed capability transition cleanup failed."); }
+      try { await resource.close(); } catch (cleanup) {
+        this.orphans.push(() => resource.close());
+        throw new AgentCleanupUnverifiedError([error, cleanup], "Managed capability transition cleanup failed.");
+      }
       throw error;
     }
     this.current = { generation, revision, broker, names, close: () => resource.close() };
@@ -58,7 +63,16 @@ export class ManagedBuildToolRuntime implements AgentToolRuntime {
     try { return await this.owner(call.name).invoke(call, context); }
     finally { this.inFlight--; }
   }
-  async close(): Promise<void> { await this.current?.close(); this.current = undefined; }
+  /** Closes the current surface and retries every orphaned candidate; anything not closed stays for the next close. */
+  async close(): Promise<void> {
+    const failures: unknown[] = [];
+    try { await this.current?.close(); this.current = undefined; } catch (error) { failures.push(error); }
+    for (const orphan of [...this.orphans]) {
+      try { await orphan(); this.orphans.splice(this.orphans.indexOf(orphan), 1); } catch (error) { failures.push(error); }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AgentCleanupUnverifiedError(failures, "Managed Build tool cleanup remains unverified.");
+  }
   private owner(name: string): AgentToolRuntime { return this.current?.names.has(name) ? this.current.broker : this.base; }
 }
 

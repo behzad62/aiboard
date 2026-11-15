@@ -161,10 +161,11 @@ export function nativeBuildPauseDescription(
   }
   if (reason.startsWith("process_stop_unproven:")) {
     const taskId = reason.slice("process_stop_unproven:".length);
+    const failure = projection.pauseReason?.detail;
     return {
       waitingForOwner: false,
       title: "Paused: a worker's processes could not be proven stopped",
-      detail: `A program the worker on ${taskId ? `task ${taskId}` : "a task"} started may still be running in its folder, so the task keeps that folder and nothing else starts there. You can close any leftover program yourself. Resume tries the stop again; once it is proven, the task goes on.`,
+      detail: `A program the worker on ${taskId ? `task ${taskId}` : "a task"} started may still be running in its folder, so the task keeps that folder and nothing else starts there. ${failure ? `What failed: ${failure} ` : ""}You can close any leftover program yourself. Resume tries the stop again; once it is proven, the task goes on.`,
     };
   }
   if (reason === "coverage_reviewer_unavailable") {

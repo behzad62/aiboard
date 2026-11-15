@@ -1736,6 +1736,7 @@ test("a thrown process_cleanup_unverified keeps the claim even after a lifecycle
     let projection = projectionOf(fixture.store, "run_t4");
     assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U2");
     assert.deepEqual(claimStatus(fixture.store, "U2"), [{ status: "claimed", evidence: undefined }]);
+    assert.equal(projection.unprovenWorkerStops?.U2?.aborted, true, "the abort is kept with the stop");
     assert.deepEqual(projection.unprovenWorkerStops?.U2?.outcome, {
       type: "failed",
       reason: "Managed process cleanup remains unverified.",
@@ -1864,6 +1865,64 @@ test("the real pump retries an unproven stop at the start of a resumed step, bef
     assert.equal(projection.tasks.U5.status, "failed", "the proven stop let the attempt go on with its outcome");
     assert.equal(claimStatus(fixture.store, "U5")[0]?.status, "stopped_fenced");
     assert.ok(order.includes("architect"), "the Architect then resolves the failed task");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("an aborted attempt with an unproven stop keeps abort semantics once the stop is proven", async () => {
+  const fixture = openFixture("stop-unproven-aborted");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U6", files: ["src/u6.ts"] },
+    ], { revisionId: "revision_u6", reviewId: "coverage_u6" }));
+    const controller = new AbortController();
+    const driver = new StopScriptDriver(async () => {
+      controller.abort();
+      return { type: "stop_unproven", reason: "Agent MCP cleanup remains unverified.", outcome: { type: "paused", reason: "worker_cancelled" } };
+    }, ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    (scheduler as unknown as { lifecycleSignal?: () => AbortSignal }).lifecycleSignal =
+      () => controller.signal;
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").unprovenWorkerStops?.U6?.aborted, true);
+    scheduler.resume("resume:u6");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "running", "the kept worker_cancelled is not replayed as a second pause");
+    assert.equal(projection.tasks.U6.status, "running", "an aborted attempt is resumed later, never failed");
+    assert.equal(claimStatus(fixture.store, "U6")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a kept outcome that cannot be recorded after a proven stop fails the attempt instead of vanishing", async () => {
+  const fixture = openFixture("stop-unproven-unrecordable");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U7", files: ["src/u7.ts"] },
+    ], { revisionId: "revision_u7", reviewId: "coverage_u7" }));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Agent MCP cleanup remains unverified.",
+      outcome: {
+        type: "submitted",
+        changeSetId: "changeset-u7",
+        criterionEvidenceLinks: [{ criterionId: "done", evidenceId: "evidence_missing", artifactHashes: ["7".repeat(64)] }],
+      },
+    }), ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    scheduler.resume("resume:u7");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.tasks.U7.status, "failed");
+    assert.ok(projection.tasks.U7.failureReason, "the reason the submission could not be recorded is kept");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(claimStatus(fixture.store, "U7")[0]?.status, "stopped_fenced");
   } finally {
     fixture.close();
   }

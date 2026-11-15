@@ -212,7 +212,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
    */
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
     const key = attemptKey(assignment);
-    const retained: Array<() => Promise<void>> = [];
+    // An entry left by an earlier run of this attempt is kept, never dropped.
+    const retained = this.retainedCleanups.get(key) ?? [];
     this.retainedCleanups.set(key, retained);
     let outcome: SettledWorkerOutcome | undefined;
     let threw = false;
@@ -223,14 +224,21 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       threw = true;
       primary = error;
     }
-    let stopFailure: unknown;
-    let stopFailed = false;
+    // The stop proof: every retained cleanup (the attempt's managed Build
+    // tool runtime, and each subagent's exact owner: a subagent's own cleanup
+    // failure only reaches the worker as a tool error result), then the
+    // worker owner's managed processes.
+    const stopFailures: unknown[] = [];
+    for (const close of retained) {
+      try { await close(); } catch (error) { stopFailures.push(error); }
+    }
     try {
       await this.options.managedProcesses?.closeAgent(this.attemptOwner(assignment));
     } catch (error) {
-      stopFailed = true;
-      stopFailure = error;
+      stopFailures.push(error);
     }
+    const stopFailed = stopFailures.length > 0;
+    const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map(errorMessage).join(" "));
     const cleanupUnproven = threw && isProcessStopUnprovenError(primary);
     if (!stopFailed && !cleanupUnproven) {
       this.retainedCleanups.delete(key);
@@ -245,6 +253,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       type: "stop_unproven",
       reason: reasons.join(" "),
       outcome: threw ? { type: "failed", reason: errorMessage(primary) } : outcome!,
+      ...(threw ? { thrown: primary } : {}),
     };
   }
 
@@ -264,10 +273,29 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     try { await this.options.language?.closeAgent?.(owner); } catch (error) { failures.push(error); }
     try { await this.options.mcpManager?.closeAgent(owner); } catch (error) { failures.push(error); }
     try { await this.options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
+    // Its subagents run under their own owners. Their retained cleanups ran
+    // above; after a Runner restart only their managed-process records are
+    // left, so every live one of this attempt's subagents is stopped too.
+    try {
+      for (const subagent of await this.subagentOwnersWithLiveProcesses(owner)) {
+        try { await this.options.managedProcesses!.closeAgent(subagent); } catch (error) { failures.push(error); }
+      }
+    } catch (error) { failures.push(error); }
     if (failures.length > 0) {
       throw new AgentCleanupUnverifiedError(failures, "The worker's stop is still not proven.");
     }
     this.retainedCleanups.delete(key);
+  }
+
+  private async subagentOwnersWithLiveProcesses(owner: ReturnType<NativeWorkerDriver["attemptOwner"]>) {
+    if (!this.options.managedProcesses) return [];
+    const owners = new Map<string, { runId: string; sessionId: string; actor: { role: "subagent"; id: string } }>();
+    for (const record of await this.options.managedProcesses.listRun(owner.runId)) {
+      if (record.status === "stopped" || record.actor.role !== "subagent") continue;
+      if (!record.actor.id.startsWith(`${owner.actor.id}:`) || !record.sessionId.startsWith(`${owner.sessionId}:subagent:`)) continue;
+      owners.set(JSON.stringify([record.sessionId, record.actor.id]), { runId: owner.runId, sessionId: record.sessionId, actor: { role: "subagent", id: record.actor.id } });
+    }
+    return [...owners.values()];
   }
 
   /** The exact owner every process of this attempt's worker session runs under. */

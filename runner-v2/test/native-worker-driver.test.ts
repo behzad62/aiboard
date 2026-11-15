@@ -26,6 +26,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment } from "../src/task-scheduler.js";
 import type { ManagedProcessService } from "../src/managed-process.js";
+import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
 import {
   resolveWorkerSessionId,
@@ -308,16 +309,20 @@ test("native worker proves its managed-process stop before an outcome counts, an
     };
     const health = new ProviderHealthRegistry();
     const closes: unknown[] = [];
-    const closeResults = ["unproven", "unproven", "proven"];
+    let workerStopFailures = 2;
+    const workerSession = resolveWorkerSessionId("run_1", "task_a", 1, "worker_task_a_1");
+    const subagentRecord = { processId: "proc_sub", runId: "run_1", status: "running", sessionId: `${workerSession}:subagent:call_9`, actor: { role: "subagent", id: "worker_task_a_1:call_9" } };
+    const otherAttemptRecord = { ...subagentRecord, processId: "proc_other", sessionId: "other-session:subagent:call_9", actor: { role: "subagent", id: "worker_task_b_1:call_9" } };
     const managedProcesses = {
-      closeAgent: async (owner: unknown) => {
+      closeAgent: async (owner: { actor: { role: string } }) => {
         closes.push(owner);
-        if (closeResults.shift() !== "proven") {
+        if (owner.actor.role === "worker" && workerStopFailures-- > 0) {
           throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
         }
       },
+      listRun: async () => [subagentRecord, otherAttemptRecord],
     } as unknown as ManagedProcessService;
-    const driver = new NativeWorkerDriver({
+    const driverOptions = {
       schedulerStore: scheduler,
       router: new RuntimeRouter({ candidates: [candidate], health }),
       health,
@@ -343,7 +348,8 @@ test("native worker proves its managed-process stop before an outcome counts, an
       projectRoot: project,
       execution: createTestOneShotCommandExecutor(t, { artifacts }),
       managedProcesses,
-    });
+    } satisfies ConstructorParameters<typeof NativeWorkerDriver>[0];
+    const driver = new NativeWorkerDriver(driverOptions);
     const assignment = {
       runId: "run_1",
       task: rebuildTask(scheduler),
@@ -370,10 +376,19 @@ test("native worker proves its managed-process stop before an outcome counts, an
         evidenceSequence: 3,
       },
     }, "the outcome it had is kept, not returned, while the stop is unproven");
+    const subagent = { runId: "run_1", sessionId: subagentRecord.sessionId, actor: subagentRecord.actor };
     await assert.rejects(driver.retryStop(assignment), (error: unknown) =>
       error instanceof AggregateError && /still not proven/.test(error.message));
     await driver.retryStop(assignment);
-    assert.deepEqual(closes, [owner, owner, owner], "each retry stops the same exact owner again");
+    assert.deepEqual(closes, [owner, owner, subagent, owner, subagent],
+      "each retry stops the same exact owner again, and this attempt's live subagent processes, never another attempt's");
+    // A fresh driver, as after a Runner restart, has nothing retained in memory: its retry still
+    // repeats the owner's language-server and managed-process stops.
+    const languageCloses: unknown[] = [];
+    const language = { closeAgent: async (actual: unknown) => { languageCloses.push(actual); } } as unknown as LanguageIntelligenceProvider;
+    await new NativeWorkerDriver({ ...driverOptions, language }).retryStop(assignment);
+    assert.deepEqual(languageCloses, [owner]);
+    assert.deepEqual(closes.slice(5), [owner, subagent]);
   } finally {
     sessions?.close();
     ledger?.close();

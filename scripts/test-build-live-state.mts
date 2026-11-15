@@ -1439,6 +1439,7 @@ assert.deepEqual(
   assert.equal(pause?.title, "Paused: a worker's processes could not be proven stopped");
   assert.match(pause!.detail, /task task-7/);
   assert.match(pause!.detail, /Resume tries the stop again/);
+  assert.match(pause!.detail, /What failed: Managed process stop not proven: Shared managed cleanup did not prove release\./);
   assert.doesNotMatch(pause!.detail, /process_stop_unproven|process stop unproven/);
 }
 

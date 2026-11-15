@@ -328,6 +328,7 @@ export async function runWorkerTask(
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
     ...(options.execution ? { execution: options.execution } : {}),
     ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
+    ...(options.retainCleanup ? { retainCleanup: options.retainCleanup } : {}),
     language,
   })) registerStaticWorkerTool(broker, tool);
 
