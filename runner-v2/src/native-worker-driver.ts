@@ -53,7 +53,7 @@ import type {
   WorkerOutcome,
   WorkerRuntimeDriver,
 } from "./task-scheduler.js";
-import { AgentCleanupUnverifiedError, errorMessage, isProcessStopUnprovenError } from "./process-stop-proof.js";
+import { AgentCleanupUnverifiedError, errorMessage, isProcessStopUnprovenError, boundedText } from "./process-stop-proof.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
@@ -252,7 +252,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     return {
       type: "stop_unproven",
       reason: reasons.join(" "),
-      outcome: threw ? { type: "failed", reason: errorMessage(primary) } : outcome!,
+      outcome: threw ? { type: "failed", reason: boundedText(errorMessage(primary)) } : outcome!,
       ...(threw ? { thrown: primary } : {}),
     };
   }

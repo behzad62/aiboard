@@ -3,6 +3,9 @@ import {
   errorMessage,
   isProcessStopUnprovenError,
   processStopUnprovenPauseReason,
+  boundedText,
+  PROCESS_STOP_UNRECORDED_PAUSE_PREFIX,
+  PROCESS_STOP_OUTCOME_UNRECORDED_PAUSE_PREFIX,
 } from "./process-stop-proof.js";
 import type {
   SchedulerProjection,
@@ -15,6 +18,7 @@ import {
   readyPlanIdentity,
   rebuildSchedulerProjection,
   repairParentContractId,
+  type UnprovenWorkerStopProjection,
 } from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
@@ -217,6 +221,7 @@ export class TaskScheduler {
       const contract = this.readyContractFor(projection, task.id);
       const restart = task.status === "assigned" || task.status === "running";
       if (active) reasons.push("Worker active in this controller");
+      if (projection.unprovenWorkerStops?.[task.id] || this.unrecordedStops.has(task.id)) reasons.push("Worker stop not yet settled");
       else if (!ready.has(task.id) && !restart) reasons.push("Task is not ready for worker admission");
       if ((restart ? this.active.size : used) >= bound && !active) reasons.push("Worker capacity in use");
       if (!restart && task.attempt >= (task.attemptLimit ?? this.maxTaskAttempts)) reasons.push("Task attempt budget reached");
@@ -548,18 +553,18 @@ export class TaskScheduler {
         // "stopped_fenced" would claim a stop nobody proved.
         if (outcome.type === "stop_unproven") {
           stopUnproven = true;
-          let kept = outcome.outcome;
+          // A context-recording failure keeps its note with the stop: settle
+          // records the note and its context_recording_failed pause together
+          // once the stop is proven, or neither when no outcome is recorded.
           // As on the catch path below, an aborted attempt (owner pause,
-          // steering) records no context-recording failure: an abort keeps
-          // nothing of its outcome. Pending guidance or an open question
-          // refuses that event, so the kept outcome then stays the failure.
-          if (outcome.thrown instanceof ContextManifestRecordingError &&
-            !assignment.signal?.aborted && !outcomeHeldBack(this.projection())) {
-            this.unrecordedStops.add(task.id);
-            this.appendContextRecordingFailure(task, outcome.thrown);
-            kept = { type: "paused", reason: "context_recording_failed" };
+          // steering) keeps none: an abort keeps nothing of its outcome.
+          if (outcome.thrown instanceof ContextManifestRecordingError && !assignment.signal?.aborted) {
+            this.recordStopUnproven(task, assignment, outcome.reason,
+              { type: "paused", reason: "context_recording_failed" }, undefined,
+              this.contextRecordingFailurePayload(task, outcome.thrown));
+            return;
           }
-          this.recordStopUnproven(task, assignment, outcome.reason, kept);
+          this.recordStopUnproven(task, assignment, outcome.reason, outcome.outcome);
           return;
         }
         if (assignment.signal?.aborted) {
@@ -581,7 +586,7 @@ export class TaskScheduler {
           stopUnproven = true;
           this.recordStopUnproven(task, assignment, errorMessage(error), {
             type: "failed",
-            reason: errorMessage(error),
+            reason: boundedDetail(errorMessage(error)),
           });
           return undefined;
         }
@@ -621,22 +626,39 @@ export class TaskScheduler {
     task: BuildTask,
     error: ContextManifestRecordingError,
   ): void {
+    this.appendContextRecordingNote(task.id, task.attempt, this.contextRecordingFailurePayload(task, error),
+      `context-recording-failed:${task.id}:${task.attempt}:${this.projection().lastSequence}`);
+  }
+
+  private contextRecordingFailurePayload(
+    task: BuildTask,
+    error: ContextManifestRecordingError,
+  ): NonNullable<UnprovenWorkerStopProjection["contextRecordingFailure"]> {
     const projection = this.projection();
     const current = projection.tasks[task.id] ?? task;
     const revision = current.workspaceBaselineRevision ?? projection.integrationRevision;
+    return { purpose: error.purpose, attempts: error.attempts, reason: error.message, ...(revision ? { revision } : {}) };
+  }
+
+  private appendContextRecordingNote(
+    taskId: string,
+    attempt: number,
+    failure: NonNullable<UnprovenWorkerStopProjection["contextRecordingFailure"]>,
+    idempotencyKey: string,
+  ): void {
     this.store.append({
       runId: this.runId,
       type: "context_manifest.recording_failed",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "scheduler" },
-      idempotencyKey: `context-recording-failed:${task.id}:${task.attempt}:${projection.lastSequence}`,
+      idempotencyKey,
       payload: {
-        purpose: error.purpose,
-        attempts: error.attempts,
-        reason: error.message,
-        taskId: task.id,
-        attempt: task.attempt,
-        ...(revision ? { revision } : {}),
+        purpose: failure.purpose,
+        attempts: failure.attempts,
+        reason: failure.reason,
+        taskId,
+        attempt,
+        ...(failure.revision ? { revision: failure.revision } : {}),
       },
     });
   }
@@ -757,8 +779,10 @@ export class TaskScheduler {
     assignment: WorkerAssignment,
     reason: string,
     outcome: SettledWorkerOutcome,
-    aborted = assignment.signal?.aborted === true,
+    abortedOverride?: boolean,
+    contextRecordingFailure?: UnprovenWorkerStopProjection["contextRecordingFailure"],
   ): void {
+    const aborted = abortedOverride ?? assignment.signal?.aborted === true;
     this.unrecordedStops.add(task.id);
     const lastSequence = this.projection().lastSequence;
     this.store.append({
@@ -776,6 +800,7 @@ export class TaskScheduler {
         // An aborted attempt (owner pause, steering) keeps abort semantics:
         // once its stop is proven only the claim is released.
         ...(aborted ? { aborted: true } : {}),
+        ...(contextRecordingFailure ? { contextRecordingFailure: structuredClone(contextRecordingFailure) } : {}),
       },
     });
     // Durable now: settle retries it even if the pause below fails.
@@ -783,7 +808,12 @@ export class TaskScheduler {
     this.pauseForUnprovenStop(task.id, task.attempt, reason);
   }
 
-  private pauseForUnprovenStop(taskId: string, attempt: number, detail: string): void {
+  private pauseForUnprovenStop(
+    taskId: string,
+    attempt: number,
+    detail: string,
+    reason = processStopUnprovenPauseReason(taskId),
+  ): void {
     const lastSequence = this.projection().lastSequence;
     this.store.append({
       runId: this.runId,
@@ -792,7 +822,7 @@ export class TaskScheduler {
       actor: { role: "runner", id: "scheduler" },
       idempotencyKey: `worker-stop-unproven-pause:${taskId}:${attempt}:${lastSequence}`,
       payload: {
-        reason: processStopUnprovenPauseReason(taskId),
+        reason,
         taskId,
         ...(boundedDetail(detail) ? { detail: boundedDetail(detail) } : {}),
       },
@@ -810,7 +840,8 @@ export class TaskScheduler {
       if (projection.status === "running") {
         try {
           this.pauseForUnprovenStop(taskId, projection.tasks[taskId]?.attempt ?? 0,
-            "The Runner could not record that this worker's stop is unproven. Restart the Runner; it retries the stop before the task runs again.");
+            "The Runner could not save the record that this worker's stop is unproven.",
+            `${PROCESS_STOP_UNRECORDED_PAUSE_PREFIX}${taskId}`);
         } catch {
           // Still paused in this process: nothing runs while a stop is unrecorded.
         }
@@ -868,22 +899,34 @@ export class TaskScheduler {
           pauseKey: `worker-pause:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`,
           stopEvidence: evidence,
         };
+        const note = stop.contextRecordingFailure;
         try {
-          try {
+          if (note) {
+            // The note and its pause go together, as on the catch path in
+            // dispatch: never a failure in their place, which would leave
+            // the note unresolved and refuse the run's completion. Both
+            // keys are stable, so a retry after a crash repeats neither.
+            this.appendContextRecordingNote(stop.taskId, stop.attempt, note,
+              `context-recording-failed:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`);
             this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept, options);
-          } catch (error) {
-            // As in dispatch: an outcome that cannot be recorded is a failure.
-            this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {
-              type: "failed",
-              reason: errorMessage(error),
-            }, options);
+          } else {
+            try {
+              this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept, options);
+            } catch (error) {
+              // As in dispatch: an outcome that cannot be recorded is a failure.
+              this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {
+                type: "failed",
+                reason: boundedDetail(errorMessage(error)),
+              }, options);
+            }
           }
         } catch (error) {
-          // Neither could be recorded: the stop stays pending with its
+          // It could not be recorded: the stop stays pending with its
           // claim, and the run pauses with the cause instead of retrying
-          // (and throwing) on every pass.
+          // (and throwing) on every pass. Resume tries to record it again.
           this.pauseForUnprovenStop(stop.taskId, stop.attempt,
-            `The stop was proven, but the attempt's outcome could not be recorded: ${errorMessage(error)}`);
+            `The worker's stop was proven, but the outcome of its attempt could not be saved: ${errorMessage(error)}`,
+            `${PROCESS_STOP_OUTCOME_UNRECORDED_PAUSE_PREFIX}${stop.taskId}`);
           return "paused";
         }
       }
@@ -1348,6 +1391,5 @@ function newPolicyAdmissionClosed(projection: SchedulerProjection): boolean {
 
 /** Pause details and stop reasons stay readable: aggregated cleanup errors can be long. */
 function boundedDetail(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > 2_000 ? `${trimmed.slice(0, 2_000)}…` : trimmed;
+  return boundedText(text);
 }

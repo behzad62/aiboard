@@ -18,6 +18,31 @@ export function processStopUnprovenPauseReason(taskId: string): string {
 }
 
 /**
+ * The pause, claim kept, when this Runner process could not record a
+ * worker's unproven stop: only a restarted Runner retries it.
+ */
+export const PROCESS_STOP_UNRECORDED_PAUSE_PREFIX = "process_stop_unrecorded:";
+
+/**
+ * The pause, claim kept, when a worker's stop was proven but the outcome the
+ * attempt kept could not be recorded: Resume tries to record it again.
+ */
+export const PROCESS_STOP_OUTCOME_UNRECORDED_PAUSE_PREFIX = "process_stop_outcome_unrecorded:";
+
+/** Every scheduler pause for a worker stop that keeps the worker's claim. */
+export const PROCESS_STOP_PAUSE_PREFIXES: readonly string[] = [
+  PROCESS_STOP_UNPROVEN_PAUSE_PREFIX,
+  PROCESS_STOP_UNRECORDED_PAUSE_PREFIX,
+  PROCESS_STOP_OUTCOME_UNRECORDED_PAUSE_PREFIX,
+];
+
+/** Text for a durable record or a pause: trimmed and capped. */
+export function boundedText(text: string, limit = 2_000): string {
+  const trimmed = text.trim();
+  return trimmed.length > limit ? `${trimmed.slice(0, limit)}…` : trimmed;
+}
+
+/**
  * Whether an error says an agent's stop is unproven: an
  * {@link AgentCleanupUnverifiedError}, or a `process_cleanup_unverified`
  * error anywhere in its aggregate or cause chain. Bounded in depth, so a
@@ -32,11 +57,16 @@ export function isProcessStopUnprovenError(error: unknown, depth = 0): boolean {
   return cause !== undefined && isProcessStopUnprovenError(cause, depth + 1);
 }
 
-/** An error's message with its aggregated causes, so a pause names what actually failed. */
+/**
+ * An error's message with its aggregated causes, so a pause names what
+ * actually failed. A cause the message already names is not repeated.
+ */
 export function errorMessage(error: unknown, depth = 0): string {
   if (!(error instanceof Error)) return String(error);
   if (!(error instanceof AggregateError) || depth > 3 || error.errors.length === 0) return error.message;
-  return `${error.message} (${error.errors.map((inner) => errorMessage(inner, depth + 1)).join("; ")})`;
+  const causes = error.errors.map((inner) => errorMessage(inner, depth + 1))
+    .filter((cause) => cause !== "" && !error.message.includes(cause));
+  return causes.length === 0 ? error.message : `${error.message} (${causes.join("; ")})`;
 }
 
 /**

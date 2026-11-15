@@ -74,6 +74,7 @@ import {
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
+import { PROCESS_STOP_PAUSE_PREFIXES } from "./process-stop-proof.js";
 import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
 import { cloneValidationBudgetSubmission, parseValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 import { validateReviewSignals } from "./review-integrity.js";
@@ -1153,6 +1154,11 @@ export interface UnprovenWorkerStopProjection {
   outcome: Record<string, unknown>;
   /** The attempt was aborted (owner pause, steering): a proven stop only releases the claim. */
   aborted?: boolean;
+  /**
+   * The attempt's context recording failed: its note is recorded together
+   * with the kept context_recording_failed pause, never apart from it.
+   */
+  contextRecordingFailure?: { purpose: string; attempts: number; reason: string; revision?: string };
   sequence: number;
 }
 
@@ -2462,6 +2468,31 @@ function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | 
     VERIFICATION_GATE_PAUSE_REASONS.has(String(event.payload.reason));
 }
 
+function parseStopContextRecordingFailure(
+  value: unknown,
+  outcome: object,
+): UnprovenWorkerStopProjection["contextRecordingFailure"] {
+  if (value === undefined) return undefined;
+  const kept = outcome as { type?: unknown; reason?: unknown };
+  if (kept.type !== "paused" || kept.reason !== "context_recording_failed") {
+    throw new Error("An unproven stop's context recording failure must keep the context_recording_failed pause.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("An unproven stop's context recording failure must be an object.");
+  }
+  const record = value as Record<string, unknown>;
+  const revision = record.revision;
+  if (revision !== undefined && typeof revision !== "string") {
+    throw new Error("An unproven stop's context recording revision must be text.");
+  }
+  return {
+    purpose: requiredString(record, "purpose"),
+    attempts: requiredNumber(record, "attempts"),
+    reason: requiredString(record, "reason"),
+    ...(revision ? { revision } : {}),
+  };
+}
+
 /**
  * A worker attempt's unproven stop, its proof, and the scheduler's pause for it. Like a claim
  * release they never advance the run, so pending guidance or an open question never refuses them:
@@ -2470,7 +2501,7 @@ function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | 
 function isUnprovenWorkerStopEvent(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
   const scheduler = event.actor.role === "runner" && event.actor.id === "scheduler";
   return scheduler && (event.type === "worker.stop_unproven" || event.type === "worker.stop_proven" ||
-    (event.type === "run.paused" && String(event.payload.reason).startsWith("process_stop_unproven:")));
+    (event.type === "run.paused" && PROCESS_STOP_PAUSE_PREFIXES.some((prefix) => String(event.payload.reason).startsWith(prefix))));
 }
 
 const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
@@ -5228,13 +5259,19 @@ export function reduceSchedulerEvent(
         throw new Error(`Unproven worker stop names ${workerId}, not the worker ${task.assignedWorkerId} of task ${taskId}.`);
       }
       const aborted = event.payload.aborted === true;
+      const contextRecordingFailure = parseStopContextRecordingFailure(event.payload.contextRecordingFailure, outcome);
       const prior = next.unprovenWorkerStops?.[taskId];
       if (prior && prior.attempt !== attempt) {
         throw new Error(`Task ${taskId} already has an unproven stop for attempt ${prior.attempt}.`);
       }
       next.unprovenWorkerStops = {
         ...(next.unprovenWorkerStops ?? {}),
-        [taskId]: prior ?? { taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>, ...(aborted ? { aborted: true } : {}), sequence: event.sequence },
+        [taskId]: prior ?? {
+          taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>,
+          ...(aborted ? { aborted: true } : {}),
+          ...(contextRecordingFailure ? { contextRecordingFailure } : {}),
+          sequence: event.sequence,
+        },
       };
       break;
     }

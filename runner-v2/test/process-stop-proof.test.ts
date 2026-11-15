@@ -6,6 +6,8 @@ import { ManagedBuildToolRuntime } from "../src/managed-build-tools.js";
 import { withMcpAgentLifecycle } from "../src/mcp-agent-lifecycle.js";
 import {
   AgentCleanupUnverifiedError,
+  boundedText,
+  errorMessage,
   isProcessStopUnprovenError,
   withManagedProcessAgentLifecycle,
 } from "../src/process-stop-proof.js";
@@ -78,4 +80,16 @@ test("a managed Build tool candidate whose disposal failed is retried by close, 
   assert.equal(candidateCloses, 3);
   await assert.rejects(runtime.close(), /current close failed/);
   assert.equal(candidateCloses, 3, "a candidate closed once is not closed again");
+});
+
+test("an error message names each inner cause once, and record text is capped", () => {
+  const inner = [new Error("tsserver did not exit"), new Error("mcp server still running")];
+  assert.equal(errorMessage(new AggregateError(inner, "Managed process cleanup remains unverified.")),
+    "Managed process cleanup remains unverified. (tsserver did not exit; mcp server still running)");
+  const listed = new AgentCleanupUnverifiedError(inner, "The worker's stop is still not proven: tsserver did not exit; mcp server still running");
+  assert.equal(errorMessage(listed), listed.message, "a message that already lists its causes is not repeated");
+  const nested = new AggregateError([listed, new Error("port 3000 held")], `Managed process stop not proven: ${listed.message}`);
+  assert.equal(errorMessage(nested), `${nested.message} (port 3000 held)`);
+  assert.equal(boundedText(`  ${"x".repeat(2_005)}  `), `${"x".repeat(2_000)}…`);
+  assert.equal(boundedText(" short "), "short");
 });

@@ -20,6 +20,7 @@ import {
   type SchedulerStore,
 } from "../src/scheduler-store.js";
 import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
+import { latestUnresolvedContextRecordingNote } from "../src/scheduler-store.js";
 import { createHash } from "node:crypto";
 import { captureSubmissionScopeIdentity } from "../src/submission-scope-capture.js";
 import { bindSubmissionScope } from "../src/submission-scope-contracts.js";
@@ -1939,7 +1940,7 @@ test("a kept outcome that cannot be recorded after a proven stop fails the attem
   }
 });
 
-test("a context recording failure with an unproven stop keeps its recording event and its own pause after the proof", async () => {
+test("a context recording failure with an unproven stop records its note together with its own pause after the proof", async () => {
   const fixture = openFixture("stop-unproven-context");
   try {
     seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
@@ -1955,16 +1956,130 @@ test("a context recording failure with an unproven stop keeps its recording even
     const scheduler = schedulerFor(fixture.store, driver);
     await scheduler.tick();
     await scheduler.awaitIdle();
-    const events = fixture.store.readRun("run_t4");
-    assert.ok(events.some((event) => event.type === "context_manifest.recording_failed"), "the recording failure is recorded as on the catch path");
+    const notes = () => fixture.store.readRun("run_t4").filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes().length, 0, "the note waits for its pause");
     let projection = projectionOf(fixture.store, "run_t4");
     assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U8");
     assert.deepEqual(projection.unprovenWorkerStops?.U8?.outcome, { type: "paused", reason: "context_recording_failed" });
+    assert.equal(projection.unprovenWorkerStops?.U8?.contextRecordingFailure?.purpose, "worker:task");
     scheduler.resume("resume:u8");
     assert.equal(await scheduler.settleUnprovenStops(), "paused");
     projection = projectionOf(fixture.store, "run_t4");
     assert.equal(projection.pauseReason?.reason, "context_recording_failed", "after the proof the attempt goes on to its own pause");
+    assert.equal(notes().length, 1, "with its note, as on the catch path");
+    assert.equal(notes()[0]?.payload.taskId, "U8");
+    assert.ok(latestUnresolvedContextRecordingNote(projection), "the note is open under its own pause, which resolves it as on main");
     assert.equal(claimStatus(fixture.store, "U8")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a held stop whose kept context pause is steered away leaves no unresolved note, so the run can still complete", async () => {
+  const fixture = openFixture("stop-unproven-context-steered");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U14", files: ["src/u14.ts"] },
+    ], { revisionId: "revision_u14", reviewId: "coverage_u14" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven", "proven"]);
+    const scheduler = schedulerFor(fixture.store, driver, { maxConcurrency: 1 });
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").pauseReason?.reason, "process_stop_unproven:U14");
+    appendEvent(fixture.store, {
+      type: "user.guidance_submitted",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "u14:guidance",
+      payload: { guidanceId: "guidance-u14", text: "Use the revised flow.", version: 1, interruptionProtocolVersion: 1 },
+    });
+    scheduler.resume("resume:u14");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear", "held until the guidance is answered");
+    appendEvent(fixture.store, {
+      type: "user.guidance_interruption_completed",
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: "u14:interruption",
+      payload: { guidanceId: "guidance-u14", expectedVersion: 1 },
+    });
+    appendEvent(fixture.store, {
+      type: "user.guidance_acknowledged",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "u14:steer",
+      payload: {
+        guidanceId: "guidance-u14",
+        expectedVersion: 1,
+        resolution: {
+          type: "plan_reconciled",
+          rationale: "Restart active work with revised intent.",
+          planReconciliation: {
+            revision: 2,
+            summary: "Steer U14 to the revised flow.",
+            taskUpdates: [{ taskId: "U14", action: "revise", objective: "Use the revised flow." }],
+          },
+        },
+      },
+    });
+    const steered = projectionOf(fixture.store, "run_t4").tasks.U14;
+    assert.ok(steered.status !== "running" || steered.attempt !== 1 || steered.assignedWorkerId !== "worker_U14_1",
+      `the steer moved the task on (${steered.status} attempt ${steered.attempt})`);
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(claimStatus(fixture.store, "U14")[0]?.status, "stopped_fenced");
+    assert.equal(fixture.store.readRun("run_t4").some((event) => event.type === "context_manifest.recording_failed"), false,
+      "no kept pause, so no note: nothing is left to resolve");
+    assert.equal(latestUnresolvedContextRecordingNote(projection), undefined, "completion and handoff are not refused");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a kept context pause the store refuses never turns into a failure: the note waits, Resume records both", async () => {
+  const fixture = openFixture("stop-unproven-context-refused");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U15", files: ["src/u15.ts"] },
+    ], { revisionId: "revision_u15", reviewId: "coverage_u15" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven", "proven"]);
+    const append = fixture.store.append.bind(fixture.store);
+    let refuse = false;
+    (fixture.store as unknown as { append: typeof append }).append = (event) => {
+      if (refuse && event.type === "run.paused" && event.payload.reason === "context_recording_failed") {
+        throw new Error("store busy");
+      }
+      return append(event);
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    scheduler.resume("resume:u15:1");
+    refuse = true;
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_outcome_unrecorded:U15", "its own reason, not an unproven stop");
+    assert.match(projection.pauseReason?.detail ?? "", /could not be saved: store busy/);
+    assert.equal(projection.tasks.U15.status, "running", "no failure in place of the kept pause");
+    assert.equal(projection.unprovenWorkerStops?.U15?.attempt, 1, "the stop stays pending");
+    assert.equal(claimStatus(fixture.store, "U15")[0]?.status, "stopped_fenced", "the stop is proven, so the pause's own release stands");
+    refuse = false;
+    scheduler.resume("resume:u15:2");
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "context_recording_failed");
+    assert.equal(fixture.store.readRun("run_t4").filter((event) => event.type === "context_manifest.recording_failed").length, 1,
+      "the note is recorded once, with its stable key");
+    assert.equal(projection.unprovenWorkerStops, undefined);
   } finally {
     fixture.close();
   }
@@ -2475,6 +2590,9 @@ test("owner guidance sent while paused on an unproven stop, then Resume: the pro
     assert.equal(projection.unprovenWorkerStops?.U11?.attempt, 1, "the stop stays pending with its kept outcome");
     assert.equal(projection.tasks.U11.status, "running");
     assert.deepEqual(claimStatus(fixture.store, "U11"), [{ status: "claimed", evidence: undefined }], "and keeps its claim");
+    const row = scheduler.schedulingView().tasks.find((entry) => entry.taskId === "U11");
+    assert.equal(row?.eligible, false);
+    assert.ok(row?.reasons.includes("Worker stop not yet settled"), "the scheduling view says why it waits");
     await scheduler.tick();
     assert.equal(driver.runs, 1, "the attempt is not run again meanwhile");
     appendEvent(fixture.store, {
@@ -2585,8 +2703,8 @@ test("an unproven stop that cannot be recorded keeps the run paused; a restarted
     await first.awaitIdle().catch(() => undefined);
     assert.equal(await first.settleUnprovenStops(), "paused", "no Architect turn while a stop is unrecorded");
     let projection = projectionOf(fixture.store, "run_t4");
-    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U12");
-    assert.match(projection.pauseReason?.detail ?? "", /Restart the Runner/);
+    assert.equal(projection.pauseReason?.reason, "process_stop_unrecorded:U12", "its own reason: only a restart retries it");
+    assert.match(projection.pauseReason?.detail ?? "", /could not save the record/);
     assert.equal(projection.unprovenWorkerStops, undefined, "nothing durable records the stop");
     assert.deepEqual(claimStatus(fixture.store, "U12"), [{ status: "claimed", evidence: undefined }]);
     first.resume("resume:u12:1");
