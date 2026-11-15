@@ -401,6 +401,9 @@ export class TaskScheduler {
             }
             projection = this.projection();
             if (projection.status !== "running" || hasPendingUserGuidance(projection)) return;
+            const after = projection.tasks[task.id];
+            if (after?.status !== "running" || after.attempt !== resumed.attempt ||
+              after.assignedWorkerId !== resumed.assignedWorkerId) continue;
           }
           // T3a repair (N3): final check before each dispatch (this also
           // covers the no-await workspacePath path). The check and the
@@ -548,8 +551,8 @@ export class TaskScheduler {
           let kept = outcome.outcome;
           // As on the catch path below, an aborted attempt (owner pause,
           // steering) records no context-recording failure: an abort keeps
-          // nothing of its outcome. Neither does an attempt whose outcome
-          // pending guidance or an open question will hold back.
+          // nothing of its outcome. Pending guidance or an open question
+          // refuses that event, so the kept outcome then stays the failure.
           if (outcome.thrown instanceof ContextManifestRecordingError &&
             !assignment.signal?.aborted && !outcomeHeldBack(this.projection())) {
             this.unrecordedStops.add(task.id);
@@ -775,8 +778,9 @@ export class TaskScheduler {
         ...(aborted ? { aborted: true } : {}),
       },
     });
-    this.pauseForUnprovenStop(task.id, task.attempt, reason);
+    // Durable now: settle retries it even if the pause below fails.
     this.unrecordedStops.delete(task.id);
+    this.pauseForUnprovenStop(task.id, task.attempt, reason);
   }
 
   private pauseForUnprovenStop(taskId: string, attempt: number, detail: string): void {
@@ -846,26 +850,41 @@ export class TaskScheduler {
       // claim is still claimed and released through the outcome's own path,
       // as in dispatch (a submission's scope is bound to the live claim).
       // Nothing is recorded when the attempt was aborted (owner pause,
-      // steering: an abort releases the claim only), when the task moved on
-      // meanwhile (cancelled, say), or while pending guidance or an open
-      // question holds the run: the outcome is dropped as an abort drops it,
-      // and the same attempt runs again once the Architect has answered.
+      // steering: an abort releases the claim only) or when the task moved
+      // on meanwhile (cancelled, say).
       const current = this.projection().tasks[stop.taskId];
-      if (!stop.aborted && current?.status === "running" && current.attempt === stop.attempt &&
-        !outcomeHeldBack(this.projection())) {
+      const keeps = !stop.aborted && current?.status === "running" && current.attempt === stop.attempt;
+      if (keeps && outcomeHeldBack(this.projection())) {
+        // Pending guidance or an open question refuses every task outcome.
+        // The stop stays pending with its claim kept, so nothing else runs
+        // in its scope and the task is not run again; the outcome is
+        // recorded at the first settle after the Architect has answered.
+        // The run is not held paused: the Architect's turn must answer.
+        continue;
+      }
+      if (keeps) {
         const kept = structuredClone(stop.outcome) as SettledWorkerOutcome;
         const options = {
           pauseKey: `worker-pause:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`,
           stopEvidence: evidence,
         };
         try {
-          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept, options);
+          try {
+            this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept, options);
+          } catch (error) {
+            // As in dispatch: an outcome that cannot be recorded is a failure.
+            this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {
+              type: "failed",
+              reason: errorMessage(error),
+            }, options);
+          }
         } catch (error) {
-          // As in dispatch: an outcome that cannot be recorded is a failure.
-          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {
-            type: "failed",
-            reason: errorMessage(error),
-          }, options);
+          // Neither could be recorded: the stop stays pending with its
+          // claim, and the run pauses with the cause instead of retrying
+          // (and throwing) on every pass.
+          this.pauseForUnprovenStop(stop.taskId, stop.attempt,
+            `The stop was proven, but the attempt's outcome could not be recorded: ${errorMessage(error)}`);
+          return "paused";
         }
       }
       // No outcome recorded, or a crash after it and before the release:
@@ -1304,7 +1323,7 @@ function workspacePatch(
 
 /**
  * Pending guidance or an open blocking question refuses every task outcome
- * (scheduler-store guidance gates), so a kept outcome is not recorded then.
+ * (scheduler-store guidance gates), so a kept outcome waits for the answer.
  */
 function outcomeHeldBack(projection: SchedulerProjection): boolean {
   return hasPendingUserGuidance(projection) || Boolean(projection.blockingArchitectQuestionId);
