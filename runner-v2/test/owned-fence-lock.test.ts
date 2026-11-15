@@ -16,8 +16,7 @@ import ts from "typescript";
 
 import {
   isOwnedFenceLockContention, OwnedFenceAuthorityRetirementError, OwnedFenceContentionError,
-  OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup,
-  withOwnedFenceLock, withOwnedFenceLockSync,
+  OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, withOwnedFenceLock, withOwnedFenceLockSync,
 } from "../src/owned-fence-lock.mjs";
 import * as v1 from "./fixtures/owned-fence-lock-v1.mjs";
 
@@ -49,7 +48,7 @@ test("a claim never writes the lock file: it stays empty and unchanged, with not
 });
 
 // Acceptance: a claim never spawns a process, never probes a PID and never writes the lock file. Every function a
-// claim, a revoked recovery or a retired cleanup can reach in the module is collected from the source; none of them
+// claim or a revoked recovery can reach in the module is collected from the source; none of them
 // starts a process, signals or inspects one, or writes a file, and the lock file is opened only to create it or to
 // read a header.
 test("no claim path can reach a process spawn, a PID probe or a file write", () => {
@@ -61,8 +60,7 @@ test("no claim path can reach a process spawn, a PID probe or a file write", () 
   const called = new Set<string>();
   const openFlags: string[] = [];
   const reads: string[] = [];
-  const pending = ["withOwnedFenceLockSync", "withOwnedFenceLock", "recoverRevokedOwnedFenceLock", "retryRetiredOwnedFenceCleanup",
-    "retiredOwnedFenceCleanupAvailable", "isOwnedFenceLockContention"];
+  const pending = ["withOwnedFenceLockSync", "withOwnedFenceLock", "recoverRevokedOwnedFenceLock", "isOwnedFenceLockContention"];
   while (pending.length > 0) {
     const name = pending.pop()!;
     if (reached.has(name)) continue;
@@ -307,30 +305,29 @@ test("old and new code on one pre-FL2 lock file exclude each other and lose no u
   });
 });
 
-// Acceptance: an old-format retired file stays retired (until FL5, one release later).
-test("a pre-FL2 lock file that says retired stays retired: claims refuse it, and only the retired cleanup takes it", async () => {
+// FL5 acceptance: an old-format file is just a lock file. Since FL5 its `retired` flag no longer counts (the callers'
+// own records carry retirement since FL1): claims take it, it still excludes, and a revoked recovery removes it.
+test("a pre-FL2 lock file that says retired is just a lock file", async () => {
   await withRoot("retired", async (root) => {
     const lockPath = join(root, ".fence.lock");
-    v1.withOwnedFenceLockSync(lockPath, () => undefined, V1_OPTIONS);
-    assert.equal(retiredOwnedFenceCleanupAvailable(lockPath), false, "an active old file is not retired");
-    await assert.rejects(retryRetiredOwnedFenceCleanup(lockPath, () => assert.fail("not retired")), /not a retired/);
     v1.withOwnedFenceLockSync(lockPath, () => undefined, { ...V1_OPTIONS, retireAfterEffect: true, retireAuthority: () => undefined });
+    const database = new DatabaseSync(lockPath, { readOnly: true });
+    try { assert.equal(database.prepare("SELECT retired FROM owned_fence_protocol").get()?.retired, 1, "the old code retired it"); }
+    finally { database.close(); }
     const retiredBytes = digest(lockPath);
     let effects = 0;
-    assert.throws(() => withOwnedFenceLockSync(lockPath, () => { effects += 1; }), /Owned fence lock protocol is retired\./);
-    await assert.rejects(withOwnedFenceLock(lockPath, () => { effects += 1; }), /retired/);
-    assert.equal(effects, 0);
-    assert.equal(retiredOwnedFenceCleanupAvailable(lockPath), true);
-    let cleaned = 0;
-    await retryRetiredOwnedFenceCleanup(lockPath, () => { cleaned += 1; });
-    assert.equal(cleaned, 1);
+    assert.equal(withOwnedFenceLockSync(lockPath, () => { effects += 1; return "sync"; }), "sync");
+    assert.equal(await withOwnedFenceLock(lockPath, () => { effects += 1; return "async"; }), "async");
+    assert.equal(effects, 2);
     assert.equal(digest(lockPath), retiredBytes, "nothing rewrote it");
-
-    const emptyPath = join(root, "empty.lock");
-    withOwnedFenceLockSync(emptyPath, () => undefined);
-    assert.equal(retiredOwnedFenceCleanupAvailable(emptyPath), false, "an empty lock file is never retired");
-    await assert.rejects(retryRetiredOwnedFenceCleanup(emptyPath, () => assert.fail("not retired")), /not a retired/);
-    await assert.rejects(retryRetiredOwnedFenceCleanup(join(root, "missing.lock"), () => assert.fail("missing")), /missing/);
+    const holder = startHolder("hold", lockPath);
+    try {
+      assert.equal((await nextMessage(holder)).state, "acquired");
+      await assert.rejects(withOwnedFenceLock(lockPath, () => assert.fail("a held lock must not be claimed"), { deadlineMs: 200 }),
+        (error: unknown) => isOwnedFenceLockContention(error), "another holder still excludes this claim");
+    } finally { await stop(holder); }
+    await recoverRevokedOwnedFenceLock(lockPath, { assertRevoked: () => undefined });
+    assert.equal(existsSync(lockPath), false, "a revoked authority's old-format lock is removed like an empty one");
   });
 });
 
@@ -376,7 +373,6 @@ test("a foreign WAL database, a foreign database and a non-SQLite file are refus
         error instanceof OwnedFenceLockUnavailableError && !isOwnedFenceLockContention(error) && message.test(error.message));
       assert.equal(effects, 0);
       assert.equal(digest(path), before, path);
-      assert.equal(retiredOwnedFenceCleanupAvailable(path), false);
     }
     assert.deepEqual(readdirSync(root).sort(), entries, "no -wal or -shm file appeared");
   });

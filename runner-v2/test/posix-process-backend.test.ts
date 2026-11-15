@@ -33,6 +33,7 @@ import {
 } from "../src/process-backend.js";
 import type { NativeProcessOperations } from "../src/native-process-backend.js";
 import { withOwnedFenceLock } from "../src/owned-fence-lock.mjs";
+import * as v1Lock from "./fixtures/owned-fence-lock-v1.mjs";
 import { writeQualificationDiagnostics } from "./support/qualification-harness.js";
 
 test("POSIX backend attests session ownership without claiming host-crash cleanup", async () => {
@@ -807,10 +808,10 @@ test("FL1 POSIX release finishes over its own tombstone when the lock never reti
   }
 });
 
-test("FL1 POSIX release still finishes a retired authority whose fence predates the tombstone", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl1-legacy-retired-"));
+test("FL1 POSIX release still finishes an authority whose fence predates the tombstone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl1-legacy-fence-"));
   const directory = join(root, "owned-v2");
-  const nonce = "fl1-legacy-retired";
+  const nonce = "fl1-legacy-fence";
   const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
   writeStoppedPosixV2Fixture(directory, nonce, workloadGroup);
   let removals = 0;
@@ -830,10 +831,43 @@ test("FL1 POSIX release still finishes a retired authority whose fence predates 
   const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
   try {
     await assert.rejects(backend.release(binding, fence), /writer fence effect boundary is unavailable/);
-    // The lock is retired. Put back the fence a release of an earlier version leaves: live, with no tombstone.
+    // Nothing was removed. Put back the fence a release of an earlier version leaves: live, with no tombstone.
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
     assert.deepEqual(await backend.release(binding, fence), { released: true });
     assert.equal(removals, 2);
+    assert.equal(existsSync(directory), false);
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
+// FL5: what a pre-FL1 release leaves when its directory removal failed: the old lock file says retired, and fence.json
+// is live, with no tombstone. That lock is just a lock now, so a retried release claims it and finishes.
+test("FL5 POSIX release finishes a pre-FL1 leftover whose old-format lock says retired", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-fl5-retired-lock-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "fl5-retired-lock";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  // The fixture's fence.json is live, as a pre-FL1 release left it.
+  writeStoppedPosixV2Fixture(directory, nonce, workloadGroup);
+  v1Lock.withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
+    holderPid: process.pid, holderBirth: "fixture-birth", inspectHolder: () => "same" as const,
+    retireAfterEffect: true, retireAuthority: () => undefined,
+  });
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    operations: {
+      inspectProcessBirth: () => ({ state: "absent" }),
+      listPosixGroup: () => [],
+      signal: () => assert.fail("a released authority must not be signalled"),
+    },
+  });
+  const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
+  try {
+    await assert.rejects(backend.release(binding, { ownerId: "fl5-foreign", fencingToken: fence.fencingToken }), /stale/i,
+      "a foreign fence still cannot finish it");
+    assert.equal(existsSync(directory), true);
+    assert.deepEqual(await backend.release(binding, fence), { released: true });
     assert.equal(existsSync(directory), false);
   } finally {
     removeFixtureRoot(root);
@@ -867,7 +901,7 @@ test("FL1 released authority removal takes the lock first and the tombstone last
     "owned/.fence.lock", "owned/control.json", "owned/lock-holder.json", "owned/usage.json",
     "owned/state.json", "owned/channel", "owned/stdout.log", "owned/stderr.log", "owned",
   ]);
-  // A busy lock: nothing else is removed, so a retried release still has its retired lock and all its evidence.
+  // A busy lock: nothing else is removed, so a retried release still has its lock and all its evidence.
   assert.deepEqual(removeWith("owned/.fence.lock"), ["owned/.fence.lock"]);
   // A stop inside the evidence never reaches the tombstone.
   assert.equal(removeWith("owned/channel").includes("owned"), false);

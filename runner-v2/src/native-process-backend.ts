@@ -19,7 +19,7 @@ import { createPortableProcessChannelProvider, validatePortableAcknowledgementEv
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshot } from "./portable-process-protocol.mjs";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
-import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
 
 // One POSIX birth probe (`ps -o lstart=`): measured 4-173 ms idle and up to 104 ms loaded in a 2-CPU Linux container;
@@ -599,11 +599,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
     const identity = this.identity(binding);
-    const lockPath = join(identity.directory, ".fence.lock");
-    // A retired lock or a released tombstone in fence.json means an earlier release already passed its final checks
-    // under the lock and only its cleanup is left. This release re-runs those checks without a claim, which the
-    // tombstone would refuse.
-    const finishing = retiredOwnedFenceCleanupAvailable(lockPath) || hasReleasedFence(identity);
+    // A released tombstone in fence.json means an earlier release already passed its final checks under the lock and
+    // only its cleanup is left. This release re-runs those checks without a claim, which the tombstone would refuse.
+    const finishing = hasReleasedFence(identity);
     if (finishing) this.assertReleaseFence(identity, _fence);
     else await this.assertFence(identity, _fence);
     const assertOutputSettled = finishing
@@ -634,16 +632,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       // refuses this authority whatever the lock holds.
       writeReleasedFence(identity, releasing);
     };
-    try {
-      await this.fencedEffect(identity, _fence, "release", validateFinalRelease);
-    } catch (error) {
-      if (errorChainHas(error, OwnedFenceAuthorityRetirementError) || !retiredOwnedFenceCleanupAvailable(lockPath) || !errorChainMatches(error, /retired/i)) throw error;
-      await retryRetiredOwnedFenceCleanup(lockPath, () => {
-        validateFinalRelease();
-        (this.options.removeRetiredAuthority ?? removeRetiredAuthorityDirectory)(identity.directory);
-        this.outputOffsets.delete(identity.nonce);
-      });
-    }
+    await this.fencedEffect(identity, _fence, "release", validateFinalRelease);
     return { released: true };
   }
 
@@ -1339,7 +1328,7 @@ async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: Pro
 // What a retried release re-checks: its terminal state and its output evidence.
 const RELEASED_AUTHORITY_EVIDENCE = Object.freeze(["state.json", "channel", "stdout.log", "stderr.log"]);
 // A released authority's directory goes in this order. First the lock: if it is busy (a Windows handle), nothing else
-// is gone yet, and a retried release finishes through the retired lock. Then everything a retried release does not
+// is gone yet, and a retried release finishes through the tombstone. Then everything a retried release does not
 // re-check, then what it does, then fence.json, the released tombstone, with the directory. While anything of the
 // authority is left, the tombstone still refuses every claim and effect on it, a recreated lock included.
 function removeRetiredAuthorityDirectory(directory: string): void {
@@ -1356,26 +1345,6 @@ function removeRetiredAuthorityDirectory(directory: string): void {
   }
   for (const entry of RELEASED_AUTHORITY_EVIDENCE) rmSync(join(directory, entry), { recursive: true, force: true });
   rmSync(directory, { recursive: true, force: true });
-}
-function errorChainMatches(error: unknown, pattern: RegExp): boolean {
-  const seen = new Set<unknown>();
-  let current = error;
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    if (pattern.test(current instanceof Error ? current.message : String(current))) return true;
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return false;
-}
-function errorChainHas(error: unknown, constructor: new (...args: never[]) => Error): boolean {
-  const seen = new Set<unknown>();
-  let current = error;
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    if (current instanceof constructor) return true;
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return false;
 }
 /**
  * fence.json holds the current writer fence, `{ nonce, ownerId, fencingToken }`, or, once a release passed its final

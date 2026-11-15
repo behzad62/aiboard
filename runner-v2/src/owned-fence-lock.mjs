@@ -26,13 +26,12 @@ export const OWNED_FENCE_DEFAULT_DEADLINE_MS = 15_000;
 const DEFAULT_DEADLINE_MS = OWNED_FENCE_DEFAULT_DEADLINE_MS;
 // First wait before a busy claim tries again; then it grows by half up to HOST_POLL_MAX_DELAY_MS.
 const DEFAULT_RETRY_DELAY_MS = 5;
-// A file a pre-FL2 Runner created holds a SQLite database (rollback journal) with the old protocol's tables. Only its
-// `retired` flag still counts, for one release (FL5 drops it). Anything else non-empty is foreign and refused.
+// A file a pre-FL2 Runner created holds a SQLite database (rollback journal) with the old protocol's tables. Since FL5
+// it is just a lock file: none of its rows is read. Anything else non-empty is foreign and refused.
 const SQLITE_HEADER = "SQLite format 3\0";
 const RETRYABLE_REMOVAL_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
-const CLAIM = Object.freeze({ create: true, retired: "refuse" });
-const REVOKED_RECOVERY = Object.freeze({ create: false, retired: "allow" });
-const RETIRED_CLEANUP = Object.freeze({ create: false, retired: "require" });
+const CLAIM = Object.freeze({ create: true });
+const REVOKED_RECOVERY = Object.freeze({ create: false });
 
 const waiter = new Int32Array(new SharedArrayBuffer(4));
 const asynchronousTails = new Map();
@@ -98,30 +97,6 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
   if (typeof options.assertRevoked !== "function")
     throw new OwnedFenceLockUnavailableError("Owned fence revocation authority is unavailable.");
   await inAsynchronousTurn(path, () => runStepsAsync(recoverRevokedSteps(path, options)));
-}
-
-/**
- * Finish the cleanup of an authority whose pre-FL2 lock file says `retired = 1`: take the lock (it stays retired, so
- * no claim gets past it meanwhile), give it back, then run `cleanup`. Refused for any lock that is not retired.
- */
-export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
-  path = resolve(path);
-  await inAsynchronousTurn(path, () => runStepsAsync(retiredCleanupSteps(path, cleanup, options)));
-}
-
-/** Whether `path` is a pre-FL2 lock file that says `retired = 1`. Takes no lock; false whenever that is uncertain. */
-export function retiredOwnedFenceCleanupAvailable(path) {
-  path = resolve(path);
-  let database;
-  try {
-    const identity = readLockIdentity(path, false);
-    if (identity.size === "0" || heldByThisModule(identity)) return false;
-    assertRollbackJournalDatabase(path, identity);
-    database = new DatabaseSync(sqliteDatabaseLocation(path, process.platform, { mode: "ro" }), { readOnly: true, timeout: 0 });
-    const retired = legacyRetirement(database) === "retired";
-    return retired && sameLockIdentity(readLockIdentity(path, false), identity);
-  } catch { return false; }
-  finally { try { database?.close(); } catch {} }
 }
 
 async function inAsynchronousTurn(path, body) {
@@ -193,14 +168,6 @@ function* recoverRevokedSteps(path, options) {
   if (releaseError !== undefined) throw releaseError;
   options.assertRevoked();
   yield* retryBusyRemoval(() => removeLockFile(path, held.identity));
-}
-
-function* retiredCleanupSteps(path, cleanup, options) {
-  const held = yield* acquireSteps(path, options, RETIRED_CLEANUP);
-  if (held === undefined) throw new OwnedFenceLockUnavailableError("Owned fence retired lock is missing.");
-  const releaseError = releaseHeld(held, {});
-  if (releaseError !== undefined) throw releaseError;
-  cleanup();
 }
 
 /**
@@ -277,11 +244,7 @@ function tryLockOnce(path, options, mode) {
     const identity = readLockIdentity(path, false);
     if (!sameLockIdentity(before, identity))
       throw new OwnedFenceLockUnavailableError("Owned fence lock file was replaced or removed while it was claimed.");
-    const retirement = legacyRetirement(database);
-    if (mode.retired === "refuse" && retirement === "retired")
-      throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired.");
-    if (mode.retired === "require" && retirement !== "retired")
-      throw new OwnedFenceLockUnavailableError("Owned fence lock is not a retired pre-FL2 lock.");
+    assertLockSchema(database);
     return { held: { database, identity } };
   } catch (error) {
     const released = releaseConnection(path, database, before);
@@ -453,16 +416,14 @@ function assertRollbackJournalDatabase(path, identity) {
     throw new OwnedFenceLockUnavailableError("Owned fence lock file is foreign or a WAL database; it is left unchanged.");
 }
 
-/** Under the lock: "none" for an empty lock file, else the pre-FL2 protocol's flag ("active" or "retired"). */
-function legacyRetirement(database) {
+/**
+ * Under the lock: an empty lock file, or a database a pre-FL2 Runner created; any other database is foreign and
+ * refused. Only the table names are read: since FL5 none of the old protocol's rows counts, its `retired` flag included.
+ */
+function assertLockSchema(database) {
   const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name);
-  if (tables.length === 0) return "none";
-  if (!tables.includes("owned_fence_protocol"))
+  if (tables.length > 0 && !tables.includes("owned_fence_protocol"))
     throw new OwnedFenceLockUnavailableError("Owned fence lock file is a foreign database.");
-  const rows = database.prepare("SELECT retired FROM owned_fence_protocol").all();
-  if (rows.length !== 1 || (rows[0].retired !== 0 && rows[0].retired !== 1))
-    throw new OwnedFenceLockUnavailableError("Owned fence lock protocol is retired or invalid.");
-  return rows[0].retired === 1 ? "retired" : "active";
 }
 
 /** Diagnostics only. On Linux /proc/locks names the process that holds the lock; elsewhere there is no cheap way. */
