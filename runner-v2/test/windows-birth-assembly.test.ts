@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,13 @@ test("the helper compiles locally, is placed canonically in the state directory,
   writeFileSync(first.path, Buffer.from("not the helper"));
   const repaired = await provideWindowsBirthHelperAssembly(state, source, sourceSha256);
   assert.equal(sha(readFileSync(repaired.path)), first.sha256, "a changed placed file is replaced by the build's bytes");
+  // A second link to the right bytes would be refused by the session on every prepare: placement replaces it.
+  const second = join(state, "second-link.dll");
+  linkSync(first.path, second);
+  assert.equal(statSync(first.path).nlink, 2);
+  await provideWindowsBirthHelperAssembly(state, source, sourceSha256);
+  assert.equal(statSync(first.path).nlink, 1);
+  assert.equal(sha(readFileSync(first.path)), first.sha256);
 });
 
 test("a source that does not match its pin is never compiled", { skip: !windows }, async (t) => {

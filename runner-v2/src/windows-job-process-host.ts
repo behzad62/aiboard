@@ -2,7 +2,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -365,9 +365,15 @@ export async function provideWindowsBirthHelperAssembly(stateDirectory: string, 
   const directory = join(realpathSync.native(join(stateDirectory, "birth")), build.sha256.slice(0, 16));
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, BIRTH_HELPER_DLL_FILENAME);
+  // The host reads it with Windows PowerShell 5.1's [IO.File]::ReadAllBytes, which keeps the 260-character limit.
+  if (path.length >= 260) throw new Error(`Windows birth helper path is too long for Windows PowerShell (${path.length} characters): ${path}`);
+  // The session accepts only a regular, singly linked file, so anything else here is removed and written again.
   const placed = (): boolean => {
-    try { return createHash("sha256").update(readFileSync(path)).digest("hex") === build.sha256; }
+    let stat;
+    try { stat = lstatSync(path); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+    if (!stat.isFile() || stat.nlink !== 1) { rmSync(path, { force: true }); return false; }
+    return createHash("sha256").update(readFileSync(path)).digest("hex") === build.sha256;
   };
   if (!placed()) {
     const temporary = join(directory, `.${randomUUID()}.tmp`);
