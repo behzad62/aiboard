@@ -17,7 +17,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const lease = Object.freeze({ generation: "a".repeat(64) });
   const session = Object.assign(Object.create(WindowsBirthSession.prototype), {
     state: "READY", lease, generation: lease.generation, generationState: new SharedArrayBuffer(4),
-    config: { binary: { sha256: "b".repeat(64) } }, requestId: 0,
+    config: { assembly: { sha256: "b".repeat(64) } }, requestId: 0,
     pending: new Map(), consumed: new Set(), errors: [], firstFailure: null,
     failure: { resolve() {} }, counters: { queries: 0, existenceChecks: 0, maximumUnresolvedSlots: 0, helperSpawns: 0, workerStarts: 0, compilerSpawns: 0 },
   });

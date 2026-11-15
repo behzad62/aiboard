@@ -125,6 +125,11 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
     "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
+  const birthStep = portable.indexOf("      - name: Run Windows birth helper contracts on Windows");
+  assert.ok(birthStep > 0, "Required Windows PR CI must run the locally compiled birth helper contracts.");
+  const birthBlock = portable.slice(birthStep, portable.indexOf("\n      - name:", birthStep + 1));
+  assert.match(birthBlock, /if:\s*runner\.os\s*==\s*'Windows'/);
+  assert.match(birthBlock, /--test --test-concurrency=1\s+runner-v2\/test\/windows-birth-assembly\.test\.ts/);
   const acknowledgementStep = portable.indexOf("      - name: Run portable input acknowledgement deadline contracts on Windows");
   assert.ok(acknowledgementStep > 0, "Required Windows PR CI must prove durable input acknowledgement deadline outcomes.");
   const acknowledgementBlock = portable.slice(acknowledgementStep, portable.indexOf("\n      - name:", acknowledgementStep + 1));

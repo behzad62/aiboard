@@ -4,11 +4,9 @@ benchmarks/recoverable-job-service/** -text
 docs/benchmarks/recoverable-job-service/** -text
 docs/superpowers/specs/2026-09-08-recoverable-job-service-benchmark-design.md -text
 
-# Runtime asset hashes bind LF sources and exact executable bytes.
+# Runtime asset hashes bind LF sources (no binary ships: the helper is compiled on the user's machine).
 runner-v2/src/windows-birth/*.mjs text eol=lf
 runner-v2/src/windows-birth/*.cs text eol=lf
-runner-v2/src/windows-birth/*.json text eol=lf
-runner-v2/src/windows-birth/native/** binary
 
 # One-line installers are served to sh and PowerShell as rendered; keep the templates LF everywhere.
 scripts/install/* text eol=lf

@@ -135,8 +135,10 @@ let terminalStatus;
 let terminalMessage;
 let terminalExitCode;
 let closeInspection;
+// The helper assembly is the Runner's, compiled once per Runner process. The loader checks it against the pinned
+// source and its PowerShell host re-hashes the bytes it loads; missing or mismatched, preparation fails closed.
 const inspectionOwner = config.platform === "windows" && !config.windowsBirthInspector
-  ? new WindowsBirthInspectionOwner() : undefined;
+  ? new WindowsBirthInspectionOwner(undefined, { assembly: async () => config.windowsBirthAssembly }) : undefined;
 const startupDeadlineAt = config.startupDeadlineAt ?? Date.now() + 30_000;
 let child;
 try { await startSupervisor(); }

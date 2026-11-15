@@ -21,6 +21,7 @@ import { PortableOutputRetirementBlockedError, runPortableFenceSnapshot } from "
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
+import { provideWindowsBirthHelperAssembly } from "./windows-job-process-host.js";
 
 // One POSIX birth probe (`ps -o lstart=`): measured 4-173 ms idle and up to 104 ms loaded in a 2-CPU Linux container;
 // CI `ps -e` p99 61-201 ms (PR #205). 2 s is about 10x the slowest. Windows probes use the bound below instead.
@@ -161,8 +162,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
+    // The birth helper is compiled once per Runner process on this machine (no binary ships) and placed in this
+    // backend's state directory, which outlives the Runner as its supervisors may.
     this.inspectionOwner = !options.operations && options.platform === "windows"
-      ? new WindowsBirthInspectionOwner() : undefined;
+      ? new WindowsBirthInspectionOwner(undefined, {
+        assembly: (source, sourceSha256) => provideWindowsBirthHelperAssembly(this.stateDirectory, source, sourceSha256),
+      }) : undefined;
     const owner = this.inspectionOwner;
     this.operations = options.operations ?? (owner ? {
       ...DEFAULT_OPERATIONS,
@@ -224,7 +229,11 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...request.fence }), { mode: 0o600 });
     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
     const windowsHelpers = this.options.platform === "windows"
-      ? windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined)
+      ? {
+          ...windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined),
+          // The supervisor runs this Runner's compiled helper (its host re-hashes the bytes) instead of compiling one.
+          ...(this.inspectionOwner ? { windowsBirthAssembly: this.inspectionOwner.assembly() } : {}),
+        }
       : {};
     const encoded = Buffer.from(JSON.stringify({
       nonce,

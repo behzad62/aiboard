@@ -2,7 +2,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -334,6 +334,116 @@ async function compileJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssem
     return { path: dllPath, sha256 };
   } catch {
     return null;
+  }
+}
+
+/** The Windows birth inspection helper, compiled on this machine from its hash-pinned source. */
+export interface WindowsBirthHelperAssembly { readonly path: string; readonly sha256: string; readonly sourceSha256: string }
+interface WindowsBirthHelperBuild { readonly bytes: Buffer; readonly sha256: string; readonly sourceSha256: string }
+const BIRTH_HELPER_DLL_FILENAME = "BirthHelper.dll";
+// The fixed System32 Windows PowerShell the inspection host also uses (windows-birth/session.mjs), never a PATH or
+// current-directory lookup.
+const WINDOWS_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+const WINDOWS_SYSTEM32 = "C:\\Windows\\System32";
+// Measured one-time compile of helper-live.cs on Windows 10 / PowerShell 5.1: 345-737 ms (median 437, 9 runs) and
+// 387-587 ms through this wrapper. The ceiling is the Job host's compile ceiling; each caller also has its own
+// preparation deadline.
+const BIRTH_HELPER_COMPILE_TIMEOUT_MS = JOB_HOST_COMPILE_TIMEOUT_MS;
+const birthHelperBuilds = new Map<string, Promise<WindowsBirthHelperBuild>>();
+
+/**
+ * The birth helper assembly for one process backend: compiled once per Runner process (compileWindowsBirthHelper),
+ * then placed in that backend's own state directory, `<state>/birth/<digest prefix>/BirthHelper.dll`. The state
+ * directory outlives the Runner, as the supervisors that run this helper may. The source is checked against its pin
+ * by the caller and again here; the placed file's bytes are re-hashed against the build, and each inspection host
+ * re-hashes the bytes it loads. Any mismatch or failure throws, and inspection then fails closed.
+ */
+export async function provideWindowsBirthHelperAssembly(stateDirectory: string, source: Uint8Array, sourceSha256: string): Promise<WindowsBirthHelperAssembly> {
+  const build = await compileWindowsBirthHelper(source, sourceSha256);
+  mkdirSync(join(stateDirectory, "birth"), { recursive: true, mode: 0o700 });
+  // Canonical (long-name) form: the session refuses any path whose canonical form differs, an 8.3 TEMP included.
+  const directory = join(realpathSync.native(join(stateDirectory, "birth")), build.sha256.slice(0, 16));
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const path = join(directory, BIRTH_HELPER_DLL_FILENAME);
+  const placed = (): boolean => {
+    try { return createHash("sha256").update(readFileSync(path)).digest("hex") === build.sha256; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  };
+  if (!placed()) {
+    const temporary = join(directory, `.${randomUUID()}.tmp`);
+    writeFileSync(temporary, build.bytes, { flag: "wx", mode: 0o600 });
+    try { renameSync(temporary, path); }
+    catch (error) { rmSync(temporary, { force: true }); if (!placed()) throw error; }
+    if (!placed()) throw new Error("Windows birth helper assembly changed after it was placed.");
+  }
+  return Object.freeze({ path, sha256: build.sha256, sourceSha256 });
+}
+
+/**
+ * Compiles `windows-birth/helper-live.cs` with Windows' own C# compiler, at most once per Runner process and source,
+ * and keeps the bytes in memory. No binary ships with AIBoard. CodeDom is used instead of `Add-Type -OutputAssembly`,
+ * which resolves the output path as a wildcard. The compile runs in System32 with a minimal environment whose TEMP is
+ * its own private directory. As with the Job host's helper, a failed compile is remembered for the process lifetime:
+ * a retry would give a process alive at that moment a second chance to have its own bytes compiled and pinned.
+ */
+function compileWindowsBirthHelper(source: Uint8Array, sourceSha256: string): Promise<WindowsBirthHelperBuild> {
+  if (process.platform !== "win32") return Promise.reject(new Error("Windows birth helper compile requires Windows."));
+  if (!/^[0-9a-f]{64}$/.test(sourceSha256) || createHash("sha256").update(source).digest("hex") !== sourceSha256)
+    return Promise.reject(new Error("Windows birth helper source does not match its pin."));
+  const cached = birthHelperBuilds.get(sourceSha256);
+  if (cached) return cached;
+  const flight = compileWindowsBirthHelperAssembly(Buffer.from(source), sourceSha256);
+  birthHelperBuilds.set(sourceSha256, flight);
+  return flight;
+}
+
+async function compileWindowsBirthHelperAssembly(source: Buffer, sourceSha256: string): Promise<WindowsBirthHelperBuild> {
+  const generationDir = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-birth-helper-")));
+  try {
+    const dllPath = join(generationDir, BIRTH_HELPER_DLL_FILENAME);
+    const encodedPath = Buffer.from(dllPath, "utf8").toString("base64");
+    // Fixed script: the output path is embedded as base64 and the source arrives base64 over the private stdin pipe,
+    // so neither passes through PowerShell parsing.
+    const script = [
+      "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'",
+      `$out=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedPath}'))`,
+      "$src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine()))",
+      "$provider=New-Object Microsoft.CSharp.CSharpCodeProvider",
+      "$options=New-Object System.CodeDom.Compiler.CompilerParameters",
+      "$options.GenerateInMemory=$false;$options.GenerateExecutable=$false;$options.OutputAssembly=$out;$options.CompilerOptions='/optimize+ /platform:x64'",
+      "foreach($reference in @('System.dll','System.Core.dll','System.Security.dll')){[void]$options.ReferencedAssemblies.Add($reference)}",
+      "$result=$provider.CompileAssemblyFromSource($options,$src)",
+      "if($result.Errors.HasErrors){foreach($e in $result.Errors){[Console]::Error.WriteLine($e.ToString())};exit 2}",
+      "exit 0",
+    ].join("\n");
+    const environment = {
+      SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", PATH: WINDOWS_SYSTEM32, PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      PSModulePath: `${WINDOWS_SYSTEM32}\\WindowsPowerShell\\v1.0\\Modules`, TEMP: generationDir, TMP: generationDir,
+    };
+    const outcome = await new Promise<{ code: number | null; stderr: string; error?: Error }>((resolvePromise) => {
+      let settled = false; let stderr = "";
+      const finish = (code: number | null, error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        resolvePromise({ code, stderr, ...(error ? { error } : {}) });
+      };
+      const child = spawn(WINDOWS_POWERSHELL,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+        { cwd: WINDOWS_SYSTEM32, env: environment, windowsHide: true, stdio: ["pipe", "ignore", "pipe"], timeout: BIRTH_HELPER_COMPILE_TIMEOUT_MS, killSignal: "SIGKILL" });
+      child.stderr?.on("data", (chunk: Buffer) => { if (stderr.length < 4096) stderr += chunk.toString("utf8"); });
+      child.once("error", (error) => finish(null, error));
+      child.once("exit", (code) => finish(code));
+      const stdin = child.stdin;
+      if (!stdin) { finish(null, new Error("Windows birth helper compile has no stdin.")); return; }
+      stdin.write(`${source.toString("base64")}\n`, (error) => { if (error) finish(null, error); else stdin.end(); });
+    });
+    if (outcome.code !== 0)
+      throw new Error(`Windows birth helper compile failed (exit ${String(outcome.code)}): ${outcome.stderr.slice(0, 1024)}`, outcome.error ? { cause: outcome.error } : undefined);
+    const bytes = readFileSync(dllPath);
+    if (bytes.byteLength < 512) throw new Error("Windows birth helper compile produced no assembly.");
+    return Object.freeze({ bytes, sha256: createHash("sha256").update(bytes).digest("hex"), sourceSha256 });
+  } finally {
+    try { rmSync(generationDir, { recursive: true, force: true }); } catch {}
   }
 }
 
