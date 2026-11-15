@@ -1663,7 +1663,9 @@ test("Windows supervisor gives a slow default inventory its whole bound, with no
     const recovered = await waitForPortableState(directory, (state) =>
       state.status === "running" && (state.windowsTreeRefreshCount ?? 0) >= 2 &&
       (state.windowsTreeFailures ?? 0) === 0 && state.windowsTreeInspectionDeadlineMs === 60_000,
-    8_000);
+    // A ceiling, polled fast: two 3 s inventories plus supervisor startup, which includes its Windows PowerShell
+    // birth host (measured 218-271 ms warm, up to 1.8 s cold; the old 8 s left 2 s and failed once under suite load).
+    20_000);
     assert.ok(recovered.rootProcess);
     assert.equal(processIsAlive(recovered.rootProcess.pid), true);
   } catch (error) { hasPrimaryFailure = true; primaryFailure = error; }
