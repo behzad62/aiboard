@@ -1,5 +1,6 @@
 // Windows birth inspection helper. No binary ships with AIBoard: the Runner compiles this source into helper.exe
-// once per process with Windows' own C# compiler (csc.exe, CLR 4 BCL, C# 5) after checking its pin.
+// with Windows' own C# compiler (csc.exe, CLR 4 BCL, C# 5) after checking its pin, and reuses that exe until this
+// source changes.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;

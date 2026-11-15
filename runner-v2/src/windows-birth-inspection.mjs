@@ -13,7 +13,7 @@ const ASSETS = Object.freeze({
   'queue.mjs':'51cfea81aee122fd92e1a241ae435e96de83e1987aa55eec5efd16f6b17d8788',
   'runtime-worker.mjs':'3f35034f63a56c2727dab0459af05449177424a0b652e64667506dc96f3e45ce',
   'session.mjs':'75a0982e346b1e69afd3e90da8d39264e96743d2ea29ac06b214f9a46631be42',
-  'helper-live.cs':'aec60861d8999a5c196c4ad1483f2d34bdf51b7ad0af7e8a0e6a09e45ace5377',
+  'helper-live.cs':'c7a4c7f799f59f84755a3bb666679f3616d4e79f9b1e8f3ecc40d6813d475742',
 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const unknown = () => ({state:'unknown'});

@@ -135,7 +135,7 @@ let terminalStatus;
 let terminalMessage;
 let terminalExitCode;
 let closeInspection;
-// The helper exe is the Runner's, compiled once per Runner process. The loader checks it against the pinned source
+// The helper exe is the Runner's, compiled on this machine from its source. The loader checks it against the pinned source
 // and the session checks the digest of the file it holds before starting it; missing or mismatched, preparation fails
 // closed.
 const inspectionOwner = config.platform === "windows" && !config.windowsBirthInspector

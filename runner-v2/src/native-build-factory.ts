@@ -9,7 +9,7 @@ import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
 import { testIntegrityPinDigest, testIntegrityProfileFindings } from "./test-integrity.js";
 import { explicitStartBlocked } from "./scheduler-store.js";
 import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
-import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost, windowsBirthHelperDirectory } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
 import { requireGitRunner, unavailableGitRunner } from "./git-command.js";
@@ -1119,7 +1119,7 @@ export class NativeBuildFactory {
       : undefined;
     const windowsBackendKinds = new Set(windowsFacts ? selectWindowsProcessBackendKinds(windowsFacts) : []);
     const windowsPortableBackend = process.platform === "win32" && windowsFacts && windowsBackendKinds.has("portable")
-      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), jobObjects: "unavailable", semanticFacts: windowsFacts })
+      ? createWindowsProcessBackend({ stateDirectory: join(runRoot, "process-backend"), windowsBirthHelperDirectory: windowsBirthHelperDirectory(this.options.stateDirectory), jobObjects: "unavailable", semanticFacts: windowsFacts })
       : undefined;
     let subprocessWorkloadsSettled = true;
     if (windowsPortableBackend instanceof NativeOwnedProcessBackend) {

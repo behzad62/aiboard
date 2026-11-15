@@ -19,6 +19,7 @@ import {
 } from "./runner-capability-contract.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import { runnerRunStateSegment } from "./run-state-identity.js";
+import { windowsBirthHelperDirectory } from "./windows-job-process-host.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
   createRunnerInternalProcessKernel,
@@ -168,6 +169,7 @@ export function createRunnerInternalExecutionContext(
   const contextId = `runner-internal-${randomUUID()}`;
   const processKernel = options.processKernel ?? createRunnerInternalProcessKernel({
     stateDirectory: join(stateDirectory, "internal-processes"),
+    windowsBirthHelperDirectory: windowsBirthHelperDirectory(stateDirectory),
   });
   const ownsProcessKernel = options.processKernel === undefined ||
     options.closeInjectedProcessKernel === true;

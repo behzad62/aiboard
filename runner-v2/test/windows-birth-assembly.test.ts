@@ -6,11 +6,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import { WindowsBirthInspectionOwner } from "../src/windows-birth-inspection.mjs";
-import { provideWindowsBirthHelperAssembly } from "../src/windows-job-process-host.js";
+import { provideWindowsBirthHelperAssembly, resetWindowsBirthHelperBuildsForTests, WINDOWS_BIRTH_HELPER_COMPILE_FLAGS } from "../src/windows-job-process-host.js";
 
 const windows = process.platform === "win32";
 const source = readFileSync(new URL("../src/windows-birth/helper-live.cs", import.meta.url));
@@ -70,6 +70,103 @@ test("the helper compiles locally into an exe, is placed canonically in the stat
   assert.deepEqual(readdirSync(dirname(first.path)), ["helper.exe"]);
 });
 
+// Windows' compiler gives every compile a new digest, so an unchanged digest after a reset proves no compile ran.
+const REUSE = { reuseRecorded: true } as const;
+const SCHEMA = "aiboard-windows-birth-helper-record-v1";
+const recordsIn = (placed: { path: string }): string[] =>
+  readdirSync(dirname(dirname(placed.path))).filter((name) => /^build-[0-9a-f]{16}\.json$/.test(name));
+const recordOf = (placed: { path: string }): string => {
+  const records = recordsIn(placed);
+  assert.equal(records.length, 1, `one build record: ${records.join(", ")}`);
+  return join(dirname(dirname(placed.path)), records[0]!);
+};
+const readRecord = (placed: { path: string }): Record<string, unknown> => JSON.parse(readFileSync(recordOf(placed), "utf8"));
+const digestDirectories = (placed: { path: string }): string[] => readdirSync(dirname(dirname(placed.path))).filter((name) => /^[0-9a-f]{16}$/.test(name));
+
+test("a later Runner start uses the recorded helper without compiling it again", { skip: !windows }, async (t) => {
+  const state = stateDirectory(t);
+  const first = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  const record = readRecord(first);
+  assert.deepEqual(Object.keys(record).sort(), ["recipeSha256", "schema", "sha256", "sourceSha256"]);
+  assert.equal(record.schema, SCHEMA);
+  assert.equal(record.sourceSha256, sourceSha256);
+  assert.equal(record.sha256, first.sha256);
+  assert.match(String(record.recipeSha256), /^[0-9a-f]{64}$/);
+  resetWindowsBirthHelperBuildsForTests();
+  const second = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  assert.deepEqual(second, first, "the recorded exe, with no new compile");
+  assert.deepEqual(digestDirectories(first), [first.sha256.slice(0, 16)], "no second copy");
+});
+
+test("without reuse, as for a backend with no Runner helper directory, nothing is recorded or reused", { skip: !windows }, async (t) => {
+  const state = stateDirectory(t);
+  const first = await provideWindowsBirthHelperAssembly(state, source, sourceSha256);
+  assert.deepEqual(recordsIn(first), []);
+  resetWindowsBirthHelperBuildsForTests();
+  const second = await provideWindowsBirthHelperAssembly(state, source, sourceSha256);
+  assert.notEqual(second.sha256, first.sha256, "compiled again");
+  // A record and its intact exe planted in such a directory are never read: only an opted-in caller would use them.
+  resetWindowsBirthHelperBuildsForTests();
+  const planted = await provideWindowsBirthHelperAssembly(stateDirectory(t), source, sourceSha256, REUSE);
+  const birth = dirname(dirname(second.path));
+  writeFileSync(join(birth, basename(recordOf(planted))), readFileSync(recordOf(planted)));
+  mkdirSync(join(birth, planted.sha256.slice(0, 16)));
+  writeFileSync(join(birth, planted.sha256.slice(0, 16), "helper.exe"), readFileSync(planted.path));
+  resetWindowsBirthHelperBuildsForTests();
+  const third = await provideWindowsBirthHelperAssembly(state, source, sourceSha256);
+  assert.notEqual(third.sha256, planted.sha256, "not the planted exe");
+  assert.notEqual(third.sha256, second.sha256, "compiled again");
+  resetWindowsBirthHelperBuildsForTests();
+  assert.equal((await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE)).sha256, planted.sha256,
+    "the planted pair is valid: an opted-in caller would reuse it");
+});
+
+test("a recorded helper that changed or went missing is compiled again into a new directory and recorded", { skip: !windows }, async (t) => {
+  const state = stateDirectory(t);
+  const first = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  writeFileSync(first.path, Buffer.from("not the helper"));
+  resetWindowsBirthHelperBuildsForTests();
+  const second = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  assert.notEqual(second.sha256, first.sha256);
+  assert.notEqual(dirname(second.path), dirname(first.path), "a new directory, never the old exe a supervisor may still run");
+  assert.equal(readFileSync(first.path, "utf8"), "not the helper", "the old directory is left as it was");
+  assert.equal(readRecord(second).sha256, second.sha256);
+  rmSync(second.path);
+  resetWindowsBirthHelperBuildsForTests();
+  const third = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  assert.notEqual(third.sha256, second.sha256);
+  assert.equal(sha(readFileSync(third.path)), third.sha256);
+  assert.equal(readRecord(third).sha256, third.sha256);
+});
+
+test("a missing, malformed, foreign or oversized record, or a sidecar beside the recorded exe, means a new compile", { skip: !windows }, async (t) => {
+  const state = stateDirectory(t);
+  let current = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+  const record = recordOf(current);
+  const valid = (): Record<string, unknown> => JSON.parse(readFileSync(record, "utf8"));
+  const cases: Array<[string, () => void]> = [
+    ["missing", () => rmSync(record)],
+    ["malformed", () => writeFileSync(record, "{")],
+    ["another source", () => writeFileSync(record, JSON.stringify({ ...valid(), sourceSha256: "1".repeat(64) }))],
+    ["another recipe", () => writeFileSync(record, JSON.stringify({ ...valid(), recipeSha256: "2".repeat(64) }))],
+    ["another schema", () => writeFileSync(record, JSON.stringify({ ...valid(), schema: "aiboard-windows-birth-helper-record-v0" }))],
+    ["extra fields", () => writeFileSync(record, JSON.stringify({ ...valid(), path: "C:\\x\\helper.exe" }))],
+    ["oversized", () => writeFileSync(record, JSON.stringify({ ...valid() }) + " ".repeat(5_000))],
+    ["a sidecar", () => writeFileSync(join(dirname(current.path), "helper.exe.config"), "")],
+  ];
+  for (const [name, damage] of cases) {
+    damage();
+    resetWindowsBirthHelperBuildsForTests();
+    const next = await provideWindowsBirthHelperAssembly(state, source, sourceSha256, REUSE);
+    assert.notEqual(next.sha256, current.sha256, name);
+    const rewritten = valid();
+    assert.equal(rewritten.sha256, next.sha256, name);
+    assert.equal(rewritten.sourceSha256, sourceSha256, name);
+    assert.equal(rewritten.schema, SCHEMA, name);
+    current = next;
+  }
+});
+
 test("a source that does not match its pin is never compiled", { skip: !windows }, async (t) => {
   const state = stateDirectory(t);
   await assert.rejects(provideWindowsBirthHelperAssembly(state, source, "0".repeat(64)), /does not match its pin/);
@@ -92,8 +189,7 @@ test("the source stays warning-free on Windows' own compiler", { skip: !windows 
   const sourcePath = join(directory, "helper-live.cs");
   writeFileSync(sourcePath, source);
   const result = spawnSync("C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe", [
-    "/nologo", "/noconfig", "/target:winexe", "/platform:x64", "/optimize+", "/debug-", "/warn:4", "/warnaserror+", "/utf8output",
-    "/reference:System.dll", "/reference:System.Core.dll", "/reference:System.Security.dll", `/out:${join(directory, "helper.exe")}`, sourcePath,
+    ...WINDOWS_BIRTH_HELPER_COMPILE_FLAGS, "/warnaserror+", `/out:${join(directory, "helper.exe")}`, sourcePath,
   ], { encoding: "utf8", windowsHide: true, cwd: "C:\\Windows\\System32" });
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   assert.equal(`${result.stdout}${result.stderr}`.trim(), "");

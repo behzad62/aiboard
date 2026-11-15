@@ -24,6 +24,8 @@ export interface WindowsProcessBackendOptions {
   /** A caller may supply the existing authenticated Job supervisor as an optional enhancement. */
   readonly jobObjects?: "unavailable" | { readonly service: WindowsJobProcessHost };
   readonly semanticFacts?: ProcessHostSemanticFacts;
+  /** The Runner's own birth helper directory (see NativeOwnedProcessBackendOptions.windowsBirthHelperDirectory). */
+  readonly windowsBirthHelperDirectory?: string;
 }
 export type WindowsJobProcessService = WindowsJobProcessHost;
 
@@ -48,6 +50,7 @@ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
       startupDeadlineAt: options.startupDeadlineAt,
       beforeFenceEffect: options.beforeFenceEffect,
       removeRetiredAuthority: options.removeRetiredAuthority,
+      ...(options.windowsBirthHelperDirectory === undefined ? {} : { windowsBirthHelperDirectory: options.windowsBirthHelperDirectory }),
       platform: "windows",
       backendId: "runner-windows-supervisor-v1",
       lifecycleScope: "process_group",

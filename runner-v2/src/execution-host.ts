@@ -23,7 +23,7 @@ import {
 import { ManagedProcessService } from "./managed-process.js";
 import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
 import type { ManagedProcessLaunchRequest, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
-import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost, windowsBirthHelperDirectory, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -281,6 +281,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   });
   const internalProcesses = createRunnerInternalProcessKernel({
     stateDirectory: join(stateDirectory, "internal-processes"),
+    windowsBirthHelperDirectory: windowsBirthHelperDirectory(stateDirectory),
     platform: platform === "windows"
       ? "win32"
       : process.platform === "win32" ? "linux" : process.platform,
@@ -903,6 +904,7 @@ async function createWindowsBackends(input: CreateRunBindingInput, runRoot: stri
   const kinds = new Set(selectWindowsProcessBackendKinds(facts));
   const portable = kinds.has("portable") ? createWindowsProcessBackend({
     stateDirectory: join(runRoot, "process-backend"),
+    windowsBirthHelperDirectory: windowsBirthHelperDirectory(input.stateDirectory),
     jobObjects: "unavailable",
     semanticFacts: facts,
   }) : undefined;

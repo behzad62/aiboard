@@ -54,6 +54,12 @@ export interface NativeOwnedProcessBackendOptions {
   readonly beforeFenceEffect?: (kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume" | "verify_empty" | "release") => void | Promise<void>;
   /** Test seam for a bounded post-retirement authority-directory removal fault. */
   readonly removeRetiredAuthority?: (directory: string) => void;
+  /**
+   * Windows: the Runner's own birth helper directory in the per-user AIBoard home (`<state>/windows-birth-helper`),
+   * trusted as the installation is. The helper compiled there is reused across Runner starts and backends until its
+   * source or recipe changes. Never a shared directory such as one under TEMP.
+   */
+  readonly windowsBirthHelperDirectory?: string;
 }
 export interface NativeProcessOperations {
   inspectProcessBirth(pid: number, platform: "posix" | "windows", attemptDeadlineMs?: number): ProcessBirthInspection;
@@ -162,11 +168,14 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   constructor(private readonly options: NativeOwnedProcessBackendOptions) {
     this.stateDirectory = resolve(options.stateDirectory ?? join(tmpdir(), "aiboard-portable-processes"));
     this.pollIntervalMs = options.pollIntervalMs ?? 25;
-    // The birth helper is compiled once per Runner process on this machine (no binary ships) and placed in this
-    // backend's state directory, which outlives the Runner as its supervisors may.
+    // The birth helper is compiled on this machine (no binary ships). In the Runner's own helper directory it is kept
+    // for later starts and every backend until its source or recipe changes; without one, this backend's state
+    // directory gets its own copy and never reuses a recorded one. Either outlives the Runner, as supervisors may.
+    const helperDirectory = options.windowsBirthHelperDirectory === undefined ? undefined : resolve(options.windowsBirthHelperDirectory);
     this.inspectionOwner = !options.operations && options.platform === "windows"
       ? new WindowsBirthInspectionOwner(undefined, {
-        assembly: (source, sourceSha256) => provideWindowsBirthHelperAssembly(this.stateDirectory, source, sourceSha256),
+        assembly: (source, sourceSha256) => provideWindowsBirthHelperAssembly(helperDirectory ?? this.stateDirectory, source, sourceSha256,
+          { reuseRecorded: helperDirectory !== undefined }),
       }) : undefined;
     const owner = this.inspectionOwner;
     this.operations = options.operations ?? (owner ? {
