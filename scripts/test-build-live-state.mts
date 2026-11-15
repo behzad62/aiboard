@@ -1428,6 +1428,20 @@ assert.deepEqual(
   }
 );
 
+// A worker stop the Runner could not prove pauses the run with the task's folder kept; the dock
+// says so in plain words, not as the reason code, and Resume retries the stop.
+{
+  const pause = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_unproven:task-7", taskId: "task-7", detail: "Managed process stop not proven: Shared managed cleanup did not prove release." },
+  } as never);
+  assert.equal(pause?.waitingForOwner, false, "Resume stays available: it retries the stop");
+  assert.equal(pause?.title, "Paused: a worker's processes could not be proven stopped");
+  assert.match(pause!.detail, /task task-7/);
+  assert.match(pause!.detail, /Resume tries the stop again/);
+  assert.doesNotMatch(pause!.detail, /process_stop_unproven|process stop unproven/);
+}
+
 // Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as
 // "Working…". Only an open model or tool segment means a session is working now.
 {

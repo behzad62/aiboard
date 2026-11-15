@@ -159,6 +159,14 @@ export function nativeBuildPauseDescription(
   if (reason === "project_handoff_required" || reason.startsWith("project_handoff")) {
     return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
   }
+  if (reason.startsWith("process_stop_unproven:")) {
+    const taskId = reason.slice("process_stop_unproven:".length);
+    return {
+      waitingForOwner: false,
+      title: "Paused: a worker's processes could not be proven stopped",
+      detail: `A program the worker on ${taskId ? `task ${taskId}` : "a task"} started may still be running in its folder, so the task keeps that folder and nothing else starts there. You can close any leftover program yourself. Resume tries the stop again; once it is proven, the task goes on.`,
+    };
+  }
   if (reason === "coverage_reviewer_unavailable") {
     return {
       waitingForOwner: false,

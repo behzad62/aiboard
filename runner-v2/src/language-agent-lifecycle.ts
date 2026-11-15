@@ -1,3 +1,4 @@
+import { AgentCleanupUnverifiedError } from "./process-stop-proof.js";
 import type { LanguageIntelligenceProvider, LanguageInvocationContext } from "./language-intelligence.js";
 
 /** Only the configured-language router implements agent ownership; built-in
@@ -11,7 +12,7 @@ export async function withLanguageAgentLifecycle<T>(
   let failed = false; let primary: unknown; let result: T | undefined;
   try { result = await perform(); } catch (error) { failed = true; primary = error; }
   try { await language?.closeAgent?.(exact); }
-  catch (cleanup) { throw new AggregateError(failed ? [primary, cleanup] : [cleanup], "Agent language-server cleanup remains unverified."); }
+  catch (cleanup) { throw new AgentCleanupUnverifiedError(failed ? [primary, cleanup] : [cleanup], "Agent language-server cleanup remains unverified."); }
   if (failed) throw primary;
   return result!;
 }

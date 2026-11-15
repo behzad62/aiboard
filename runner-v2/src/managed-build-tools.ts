@@ -1,3 +1,4 @@
+import { AgentCleanupUnverifiedError } from "./process-stop-proof.js";
 import type { NativeTool, ToolCallBlock, ToolExecutionContext, ToolResult } from "./agent-contracts.js";
 import type { ToolBrokerOptions } from "./tool-broker.js";
 import { ToolBroker } from "./tool-broker.js";
@@ -70,7 +71,7 @@ export async function withManagedBuildToolLifecycle<T>(runtime: ManagedBuildTool
   try { await runtime?.prepare(); result = await perform(); }
   catch (error) { failed = true; primary = error; }
   try { await runtime?.close(); }
-  catch (cleanup) { throw new AggregateError(failed ? [primary, cleanup] : [cleanup], "Managed Build tool cleanup remains unverified."); }
+  catch (cleanup) { throw new AgentCleanupUnverifiedError(failed ? [primary, cleanup] : [cleanup], "Managed Build tool cleanup remains unverified."); }
   if (failed) throw primary;
   return result!;
 }

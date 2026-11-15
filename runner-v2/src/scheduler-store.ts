@@ -276,6 +276,8 @@ export type SchedulerEventType =
   | "temp.creation_recorded"
   | "temp.record_cleared"
   | "cleanup.checked"
+  | "worker.stop_unproven"
+  | "worker.stop_proven"
   | "repair.cycle_limit_reached"
   | "repair.cycle_limit_extended"
   | "run.crew_changed"
@@ -1137,6 +1139,21 @@ export interface RepairFlakyProjection {
  * state directory — never in a shared or worker-writable file — so an
  * executed workload cannot forge ownership (probe F).
  */
+/**
+ * A worker attempt whose stop was not proven: a process it started may still
+ * run in its worktree. The packet claim stays held and the run stays paused
+ * until a retried stop is proven; then the attempt goes on with `outcome`,
+ * the outcome it had (a WorkerOutcome other than stop_unproven).
+ */
+export interface UnprovenWorkerStopProjection {
+  taskId: string;
+  attempt: number;
+  workerId: string;
+  reason: string;
+  outcome: Record<string, unknown>;
+  sequence: number;
+}
+
 export interface TempRecordProjection {
   path: string;
   ownerRunId: string;
@@ -1341,6 +1358,8 @@ export interface SchedulerProjection {
   repairIssues?: Record<string, RepairIssueProjection>;
   repairFlaky?: Record<string, RepairFlakyProjection>;
   tempRecords?: Record<string, TempRecordProjection>;
+  /** Worker attempts whose stop is unproven, by task id; each keeps its packet claim. */
+  unprovenWorkerStops?: Record<string, UnprovenWorkerStopProjection>;
   verifier?: VerifierProjection;
   planRiskDeclaration?: {
     risk: PlanRiskLevel;
@@ -3927,6 +3946,9 @@ export function reduceSchedulerEvent(
     ...(current.tempRecords
       ? { tempRecords: Object.fromEntries(Object.entries(current.tempRecords).map(([key, record]) => [key, { ...record }])) }
       : {}),
+    ...(current.unprovenWorkerStops
+      ? { unprovenWorkerStops: Object.fromEntries(Object.entries(current.unprovenWorkerStops).map(([key, stop]) => [key, { ...stop, outcome: structuredClone(stop.outcome) }])) }
+      : {}),
     ...(current.contextRecording
       ? { contextRecording: cloneContextRecording(current.contextRecording) }
       : {}),
@@ -5168,6 +5190,50 @@ export function reduceSchedulerEvent(
         delete records[key];
         next.tempRecords = records;
       }
+      break;
+    }
+    case "worker.stop_unproven": {
+      if (event.actor.role !== "runner" || event.actor.id !== "scheduler") {
+        throw new Error("Only the scheduler may record an unproven worker stop.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const attempt = requiredNumber(event.payload, "attempt");
+      const workerId = requiredString(event.payload, "workerId");
+      const reason = requiredString(event.payload, "reason");
+      const outcome = event.payload.outcome;
+      if (!outcome || typeof outcome !== "object" || Array.isArray(outcome) ||
+        !["submitted", "guidance", "failed", "paused"].includes(String((outcome as { type?: unknown }).type))) {
+        throw new Error("An unproven worker stop must keep the attempt's settled outcome.");
+      }
+      const task = next.tasks[taskId];
+      if (!task || task.attempt !== attempt) {
+        throw new Error(`Unproven worker stop does not match task ${taskId} attempt.`);
+      }
+      const prior = next.unprovenWorkerStops?.[taskId];
+      if (prior && prior.attempt !== attempt) {
+        throw new Error(`Task ${taskId} already has an unproven stop for attempt ${prior.attempt}.`);
+      }
+      next.unprovenWorkerStops = {
+        ...(next.unprovenWorkerStops ?? {}),
+        [taskId]: prior ?? { taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>, sequence: event.sequence },
+      };
+      break;
+    }
+    case "worker.stop_proven": {
+      if (event.actor.role !== "runner" || event.actor.id !== "scheduler") {
+        throw new Error("Only the scheduler may record a proven worker stop.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const attempt = requiredNumber(event.payload, "attempt");
+      requiredString(event.payload, "evidence");
+      const pending = next.unprovenWorkerStops?.[taskId];
+      if (!pending || pending.attempt !== attempt) {
+        throw new Error(`Task ${taskId} attempt ${attempt} has no unproven stop to settle.`);
+      }
+      const stops = { ...next.unprovenWorkerStops };
+      delete stops[taskId];
+      if (Object.keys(stops).length > 0) next.unprovenWorkerStops = stops;
+      else delete next.unprovenWorkerStops;
       break;
     }
     case "run.browsing_configured": {

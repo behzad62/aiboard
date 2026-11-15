@@ -25,6 +25,7 @@ import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment } from "../src/task-scheduler.js";
+import type { ManagedProcessService } from "../src/managed-process.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
 import {
   resolveWorkerSessionId,
@@ -256,6 +257,123 @@ test("native worker maps a replan_requested loop result to a blocking guidance o
         "Replan requested (scope_exceeded): The cache key factory lives outside this task.\nProposed change: Split the task.",
       evidenceSequence: 3,
     });
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    scheduler?.close();
+    evidence?.close();
+    memory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("native worker proves its managed-process stop before an outcome counts, and an unproven stop keeps the outcome for a retried stop", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-stop-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_1",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_1",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_a");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    seedRunningTask(scheduler);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:code",
+      providerId: "primary",
+      modelId: "code",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const closes: unknown[] = [];
+    const closeResults = ["unproven", "unproven", "proven"];
+    const managedProcesses = {
+      closeAgent: async (owner: unknown) => {
+        closes.push(owner);
+        if (closeResults.shift() !== "proven") {
+          throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+        }
+      },
+    } as unknown as ManagedProcessService;
+    const driver = new NativeWorkerDriver({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        toolTurn("replan", "request_replan", {
+          requestId: "replan-1",
+          reason: "scope_exceeded",
+          summary: "The cache key factory lives outside this task.",
+          proposedChange: "Split the task.",
+          evidenceSequence: 3,
+        }),
+      ])]]),
+      permissionProfile: "full",
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore: evidence,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      projectId: "project_1",
+      projectRoot: project,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
+      managedProcesses,
+    });
+    const assignment = {
+      runId: "run_1",
+      task: rebuildTask(scheduler),
+      attempt: 1,
+      workerId: "worker_task_a_1",
+      workspacePath: workspace.path,
+    };
+    const outcome = await driver.run(assignment);
+    const owner = {
+      runId: "run_1",
+      sessionId: resolveWorkerSessionId("run_1", "task_a", 1, "worker_task_a_1"),
+      actor: { role: "worker", id: "worker_task_a_1" },
+    };
+    assert.deepEqual(closes, [owner], "the attempt's own processes are stopped before its outcome counts");
+    assert.deepEqual(outcome, {
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: Shared managed cleanup did not prove release.",
+      outcome: {
+        type: "guidance",
+        requestId: "replan-1",
+        blocking: true,
+        question:
+          "Replan requested (scope_exceeded): The cache key factory lives outside this task.\nProposed change: Split the task.",
+        evidenceSequence: 3,
+      },
+    }, "the outcome it had is kept, not returned, while the stop is unproven");
+    await assert.rejects(driver.retryStop(assignment), (error: unknown) =>
+      error instanceof AggregateError && /still not proven/.test(error.message));
+    await driver.retryStop(assignment);
+    assert.deepEqual(closes, [owner, owner, owner], "each retry stops the same exact owner again");
   } finally {
     sessions?.close();
     ledger?.close();
