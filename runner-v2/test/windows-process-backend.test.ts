@@ -202,7 +202,7 @@ async function sessionTerminalFixture(t: import("node:test").TestContext, mode: 
     const signal = () => { let resolve!: (value?: unknown) => void; const promise = new Promise<unknown>(done => { resolve = done; }); return { promise, resolve }; };
     const session = Object.assign(Object.create(WindowsBirthSession.prototype), {
       state: "NEW", registered: false, lease: null, generation: lease.generation, generationState: new SharedArrayBuffer(4),
-      config: { assembly: { sha256: lease.source } }, requestId: 0, pending: new Map(), consumed: new Set(), errors: [], firstFailure: null,
+      config: { binary: { sha256: lease.source } }, requestId: 0, pending: new Map(), consumed: new Set(), errors: [], firstFailure: null,
       failure: signal(), workerExited: signal(), child: null, descriptor: null, closePromise: null,
       helperExit: null, helperClose: null, workerExit: null, rescueUsed: false, stdout: [], stderr: [],
       counters: { queries: 0, existenceChecks: 0, maximumUnresolvedSlots: 0, helperSpawns: 0, workerStarts: 0, compilerSpawns: 0 },
@@ -364,6 +364,8 @@ import {
 
 /** Supervisors started directly here run the real inspection, so they get the helper the Runner would hand them. */
 let birthAssemblyState: string | undefined;
+// Best effort: a helper a leftover supervisor still runs cannot be removed on Windows.
+test.after(() => { if (birthAssemblyState) try { rmSync(birthAssemblyState, { recursive: true, force: true }); } catch {} });
 async function windowsBirthAssemblyConfig(): Promise<{ windowsBirthAssembly?: unknown }> {
   if (process.platform !== "win32") return {};
   birthAssemblyState ??= mkdtempSync(join(tmpdir(), "aiboard-test-birth-assembly-"));
@@ -1663,8 +1665,8 @@ test("Windows supervisor gives a slow default inventory its whole bound, with no
     const recovered = await waitForPortableState(directory, (state) =>
       state.status === "running" && (state.windowsTreeRefreshCount ?? 0) >= 2 &&
       (state.windowsTreeFailures ?? 0) === 0 && state.windowsTreeInspectionDeadlineMs === 60_000,
-    // A ceiling, polled fast: two 3 s inventories plus supervisor startup, which includes its Windows PowerShell
-    // birth host (measured 218-271 ms warm, up to 1.8 s cold; the old 8 s left 2 s and failed once under suite load).
+    // A ceiling, polled fast: two 3 s inventories, their Node starts and the supervisor's own startup take about 7 s,
+    // which left the old 8 s about 1 s of margin; suite load has passed it (a 9.2 s run). It still returns at once.
     20_000);
     assert.ok(recovered.rootProcess);
     assert.equal(processIsAlive(recovered.rootProcess.pid), true);

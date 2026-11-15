@@ -1,36 +1,15 @@
 // Creator-owned Windows inspection scope. No process, Worker or filesystem I/O on import/constructor.
-// RUNNER_RAW_PROCESS_BOUNDARY: Spawn only Windows PowerShell hosting the pinned, locally compiled inspection helper; retain its original handle, Worker and streams through bounded owned cleanup.
+// RUNNER_RAW_PROCESS_BOUNDARY: Spawn only the pinned, locally compiled inspection helper; retain its original handle, Worker and streams through bounded owned cleanup.
 import { spawn } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { createHash,randomBytes } from 'node:crypto';
-import { lstatSync,realpathSync,openSync,fstatSync,readFileSync,closeSync } from 'node:fs';
+import { existsSync,lstatSync,realpathSync,openSync,fstatSync,readFileSync,closeSync } from 'node:fs';
 import { win32 } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { SLOT,SAB_BYTES,QUEUE_LIMIT,readRequestResult } from './queue.mjs';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const hex=(text,size)=>typeof text==='string'&&new RegExp(`^[0-9a-f]{${size}}$`).test(text);
 const signal=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return{promise,resolve};};
-// The host is Windows PowerShell 5.1 (CLR 4), never a shipped binary. It is started without `detached`: with
-// DETACHED_PROCESS a console program has no console and PowerShell exits at once without running its command. With
-// piped stdio and windowsHide it gets a windowless console of its own.
-const POWERSHELL='C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
-// Fixed host command. The assembly path is embedded as base64 and the digest is hex-checked, so neither passes through
-// PowerShell parsing. The host hashes the bytes it read and loads from those bytes, so the file cannot be swapped
-// between the check and the load. Stdin, stdout and stderr stay the helper's own.
-export function hostCommand(assembly) {
-  if(!assembly||typeof assembly.path!=='string'||!hex(assembly.sha256,64))throw Error('Inspection host assembly');
-  const path=Buffer.from(assembly.path,'utf8').toString('base64');
-  const script=[
-    "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'",
-    `$bytes=[IO.File]::ReadAllBytes([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${path}')))`,
-    "$hasher=[Security.Cryptography.SHA256]::Create()",
-    "$digest=([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()",
-    `if($digest -cne '${assembly.sha256}'){[Console]::Error.WriteLine('Inspection host assembly digest');exit 3}`,
-    "$type=[Reflection.Assembly]::Load($bytes).GetType('BirthHelper',$true)",
-    `exit $type.GetMethod('Main').Invoke($null,[object[]]@(,[string[]]@('--assembly-sha256','${assembly.sha256}')))`,
-  ].join('\n');
-  return Buffer.from(script,'utf16le').toString('base64');
-}
 const env=()=>({SystemRoot:'C:\\Windows',WINDIR:'C:\\Windows',PATH:'C:\\Windows\\System32',PATHEXT:'.COM;.EXE;.BAT;.CMD',PSModulePath:'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules'});
 export function errorFacts(error,depth=0) {
   const facts={name:String(error?.name??error?.class??'Error').slice(0,80),code:String(error?.code??'UNKNOWN').slice(0,80),message:String(error?.message??error).slice(0,512)};
@@ -60,9 +39,9 @@ async function wait(promise,deadline,label) {
 }
 export class WindowsBirthSession {
   constructor(config) {
-    if(!config||Object.keys(config).sort().join(',')!=='assembly,buildPins,sources'||!config.assembly||Object.keys(config.assembly).sort().join(',')!=='path,sha256,sourceSha256'||typeof config.assembly.path!=='string'||!win32.isAbsolute(config.assembly.path)||!config.assembly.path.endsWith('\\BirthHelper.dll')||!hex(config.assembly.sha256,64)||!hex(config.assembly.sourceSha256,64)||!Array.isArray(config.buildPins)||config.buildPins.length<1||config.buildPins.length>16)throw Error('Session creator configuration');
+    if(!config||Object.keys(config).sort().join(',')!=='binary,buildPins,sources'||!config.binary||Object.keys(config.binary).sort().join(',')!=='path,sha256,sourceSha256'||typeof config.binary.path!=='string'||!win32.isAbsolute(config.binary.path)||!config.binary.path.endsWith('\\helper.exe')||!hex(config.binary.sha256,64)||!hex(config.binary.sourceSha256,64)||!Array.isArray(config.buildPins)||config.buildPins.length<1||config.buildPins.length>16)throw Error('Session creator configuration');
     for(const pin of config.buildPins)if(!pin||Object.keys(pin).sort().join(',')!=='path,sha256'||typeof pin.path!=='string'||!win32.isAbsolute(pin.path)||!hex(pin.sha256,64))throw Error('Session build provenance');
-    this.config=Object.freeze({assembly:Object.freeze({...config.assembly}),buildPins:Object.freeze(config.buildPins.map(p=>Object.freeze({...p}))),sources:Object.freeze(Object.fromEntries(Object.entries(config.sources).map(([name,value])=>[name,Object.freeze({...value})])))});
+    this.config=Object.freeze({binary:Object.freeze({...config.binary}),buildPins:Object.freeze(config.buildPins.map(p=>Object.freeze({...p}))),sources:Object.freeze(Object.fromEntries(Object.entries(config.sources).map(([name,value])=>[name,Object.freeze({...value})])))});
     this.workerUrl=bundleRuntime(config.sources);
     this.state='NEW';this.registered=false;this.lease=null;this.generationState=new SharedArrayBuffer(4);this.generation=randomBytes(32).toString('hex');
     this.secret=randomBytes(32).toString('hex');this.challenge=randomBytes(16).toString('hex');this.pipeName='aiboard-birth-'+randomBytes(16).toString('hex');
@@ -99,18 +78,15 @@ export class WindowsBirthSession {
   async prepareOnce(deadline) {
     try {
       if(process.platform!=='win32'||process.arch!=='x64'||!/^v24\./.test(process.version))throw Error('Windows x64 certified Node24 required');
-      const assembly=this.config.assembly;
-      for(const path of [POWERSHELL,assembly.path]){
-        let part=win32.parse(path).root;
-        for(const name of path.slice(part.length).split('\\')){part=win32.join(part,name);if(lstatSync(part).isSymbolicLink())throw Error('Host/assembly component alias');}
-        if(realpathSync.native(path).toLowerCase()!==path.toLowerCase()||!lstatSync(path).isFile())throw Error('Host/assembly path substitution');
-      }
+      const binary=this.config.binary;let part=win32.parse(binary.path).root;
+      for(const name of binary.path.slice(part.length).split('\\')){part=win32.join(part,name);if(lstatSync(part).isSymbolicLink())throw Error('Binary component alias');}
+      if(realpathSync.native(binary.path).toLowerCase()!==binary.path.toLowerCase()||existsSync(binary.path+'.config'))throw Error('Binary path/config substitution');
       for(const pin of this.config.buildPins)if(sha(readFileSync(pin.path))!==pin.sha256)throw Error('Build provenance changed');
-      this.descriptor=openSync(assembly.path,'r');const stat=fstatSync(this.descriptor);
-      if(!stat.isFile()||stat.nlink!==1||stat.size<512||stat.size>10485760)throw Error('Assembly descriptor bound/type/link');
-      const bytes=readFileSync(this.descriptor);if(bytes.length!==stat.size||sha(bytes)!==assembly.sha256)throw Error('Assembly descriptor digest');
+      this.descriptor=openSync(binary.path,'r');const stat=fstatSync(this.descriptor);
+      if(!stat.isFile()||stat.nlink!==1||stat.size<512||stat.size>10485760)throw Error('Binary descriptor bound/type/link');
+      const bytes=readFileSync(this.descriptor);if(bytes.length!==stat.size||sha(bytes)!==binary.sha256)throw Error('Binary descriptor digest');
       if(performance.now()>=deadline)throw Error('Preparation exhausted before child allocation');
-      this.child=spawn(POWERSHELL,['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',hostCommand(assembly)],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:env(),cwd:'C:\\Windows\\System32'});this.counters.helperSpawns++;
+      this.child=spawn(binary.path,['--binary-sha256',binary.sha256],{windowsHide:true,detached:true,stdio:['pipe','pipe','pipe'],env:env(),cwd:'C:\\Windows\\System32'});this.counters.helperSpawns++;
       this.child.on('error',error=>this.fail(error));this.child.stdin.on('error',error=>this.fail(error));
       for(const stream of ['stdout','stderr'])this.child[stream].on('error',error=>this.fail(error));
       this.child.once('exit',(code,signal)=>{this.helperExit={code,signal,at:performance.now()};this.childExited.resolve(this.helperExit);if(!['CLOSING','CLOSED'].includes(this.state))this.fail(Object.assign(Error('Helper exited before owned close'),{nativeExit:this.helperExit}));if(this.firstFailure)this.firstFailure.nativeExit??=this.helperExit;});
@@ -123,10 +99,10 @@ export class WindowsBirthSession {
       });
       this.child.stdout.on('end',()=>{if(line.length)this.fail(Error('Partial helper setup EOF'));});
       this.child.stderr.on('data',chunk=>this.capture('stderr',chunk));
-      this.child.stdin.write(['BOOT1','LIVE',this.generation,this.secret,this.pipeName,assembly.sha256].join('\t')+'\n');
+      this.child.stdin.write(['BOOT1','LIVE',this.generation,this.secret,this.pipeName,binary.sha256].join('\t')+'\n');
       await this.prepared(this.bootstrap.promise,deadline,'Helper bootstrap');await this.prepared(this.control.promise,deadline,'Independent helper control reader');
       this.assertPreparing();if(performance.now()>=deadline)throw Error('Preparation exhausted before Worker allocation');
-      this.worker=new Worker(new URL(this.workerUrl),{execArgv:[],env:env(),workerData:{generation:this.generation,source:assembly.sha256,secret:this.secret,challenge:this.challenge,pipeName:this.pipeName,generationState:this.generationState,timeOrigin:performance.timeOrigin}});this.counters.workerStarts++;
+      this.worker=new Worker(new URL(this.workerUrl),{execArgv:[],env:env(),workerData:{generation:this.generation,source:binary.sha256,secret:this.secret,challenge:this.challenge,pipeName:this.pipeName,generationState:this.generationState,timeOrigin:performance.timeOrigin}});this.counters.workerStarts++;
       this.worker.on('error',error=>this.fail(error));this.worker.on('message',message=>{
         if(message?.generation!==this.generation){this.fail(Error('Foreign Worker generation'));return;}
         if(message.type==='ready'&&this.state==='PREPARING'&&message.counters?.wireQueries===0&&!this.workerReady){this.workerReady=true;this.transport.resolve();return;}
@@ -136,12 +112,12 @@ export class WindowsBirthSession {
       this.worker.once('exit',code=>{this.workerExit={code,at:performance.now()};this.workerExited.resolve(this.workerExit);if(!['CLOSING','CLOSED'].includes(this.state))this.fail(Error('Worker actually exited'));});
       await this.prepared(this.transport.promise,deadline,'Authenticated private transport');
       this.assertPreparing();if(performance.now()>=deadline)throw Error('Preparation exhausted before lease publication');
-      this.state='READY';this.lease=Object.freeze({kind:'windows-birth-inspection-lease',generation:this.generation,source:assembly.sha256});return this.lease;
+      this.state='READY';this.lease=Object.freeze({kind:'windows-birth-inspection-lease',generation:this.generation,source:binary.sha256});return this.lease;
     }catch(error){this.fail(error);try{await this.close(performance.now()+5000);}catch(cleanup){throw new AggregateError([error,cleanup],'Preparation and helper cleanup failed',{cause:error});}throw error;}
   }
   capture(stream,bytes){this.outputBytes+=bytes.length;if(this.outputBytes>131072){this.fail(Error('Helper output bound'));return;}this[stream].push(Buffer.from(bytes));}
   setup(line) {
-    const parts=line.split('|');if(parts[1]!==this.generation||parts.at(-1)!==this.config.assembly.sha256){this.fail(Error('Helper setup binding'));return;}
+    const parts=line.split('|');if(parts[1]!==this.generation||parts.at(-1)!==this.config.binary.sha256){this.fail(Error('Helper setup binding'));return;}
     if(parts[0]==='HELPER_BOOTSTRAP'&&parts.length===4&&parts[2]===String(this.child.pid)&&!this.gotBootstrap){this.gotBootstrap=true;this.bootstrap.resolve();return;}
     if(parts[0]==='CTRL_READY'&&parts.length===3&&this.gotBootstrap&&!this.gotControl){this.gotControl=true;this.control.resolve();return;}
     this.fail(Error('Helper setup phase/duplicate'));
@@ -156,7 +132,7 @@ export class WindowsBirthSession {
     try{process.kill(pid,0);}catch(error){return{outcome:{status:error?.code==='ESRCH'&&this.validLease(lease)&&performance.now()<deadline?'absent':'unknown',reason:error?.code==='ESRCH'?'ESRCH':'existence_error',error}};}
     if(!this.validLease(lease)||performance.now()>=deadline)return{outcome:{status:'unknown',reason:'deadline_or_generation'}};
     const sab=new SharedArrayBuffer(SAB_BYTES);Atomics.store(new Int32Array(sab,0,4),0,SLOT.QUEUED);
-    const record=Object.freeze({type:'request',generation:this.generation,source:this.config.assembly.sha256,requestId:++this.requestId,nonce:randomBytes(16).toString('hex'),pid,sab,deadline});
+    const record=Object.freeze({type:'request',generation:this.generation,source:this.config.binary.sha256,requestId:++this.requestId,nonce:randomBytes(16).toString('hex'),pid,sab,deadline});
     this.pending.set(record.requestId,record);this.counters.maximumUnresolvedSlots=Math.max(this.counters.maximumUnresolvedSlots,this.pending.size);
     try{this.worker.postMessage(record);}catch(error){this.fail(error);}
     return{record};
@@ -166,7 +142,7 @@ export class WindowsBirthSession {
   collect(record,lease,abort){
     try{
       if(!this.validLease(lease)){const view=new Int32Array(record.sab,0,4);for(const state of [SLOT.QUEUED,SLOT.ADMITTED,SLOT.CANCEL_REQUESTED])Atomics.compareExchange(view,0,state,SLOT.CLOSED);Atomics.notify(view,0);return{status:'unknown',reason:'generation_unavailable'};}
-      const value=readRequestResult(record,{generation:this.generation,source:this.config.assembly.sha256,generationState:this.generationState},performance.now());
+      const value=readRequestResult(record,{generation:this.generation,source:this.config.binary.sha256,generationState:this.generationState},performance.now());
       if(!this.validLease(lease)||performance.now()>=record.deadline||abort?.aborted)return{status:'unknown',reason:'deadline_or_generation'};
       if(value.status!=='unknown'||value.reason!=='native_error')return value;
       // A process may exit between submission's existence check and the native
@@ -232,13 +208,13 @@ export class WindowsBirthSession {
     }
     if(this.worker&&!this.workerExit){try{this.worker.postMessage({type:'close',generation:this.generation});await wait(this.worker.terminate(),deadline,'Worker termination');if(!this.workerExit)await wait(this.workerExited.promise,deadline,'Worker actual exit');}catch(error){failures.push(error);}}
     if(this.descriptor!==null&&(!this.child||this.helperClose?.stdoutEnded&&this.helperClose?.stderrEnded)){
-      try{const stat=lstatSync(this.config.assembly.path);if(!stat.isFile()||stat.size<512||stat.size>10485760||sha(readFileSync(this.config.assembly.path))!==this.config.assembly.sha256)throw Error('Assembly changed during owned generation');}catch(error){failures.push(error);}
+      try{const stat=lstatSync(this.config.binary.path);if(!stat.isFile()||stat.size<512||stat.size>10485760||existsSync(this.config.binary.path+'.config')||sha(readFileSync(this.config.binary.path))!==this.config.binary.sha256)throw Error('Binary path/config changed during owned generation');}catch(error){failures.push(error);}
       try{closeSync(this.descriptor);this.descriptor=null;}catch(error){failures.push(error);}
     }
-    if(this.descriptor!==null)failures.push(Error('Assembly descriptor retained while disposition unknown'));
+    if(this.descriptor!==null)failures.push(Error('Binary descriptor retained while disposition unknown'));
     if(this.rescueUsed)failures.push(Error('Owned helper rescue used'));
     if(failures.length){this.state='FAILED';const error=new AggregateError(failures,'Inspection helper cleanup unknown');this.errors.push(error);throw error;}
     this.state='CLOSED';return this.receipt();
   }
-  receipt(){return{state:this.state,generation:this.generation,assemblySha256:this.config.assembly.sha256,counters:{...this.counters},helperExit:this.helperExit,helperClose:this.helperClose,workerExit:this.workerExit,descriptorReleased:this.descriptor===null,rescueUsed:this.rescueUsed,errors:this.errors.slice(0,64).map(error=>errorFacts(error)),stdoutBase64:Buffer.concat(this.stdout).toString('base64'),stderrBase64:Buffer.concat(this.stderr).toString('base64')};}
+  receipt(){return{state:this.state,generation:this.generation,binarySha256:this.config.binary.sha256,counters:{...this.counters},helperExit:this.helperExit,helperClose:this.helperClose,workerExit:this.workerExit,descriptorReleased:this.descriptor===null,rescueUsed:this.rescueUsed,errors:this.errors.slice(0,64).map(error=>errorFacts(error)),stdoutBase64:Buffer.concat(this.stdout).toString('base64'),stderrBase64:Buffer.concat(this.stderr).toString('base64')};}
 }

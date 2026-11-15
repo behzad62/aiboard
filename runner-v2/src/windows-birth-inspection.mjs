@@ -1,9 +1,9 @@
-// Creator-owned Windows birth observation. Installation code/assets are trusted.
-// Hash/descriptor checks do not make path execution atomic against installation writers.
-// No binary ships: the helper source (helper-live.cs, pinned below) is compiled on this machine by the assembly
-// provider, and its inspection host is Windows PowerShell (windows-birth/session.mjs).
+// Creator-owned Windows birth observation. Installation code/assets and the backend state directory are trusted.
+// Hash/descriptor checks do not make path execution atomic against installation or state-directory writers.
+// No binary ships: the helper source (helper-live.cs, pinned below) is compiled into helper.exe on this machine by
+// the assembly provider, and the session starts that exe (windows-birth/session.mjs).
 import { createHash } from 'node:crypto';
-import { lstatSync, realpathSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { lstatSync, realpathSync, openSync, fstatSync, readSync, closeSync, readdirSync } from 'node:fs';
 import { dirname, join, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
@@ -12,8 +12,8 @@ const ASSETS = Object.freeze({
   'protocol.mjs':'b10e5c11ba3b404f57572c4b898b48e8a3ee99f7731747b784ef2f0bad2e64bb',
   'queue.mjs':'51cfea81aee122fd92e1a241ae435e96de83e1987aa55eec5efd16f6b17d8788',
   'runtime-worker.mjs':'3f35034f63a56c2727dab0459af05449177424a0b652e64667506dc96f3e45ce',
-  'session.mjs':'1f351909a80555730cfc11c7b3a89846f6a0ebb6fca4486b9c076b4c89e6c1e6',
-  'helper-live.cs':'3a909789a78424bde140bcca44ad180ea53c06e0012caea86da642d4ee0b5ea7',
+  'session.mjs':'75a0982e346b1e69afd3e90da8d39264e96743d2ea29ac06b214f9a46631be42',
+  'helper-live.cs':'aec60861d8999a5c196c4ad1483f2d34bdf51b7ad0af7e8a0e6a09e45ace5377',
 });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const unknown = () => ({state:'unknown'});
@@ -56,7 +56,7 @@ function readAsset(path, expected) {
 }
 function assemblyRecord(value, sourceSha256) {
   if (!value || Object.keys(value).sort().join(',')!=='path,sha256,sourceSha256' || typeof value.path!=='string' ||
-    !win32.isAbsolute(value.path) || !value.path.endsWith('\\BirthHelper.dll') || !/^[0-9a-f]{64}$/.test(value.sha256) ||
+    !/^[A-Za-z]:\\/.test(value.path) || !value.path.endsWith('\\helper.exe') || !/^[0-9a-f]{64}$/.test(value.sha256) ||
     value.sourceSha256!==sourceSha256) throw Error('Inspection helper assembly does not match its pinned source');
   return Object.freeze({path:value.path,sha256:value.sha256,sourceSha256:value.sourceSha256});
 }
@@ -81,7 +81,9 @@ export async function loadInstalledSession(assemblyProvider) {
   // All four modules are checked before their first standard module import.
   const {WindowsBirthSession}=await import(pathToFileURL(held['session.mjs'].path).href);
   const assembly=assemblyRecord(await assemblyProvider(source.bytes,source.sha256),source.sha256);
-  const config={assembly,buildPins:[{path:source.path,sha256:source.sha256}],sources};
+  // Managed configuration, DLL probing and .local redirection are not selected.
+  if (JSON.stringify(readdirSync(dirname(assembly.path)).sort())!==JSON.stringify(['helper.exe'])) throw Error('Unexpected native helper sidecar');
+  const config={binary:assembly,buildPins:[{path:source.path,sha256:source.sha256}],sources};
   return {Session:WindowsBirthSession,config};
 }
 
@@ -125,7 +127,7 @@ export class WindowsBirthInspectionOwner {
       const session=this.#session, lease=await session.prepare(deadline);
       if (this.#state!=='PREPARING' || !session.validLease(lease) || performance.now()>=deadline) throw Error('Inspection preparation retired');
       this.#lease=lease;
-      this.#assembly=loaded.config?.assembly ?? null;
+      this.#assembly=loaded.config?.binary ?? null;
       const ready=()=>this.#state==='READY' && session.validLease(lease);
       const sync=(pid,platform,attemptMs=2000)=>{
         if (platform!=='windows' || !ready() || !Number.isFinite(attemptMs) || attemptMs<=0) return unknown();

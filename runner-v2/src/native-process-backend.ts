@@ -231,7 +231,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const windowsHelpers = this.options.platform === "windows"
       ? {
           ...windowsPortableSupervisorHelpers(request.environment, this.inspectionOwner === undefined),
-          // The supervisor runs this Runner's compiled helper (its host re-hashes the bytes) instead of compiling one.
+          // The supervisor runs this Runner's compiled helper exe (its session re-checks the digest) instead of compiling one.
           ...(this.inspectionOwner ? { windowsBirthAssembly: this.inspectionOwner.assembly() } : {}),
         }
       : {};

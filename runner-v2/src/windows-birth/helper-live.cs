@@ -1,6 +1,5 @@
-// Windows birth inspection helper. No binary ships with AIBoard: the Runner compiles this source once per process
-// with Windows' own C# compiler (CodeDom, CLR 4 BCL, C# 5) after checking its pin, and each inspection host is
-// Windows PowerShell 5.1 loading the compiled bytes it has re-hashed (windows-birth/session.mjs).
+// Windows birth inspection helper. No binary ships with AIBoard: the Runner compiles this source into helper.exe
+// once per process with Windows' own C# compiler (csc.exe, CLR 4 BCL, C# 5) after checking its pin.
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -42,19 +41,12 @@ internal static class BirthHelper
     private static extern IntPtr CreateNamedPipeW(string name, uint access, uint mode,
         uint maximumInstances, uint outputSize, uint inputSize, uint timeout,
         ref SecurityAttributes attributes);
-    private delegate bool ConsoleControlHandler(uint kind);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetConsoleCtrlHandler(ConsoleControlHandler handler, [MarshalAs(UnmanagedType.Bool)] bool add);
-    // Kept alive for the process lifetime: the OS calls it through an unmanaged pointer.
-    private static readonly ConsoleControlHandler IgnoreInterrupt = kind => kind == 0 || kind == 1;
 
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
     private static readonly UTF8Encoding Utf8 = new UTF8Encoding(false, true);
     private static StreamReader input;
     private static StreamWriter output;
     private static int retirementIntent;
-    private static Thread controlThread;
     private static Exception peerLossDiagnosticFailure;
 
     private static Stream StandardStream(int kind, FileAccess access)
@@ -252,7 +244,7 @@ internal static class BirthHelper
         string[] boot = Line(2048).Split('\t');
         if (boot.Length != 6 || boot[0] != "BOOT1" || boot[1] != "LIVE" || !Shape(boot[2], "[0-9a-f]{64}") ||
             !Shape(boot[3], "[0-9a-f]{64}") || !Shape(boot[4], "aiboard-birth-[0-9a-f]{32}") || boot[5] != source)
-            throw new InvalidDataException("Bootstrap shape/assembly binding.");
+            throw new InvalidDataException("Bootstrap shape/binary binding.");
         string generation = boot[2];
         byte[] key = new byte[32];
         for (int index = 0; index < 32; index++) key[index] = Convert.ToByte(boot[3].Substring(index * 2, 2), 16);
@@ -260,7 +252,6 @@ internal static class BirthHelper
         using (NamedPipeServerStream pipe = LocalPipe(boot[4]))
         {
             Thread control = StartControl("CLOSE1|" + generation + "|" + boot[3], "CTRL_READY|" + generation + "|" + source);
-            controlThread = control;
             pipe.WaitForConnection();
             string[] hello = ReadFrame(pipe, key, generation, source, 0);
             if (hello == null) { RecordPeerLoss(); return; }
@@ -295,19 +286,11 @@ internal static class BirthHelper
         try
         {
             if (Environment.OSVersion.Platform != PlatformID.Win32NT || IntPtr.Size != 8 || args.Length != 2 ||
-                args[0] != "--assembly-sha256" || !Shape(args[1], "[0-9a-f]{64}")) throw new InvalidDataException("Native helper invocation scope.");
-            // The host is started without DETACHED_PROCESS (PowerShell exits at once with no console), so it has a
-            // windowless console of its own. A backstop: Ctrl+C and Ctrl+Break are never this helper's retirement,
-            // which CLOSE1 or stdin EOF owns.
-            if (!SetConsoleCtrlHandler(IgnoreInterrupt, true)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Console control handler unavailable.");
+                args[0] != "--binary-sha256" || !Shape(args[1], "[0-9a-f]{64}")) throw new InvalidDataException("Native helper invocation scope.");
             input = new StreamReader(StandardStream(-10, FileAccess.Read), Utf8, false, 4096);
             output = new StreamWriter(StandardStream(-11, FileAccess.Write), Utf8, 4096);
             output.NewLine = "\n";
             Run(args[1]);
-            // Peer loss: the sole CTRL reader owns retirement (CLOSE1 or stdin EOF, then Retire). A host process does
-            // not wait for foreground threads as a plain exe would, so wait for it here instead of returning to the host.
-            Thread control = controlThread;
-            if (control != null) control.Join();
             return 1;
         }
         catch (Exception error)
