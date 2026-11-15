@@ -2428,6 +2428,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     guidanceQuestionResume ||
     event.type === "integration.revision_advanced" ||
     event.type === "planning.assignment_released" ||
+    isUnprovenWorkerStopEvent(event) ||
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
@@ -2459,6 +2460,17 @@ export function assertPendingUserGuidanceAllowsEvent(
 function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
   return event.type === "run.paused" && event.actor.role === "runner" && event.actor.id === "build-runtime" &&
     VERIFICATION_GATE_PAUSE_REASONS.has(String(event.payload.reason));
+}
+
+/**
+ * A worker attempt's unproven stop, its proof, and the scheduler's pause for it. Like a claim
+ * release they never advance the run, so pending guidance or an open question never refuses them:
+ * refusing them would leave a stop that may still be running with no durable record.
+ */
+function isUnprovenWorkerStopEvent(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
+  const scheduler = event.actor.role === "runner" && event.actor.id === "scheduler";
+  return scheduler && (event.type === "worker.stop_unproven" || event.type === "worker.stop_proven" ||
+    (event.type === "run.paused" && String(event.payload.reason).startsWith("process_stop_unproven:")));
 }
 
 const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
@@ -2499,6 +2511,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     event.type === "planning.assignment_released" ||
+    isUnprovenWorkerStopEvent(event) ||
     (event.type === "handoff.notes_recorded" && event.actor.role === "architect") ||
     // C3b repair cycle 2: the runner-owned attempt marker and failure
     // outcome link to the same eligible stop as the notes themselves, so

@@ -238,7 +238,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       stopFailures.push(error);
     }
     const stopFailed = stopFailures.length > 0;
-    const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map(errorMessage).join(" "));
+    const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map((failure) => errorMessage(failure)).join(" "));
     const cleanupUnproven = threw && isProcessStopUnprovenError(primary);
     if (!stopFailed && !cleanupUnproven) {
       this.retainedCleanups.delete(key);
@@ -261,6 +261,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
    * Stops again everything the attempt's owner started: the attempt's
    * retained cleanups, its language servers, its MCP servers and its managed
    * processes. Resolves only when every stop is proven.
+   *
+   * A fresh driver has nothing retained. It exists only after a crew or credential rebuild, which
+   * refuses to build it unless the previous handle closed (native-build-manager.ts rebuildRuntime:
+   * the binding close stops every managed process of the run and requires every streaming session
+   * released), or after a Runner restart, whose construction recovery releases every recovered MCP
+   * and language-server session fail-closed (native-build-factory.ts, cleanupRecovered*Transports).
+   * Managed processes survive both as records, so this retry stops them by owner either way.
    */
   async retryStop(assignment: WorkerAssignment): Promise<void> {
     const key = attemptKey(assignment);
@@ -282,7 +289,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       }
     } catch (error) { failures.push(error); }
     if (failures.length > 0) {
-      throw new AgentCleanupUnverifiedError(failures, "The worker's stop is still not proven.");
+      throw new AgentCleanupUnverifiedError(failures, `The worker's stop is still not proven: ${failures.map((failure) => errorMessage(failure)).join("; ")}`);
     }
     this.retainedCleanups.delete(key);
   }

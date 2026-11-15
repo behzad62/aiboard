@@ -1434,13 +1434,21 @@ assert.deepEqual(
   const pause = nativeBuildPauseDescription({
     status: "paused",
     pauseReason: { reason: "process_stop_unproven:task-7", taskId: "task-7", detail: "Managed process stop not proven: Shared managed cleanup did not prove release." },
+    tasks: { "task-7": { objective: "Add the login form" } },
   } as never);
   assert.equal(pause?.waitingForOwner, false, "Resume stays available: it retries the stop");
   assert.equal(pause?.title, "Paused: a worker's processes could not be proven stopped");
-  assert.match(pause!.detail, /task task-7/);
+  assert.match(pause!.detail, /^The whole Build is paused\./, "it says the whole run waits, not just the task");
+  assert.match(pause!.detail, /worker on "Add the login form"/, "it names the task by its title");
+  assert.doesNotMatch(pause!.detail, /task-7/);
   assert.match(pause!.detail, /Resume tries the stop again/);
   assert.match(pause!.detail, /What failed: Managed process stop not proven: Shared managed cleanup did not prove release\./);
   assert.doesNotMatch(pause!.detail, /process_stop_unproven|process stop unproven/);
+  const untitled = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_unproven:task-8", taskId: "task-8" },
+  } as never);
+  assert.match(untitled!.detail, /worker on task task-8 started/, "without a title it falls back to the id");
 }
 
 // Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as

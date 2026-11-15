@@ -32,8 +32,11 @@ export function isProcessStopUnprovenError(error: unknown, depth = 0): boolean {
   return cause !== undefined && isProcessStopUnprovenError(cause, depth + 1);
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** An error's message with its aggregated causes, so a pause names what actually failed. */
+export function errorMessage(error: unknown, depth = 0): string {
+  if (!(error instanceof Error)) return String(error);
+  if (!(error instanceof AggregateError) || depth > 3 || error.errors.length === 0) return error.message;
+  return `${error.message} (${error.errors.map((inner) => errorMessage(inner, depth + 1)).join("; ")})`;
 }
 
 /**

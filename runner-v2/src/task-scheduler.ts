@@ -284,7 +284,6 @@ export class TaskScheduler {
     try {
       // An attempt whose stop is unproven keeps its claim; nothing is
       // admitted or resumed until its retried stop is proven.
-      if (this.unrecordedStops.size > 0) return;
       if (await this.settleUnprovenStopsInQueue() === "paused") return;
       let projection = this.projection();
       if (projection.status !== "running") return;
@@ -378,6 +377,30 @@ export class TaskScheduler {
               ...workspacePatch(allocation),
             }, task.assignedWorkerId);
             projection = this.projection();
+          }
+          // The same attempt runs again (after a Runner restart, an owner
+          // pause or a kept pause). Its earlier run may have left processes:
+          // a restart can reattach live managed processes, so it proves
+          // nothing. Retry that stop first; an unproven one keeps the claim.
+          if (this.driver.retryStop) {
+            const resumed = projection.tasks[task.id];
+            const prior: WorkerAssignment = {
+              runId: this.runId,
+              task: { ...resumed },
+              attempt: resumed.attempt,
+              workerId: resumed.assignedWorkerId ?? standardWorkerId(resumed.id, resumed.attempt),
+              workspacePath,
+            };
+            try {
+              await this.driver.retryStop(prior);
+            } catch (error) {
+              this.recordStopUnproven(resumed, prior,
+                `The earlier run of this attempt could not be proven stopped: ${errorMessage(error)}`,
+                { type: "paused", reason: "process_stop_unproven" }, true);
+              return;
+            }
+            projection = this.projection();
+            if (projection.status !== "running" || hasPendingUserGuidance(projection)) return;
           }
           // T3a repair (N3): final check before each dispatch (this also
           // covers the no-await workspacePath path). The check and the
@@ -523,7 +546,12 @@ export class TaskScheduler {
         if (outcome.type === "stop_unproven") {
           stopUnproven = true;
           let kept = outcome.outcome;
-          if (outcome.thrown instanceof ContextManifestRecordingError) {
+          // As on the catch path below, an aborted attempt (owner pause,
+          // steering) records no context-recording failure: an abort keeps
+          // nothing of its outcome. Neither does an attempt whose outcome
+          // pending guidance or an open question will hold back.
+          if (outcome.thrown instanceof ContextManifestRecordingError &&
+            !assignment.signal?.aborted && !outcomeHeldBack(this.projection())) {
             this.unrecordedStops.add(task.id);
             this.appendContextRecordingFailure(task, outcome.thrown);
             kept = { type: "paused", reason: "context_recording_failed" };
@@ -615,9 +643,14 @@ export class TaskScheduler {
     attempt: number,
     workerId: string,
     outcome: WorkerOutcome,
-    /** A stable key for a kept pause replayed after a proven stop, so a crash and a second settle never pause twice. */
-    pauseKey?: string,
+    options: {
+      /** A stable key for a kept pause replayed after a proven stop, so a crash and a second settle never pause twice. */
+      pauseKey?: string;
+      /** The retried stop's proof, recorded with any stopped_fenced release of this outcome. */
+      stopEvidence?: string;
+    } = {},
   ): void {
+    const fenced = (own: string) => options.stopEvidence ? `${options.stopEvidence}; ${own}` : own;
     if (outcome.type === "submitted") {
       // T4: the worker is done writing — release the packet claim so later
       // tasks can reuse its files/resources (best-effort, idempotent).
@@ -663,7 +696,7 @@ export class TaskScheduler {
       this.releasePacketClaim(
         taskId,
         "stopped_fenced",
-        "driver returned: guidance",
+        fenced("driver returned: guidance"),
       );
       if (prior) return;
       this.store.append({
@@ -686,7 +719,7 @@ export class TaskScheduler {
       this.releasePacketClaim(
         taskId,
         "stopped_fenced",
-        `worker paused: ${outcome.reason}`,
+        fenced(`worker paused: ${outcome.reason}`),
       );
       const lastSequence = this.projection().lastSequence;
       this.store.append({
@@ -694,7 +727,7 @@ export class TaskScheduler {
         type: "run.paused",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "scheduler" },
-        idempotencyKey: pauseKey ?? `worker-pause:${taskId}:${attempt}:${lastSequence}`,
+        idempotencyKey: options.pauseKey ?? `worker-pause:${taskId}:${attempt}:${lastSequence}`,
         payload: { reason: outcome.reason, taskId },
       });
       return;
@@ -707,7 +740,7 @@ export class TaskScheduler {
     this.releasePacketClaim(
       taskId,
       "stopped_fenced",
-      `driver returned: ${outcome.reason}`,
+      fenced(`driver returned: ${outcome.reason}`),
     );
   }
 
@@ -721,6 +754,7 @@ export class TaskScheduler {
     assignment: WorkerAssignment,
     reason: string,
     outcome: SettledWorkerOutcome,
+    aborted = assignment.signal?.aborted === true,
   ): void {
     this.unrecordedStops.add(task.id);
     const lastSequence = this.projection().lastSequence;
@@ -738,7 +772,7 @@ export class TaskScheduler {
         outcome: structuredClone(outcome),
         // An aborted attempt (owner pause, steering) keeps abort semantics:
         // once its stop is proven only the claim is released.
-        ...(assignment.signal?.aborted ? { aborted: true } : {}),
+        ...(aborted ? { aborted: true } : {}),
       },
     });
     this.pauseForUnprovenStop(task.id, task.attempt, reason);
@@ -763,6 +797,22 @@ export class TaskScheduler {
 
   private async settleUnprovenStopsInQueue(): Promise<"clear" | "paused"> {
     let projection = this.projection();
+    // An unproven stop this process could not record (a store append
+    // failed) leaves no durable stop to retry: stay paused, with no worker
+    // and no Architect turn, until the Runner restarts. The restart then
+    // retries the attempt's stop before running it again (tick).
+    if (this.unrecordedStops.size > 0) {
+      const [taskId] = [...this.unrecordedStops].sort();
+      if (projection.status === "running") {
+        try {
+          this.pauseForUnprovenStop(taskId, projection.tasks[taskId]?.attempt ?? 0,
+            "The Runner could not record that this worker's stop is unproven. Restart the Runner; it retries the stop before the task runs again.");
+        } catch {
+          // Still paused in this process: nothing runs while a stop is unrecorded.
+        }
+      }
+      return "paused";
+    }
     const pending = Object.values(projection.unprovenWorkerStops ?? {})
       .sort((left, right) => left.taskId.localeCompare(right.taskId));
     if (pending.length === 0) return "clear";
@@ -786,32 +836,44 @@ export class TaskScheduler {
         }
         await this.driver.retryStop(assignment);
       } catch (error) {
-        this.pauseForUnprovenStop(stop.taskId, stop.attempt, errorMessage(error));
+        // Keep the first cause in front: the retry's own message alone
+        // ("still not proven") would hide what failed.
+        this.pauseForUnprovenStop(stop.taskId, stop.attempt, `${stop.reason} Retry: ${errorMessage(error)}`);
         return "paused";
       }
       const evidence = `worker stop proven on retry after: ${stop.reason}`;
-      // Release, then the kept outcome, then clear the pending stop: a crash
-      // or a throw in between leaves the stop pending, and the next settle
-      // repeats only what is missing (a release with no live claim and an
-      // outcome for a task that moved on are both no-ops).
-      this.releasePacketClaim(stop.taskId, "stopped_fenced", evidence);
-      // The attempt goes on with the outcome it had, unless it was aborted
-      // (owner pause, steering: an abort releases the claim only) or the
-      // task moved on meanwhile (cancelled, say).
+      // The attempt goes on with the outcome it had, recorded while its
+      // claim is still claimed and released through the outcome's own path,
+      // as in dispatch (a submission's scope is bound to the live claim).
+      // Nothing is recorded when the attempt was aborted (owner pause,
+      // steering: an abort releases the claim only), when the task moved on
+      // meanwhile (cancelled, say), or while pending guidance or an open
+      // question holds the run: the outcome is dropped as an abort drops it,
+      // and the same attempt runs again once the Architect has answered.
       const current = this.projection().tasks[stop.taskId];
-      if (!stop.aborted && current?.status === "running" && current.attempt === stop.attempt) {
+      if (!stop.aborted && current?.status === "running" && current.attempt === stop.attempt &&
+        !outcomeHeldBack(this.projection())) {
         const kept = structuredClone(stop.outcome) as SettledWorkerOutcome;
+        const options = {
+          pauseKey: `worker-pause:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`,
+          stopEvidence: evidence,
+        };
         try {
-          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept,
-            `worker-pause:${stop.taskId}:${stop.attempt}:stop:${stop.sequence}`);
+          this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, kept, options);
         } catch (error) {
           // As in dispatch: an outcome that cannot be recorded is a failure.
           this.recordOutcome(stop.taskId, stop.attempt, stop.workerId, {
             type: "failed",
             reason: errorMessage(error),
-          });
+          }, options);
         }
       }
+      // No outcome recorded, or a crash after it and before the release:
+      // release the claim as stopped_fenced now (a no-op without a live
+      // claim). Then clear the pending stop. A crash anywhere before that
+      // leaves the stop pending, and the next settle repeats only what is
+      // missing (the kept pause has a stable key).
+      this.releasePacketClaim(stop.taskId, "stopped_fenced", evidence);
       this.store.append({
         runId: this.runId,
         type: "worker.stop_proven",
@@ -1238,6 +1300,14 @@ function workspacePatch(
       ? { workspaceBaselineRevision: allocation.baselineRevision }
       : {}),
   };
+}
+
+/**
+ * Pending guidance or an open blocking question refuses every task outcome
+ * (scheduler-store guidance gates), so a kept outcome is not recorded then.
+ */
+function outcomeHeldBack(projection: SchedulerProjection): boolean {
+  return hasPendingUserGuidance(projection) || Boolean(projection.blockingArchitectQuestionId);
 }
 
 function hasPendingUserGuidance(projection: SchedulerProjection): boolean {

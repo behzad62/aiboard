@@ -82,7 +82,7 @@ export function knownDefectRepairNote(
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
 export function nativeBuildPauseDescription(
   projection: (Pick<NativeBuildProjection, "status" | "pauseReason"> &
-    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff" | "runPolicy">>) | null | undefined,
+    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff" | "runPolicy" | "tasks">>) | null | undefined,
   runState?: NativeRunProjection["state"]
 ): NativeBuildPauseDescription | null {
   if (!projection || projection.status !== "paused") return null;
@@ -161,11 +161,13 @@ export function nativeBuildPauseDescription(
   }
   if (reason.startsWith("process_stop_unproven:")) {
     const taskId = reason.slice("process_stop_unproven:".length);
+    const title = taskId ? projection.tasks?.[taskId]?.objective?.trim() : undefined;
+    const task = title ? `"${title}"` : taskId ? `task ${taskId}` : "a task";
     const failure = projection.pauseReason?.detail;
     return {
       waitingForOwner: false,
       title: "Paused: a worker's processes could not be proven stopped",
-      detail: `A program the worker on ${taskId ? `task ${taskId}` : "a task"} started may still be running in its folder, so the task keeps that folder and nothing else starts there. ${failure ? `What failed: ${failure} ` : ""}You can close any leftover program yourself. Resume tries the stop again; once it is proven, the task goes on.`,
+      detail: `The whole Build is paused. A program the worker on ${task} started may still be running in its folder, so the task keeps that folder and nothing else starts there. ${failure ? `What failed: ${failure} ` : ""}You can close any leftover program yourself. Resume tries the stop again; once it is proven, the Build goes on.`,
     };
   }
   if (reason === "coverage_reviewer_unavailable") {
