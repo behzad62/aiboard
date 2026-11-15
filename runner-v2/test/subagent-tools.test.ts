@@ -14,6 +14,7 @@ import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { createSubagentTools } from "./support/git-fixture.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import type { ManagedProcessService } from "../src/managed-process.js";
 
 test("read-only subagents expose no workspace mutation tools and are concurrency-safe", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-readonly-subagent-"));
@@ -319,4 +320,36 @@ test("editing subagents inherit the managed Build source and close it on return"
     assert.equal(result.isError,false,result.error?.message ?? "");
     assert.equal(calls,1);assert.equal(closed,1);
   } finally {sessions.close();ledger.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test("a subagent's managed processes are stopped under its own owner, and its cleanup is retained for the parent's stop retry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-subagent-stop-"));
+  const workspace = join(root, "workspace"); mkdirSync(workspace);
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+  const closes: unknown[] = [];
+  const results = ["unproven", "proven"];
+  const managedProcesses = {
+    closeAgent: async (owner: unknown) => {
+      closes.push(owner);
+      if (results.shift() !== "proven") throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+    },
+    retainOutput: async () => undefined,
+  } as unknown as ManagedProcessService;
+  const retained: Array<() => Promise<void>> = [];
+  const model: AgentModel = { complete: async () => ({ blocks: [{ type: "tool_call", callId: "child-1", name: "return_to_parent", arguments: { summary: "Done", artifactHashes: [] } }], stopReason: "tool_calls" }) };
+  try {
+    const registry = new ToolRegistry();
+    for (const tool of createSubagentTools({ model, runId: "run_1", parentSessionId: "worker", taskId: "T1", parentActorId: "worker", permissionProfile: "full", workspacePath: workspace, artifacts, ledger, sessions,
+      managedProcesses, retainCleanup: (close) => retained.push(close) })) registry.register(tool);
+    const result = await registry.invoke({ type: "tool_call", callId: "child", name: "spawn_subagent", arguments: { assignment: "Start and stop a server", maxTurns: 3 } },
+      { runId: "run_1", sessionId: "worker", actor: { role: "worker", id: "worker" }, workspacePath: workspace });
+    const owner = { runId: "run_1", sessionId: "worker:subagent:child", actor: { role: "subagent", id: "worker:child" } };
+    assert.deepEqual(closes, [owner], "the subagent's own owner, not the worker's");
+    assert.equal(result.isError, true, "the unproven stop reaches the worker only as a tool error");
+    assert.equal(retained.length, 1, "so the parent's stop proof keeps a retry for it");
+    await retained[0]!();
+    assert.deepEqual(closes, [owner, owner]);
+  } finally { sessions.close(); ledger.close(); rmSync(root, { recursive: true, force: true }); }
 });

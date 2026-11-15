@@ -118,6 +118,11 @@ export interface RunWorkerTaskOptions {
   managedBuildTools?: ManagedBuildToolSource;
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
+  /**
+   * Receives the attempt's cleanups that only this object can repeat (its
+   * managed Build tool runtime), so a stop that is not proven can be retried.
+   */
+  retainCleanup?: (close: () => Promise<void>) => void;
   budgetLedger?: BudgetLedger;
   validationBudgetMs?: number;
   capabilityRegistry?: CapabilityRegistry;
@@ -323,6 +328,7 @@ export async function runWorkerTask(
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
     ...(options.execution ? { execution: options.execution } : {}),
     ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
+    ...(options.retainCleanup ? { retainCleanup: options.retainCleanup } : {}),
     language,
   })) registerStaticWorkerTool(broker, tool);
 
@@ -476,6 +482,7 @@ export async function runWorkerTask(
     workspacePath: options.workspace.path, artifacts: options.artifacts, ledger: options.ledger,
     ...(options.permissions ? { approve: request => options.permissions!.requestTool(request) } : {}),
   }, tool => mcpToolAdmitted(roleToolSurface("worker", "task").mcpPolicy, tool.definition)) : undefined;
+  if (managedRuntime) options.retainCleanup?.(() => managedRuntime.close());
   const toolRuntime = options.budgetLedger
     ? new BudgetedToolRuntime({
         runtime: managedRuntime ?? broker,

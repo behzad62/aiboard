@@ -79,10 +79,22 @@ export function knownDefectRepairNote(
   ].join("\n");
 }
 
+/** The Runner's pauses for a worker's stop, each of which keeps the task's folder and claim. */
+const WORKER_STOP_PAUSES = [
+  ["process_stop_unproven:", "unproven"],
+  ["process_stop_unrecorded:", "unrecorded"],
+  ["process_stop_outcome_unrecorded:", "outcome_unrecorded"],
+] as const;
+
+function workerStopPause(reason: string): { kind: (typeof WORKER_STOP_PAUSES)[number][1]; taskId: string } | undefined {
+  const match = WORKER_STOP_PAUSES.find(([prefix]) => reason.startsWith(prefix));
+  return match ? { kind: match[1], taskId: reason.slice(match[0].length) } : undefined;
+}
+
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
 export function nativeBuildPauseDescription(
   projection: (Pick<NativeBuildProjection, "status" | "pauseReason"> &
-    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff" | "runPolicy">>) | null | undefined,
+    Partial<Pick<NativeBuildProjection, "verifierSelection" | "runtime" | "projectHandoff" | "runPolicy" | "tasks">>) | null | undefined,
   runState?: NativeRunProjection["state"]
 ): NativeBuildPauseDescription | null {
   if (!projection || projection.status !== "paused") return null;
@@ -158,6 +170,32 @@ export function nativeBuildPauseDescription(
   }
   if (reason === "project_handoff_required" || reason.startsWith("project_handoff")) {
     return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
+  }
+  const stopPause = workerStopPause(reason);
+  if (stopPause) {
+    const title = stopPause.taskId ? projection.tasks?.[stopPause.taskId]?.objective?.trim() : undefined;
+    const task = title ? `"${title}"` : stopPause.taskId ? `task ${stopPause.taskId}` : "a task";
+    const failure = projection.pauseReason?.detail;
+    const failed = failure ? `What failed: ${failure} ` : "";
+    if (stopPause.kind === "unrecorded") {
+      return {
+        waitingForOwner: false,
+        title: "Paused: restart the runner to retry a worker's stop",
+        detail: `The whole Build is paused. A program the worker on ${task} started may still be running in its folder, and the runner could not save that, so the task keeps that folder and nothing else starts there. ${failed}Restart the runner, then press Resume: the restarted runner tries the stop again before the task runs.`,
+      };
+    }
+    if (stopPause.kind === "outcome_unrecorded") {
+      return {
+        waitingForOwner: false,
+        title: "Paused: a worker's result could not be saved",
+        detail: `The whole Build is paused. The worker on ${task} has stopped, but the runner could not save how its attempt ended, so the task keeps its folder and nothing else starts there. ${failed}Resume tries to save it again.`,
+      };
+    }
+    return {
+      waitingForOwner: false,
+      title: "Paused: a worker's processes could not be proven stopped",
+      detail: `The whole Build is paused. A program the worker on ${task} started may still be running in its folder, so the task keeps that folder and nothing else starts there. ${failed}You can close any leftover program yourself. Resume tries the stop again; once it is proven, the Build goes on.`,
+    };
   }
   if (reason === "coverage_reviewer_unavailable") {
     return {

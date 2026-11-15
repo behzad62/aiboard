@@ -1428,6 +1428,47 @@ assert.deepEqual(
   }
 );
 
+// A worker stop the Runner could not prove pauses the run with the task's folder kept; the dock
+// says so in plain words, not as the reason code, and Resume retries the stop.
+{
+  const pause = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_unproven:task-7", taskId: "task-7", detail: "Managed process stop not proven: Shared managed cleanup did not prove release." },
+    tasks: { "task-7": { objective: "Add the login form" } },
+  } as never);
+  assert.equal(pause?.waitingForOwner, false, "Resume stays available: it retries the stop");
+  assert.equal(pause?.title, "Paused: a worker's processes could not be proven stopped");
+  assert.match(pause!.detail, /^The whole Build is paused\./, "it says the whole run waits, not just the task");
+  assert.match(pause!.detail, /worker on "Add the login form"/, "it names the task by its title");
+  assert.doesNotMatch(pause!.detail, /task-7/);
+  assert.match(pause!.detail, /Resume tries the stop again/);
+  assert.match(pause!.detail, /What failed: Managed process stop not proven: Shared managed cleanup did not prove release\./);
+  assert.doesNotMatch(pause!.detail, /process_stop_unproven|process stop unproven/);
+  const untitled = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_unproven:task-8", taskId: "task-8" },
+  } as never);
+  assert.match(untitled!.detail, /worker on task task-8 started/, "without a title it falls back to the id");
+  const unrecorded = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_unrecorded:task-7", taskId: "task-7", detail: "The Runner could not save the record that this worker's stop is unproven." },
+    tasks: { "task-7": { objective: "Add the login form" } },
+  } as never);
+  assert.equal(unrecorded?.title, "Paused: restart the runner to retry a worker's stop");
+  assert.equal(unrecorded?.waitingForOwner, false, "Resume stays available after the restart");
+  assert.match(unrecorded!.detail, /Restart the runner, then press Resume/);
+  assert.doesNotMatch(unrecorded!.detail, /Resume tries the stop again/, "the text and the action agree");
+  const outcome = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_stop_outcome_unrecorded:task-7", taskId: "task-7", detail: "store busy" },
+    tasks: { "task-7": { objective: "Add the login form" } },
+  } as never);
+  assert.equal(outcome?.title, "Paused: a worker's result could not be saved");
+  assert.match(outcome!.detail, /"Add the login form" has stopped/);
+  assert.match(outcome!.detail, /What failed: store busy Resume tries to save it again\./);
+  assert.doesNotMatch(outcome!.detail, /could not be proven stopped|tries the stop again/);
+}
+
 // Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as
 // "Working…". Only an open model or tool segment means a session is working now.
 {

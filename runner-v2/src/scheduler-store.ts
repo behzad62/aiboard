@@ -74,6 +74,7 @@ import {
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
+import { PROCESS_STOP_PAUSE_PREFIXES } from "./process-stop-proof.js";
 import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
 import { cloneValidationBudgetSubmission, parseValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 import { validateReviewSignals } from "./review-integrity.js";
@@ -276,6 +277,8 @@ export type SchedulerEventType =
   | "temp.creation_recorded"
   | "temp.record_cleared"
   | "cleanup.checked"
+  | "worker.stop_unproven"
+  | "worker.stop_proven"
   | "repair.cycle_limit_reached"
   | "repair.cycle_limit_extended"
   | "run.crew_changed"
@@ -1137,6 +1140,28 @@ export interface RepairFlakyProjection {
  * state directory — never in a shared or worker-writable file — so an
  * executed workload cannot forge ownership (probe F).
  */
+/**
+ * A worker attempt whose stop was not proven: a process it started may still
+ * run in its worktree. The packet claim stays held and the run stays paused
+ * until a retried stop is proven; then the attempt goes on with `outcome`,
+ * the outcome it had (a WorkerOutcome other than stop_unproven).
+ */
+export interface UnprovenWorkerStopProjection {
+  taskId: string;
+  attempt: number;
+  workerId: string;
+  reason: string;
+  outcome: Record<string, unknown>;
+  /** The attempt was aborted (owner pause, steering): a proven stop only releases the claim. */
+  aborted?: boolean;
+  /**
+   * The attempt's context recording failed: its note is recorded together
+   * with the kept context_recording_failed pause, never apart from it.
+   */
+  contextRecordingFailure?: { purpose: string; attempts: number; reason: string; revision?: string };
+  sequence: number;
+}
+
 export interface TempRecordProjection {
   path: string;
   ownerRunId: string;
@@ -1341,6 +1366,8 @@ export interface SchedulerProjection {
   repairIssues?: Record<string, RepairIssueProjection>;
   repairFlaky?: Record<string, RepairFlakyProjection>;
   tempRecords?: Record<string, TempRecordProjection>;
+  /** Worker attempts whose stop is unproven, by task id; each keeps its packet claim. */
+  unprovenWorkerStops?: Record<string, UnprovenWorkerStopProjection>;
   verifier?: VerifierProjection;
   planRiskDeclaration?: {
     risk: PlanRiskLevel;
@@ -2407,6 +2434,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     guidanceQuestionResume ||
     event.type === "integration.revision_advanced" ||
     event.type === "planning.assignment_released" ||
+    isUnprovenWorkerStopEvent(event) ||
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
@@ -2438,6 +2466,42 @@ export function assertPendingUserGuidanceAllowsEvent(
 function isVerificationGatePause(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
   return event.type === "run.paused" && event.actor.role === "runner" && event.actor.id === "build-runtime" &&
     VERIFICATION_GATE_PAUSE_REASONS.has(String(event.payload.reason));
+}
+
+function parseStopContextRecordingFailure(
+  value: unknown,
+  outcome: object,
+): UnprovenWorkerStopProjection["contextRecordingFailure"] {
+  if (value === undefined) return undefined;
+  const kept = outcome as { type?: unknown; reason?: unknown };
+  if (kept.type !== "paused" || kept.reason !== "context_recording_failed") {
+    throw new Error("An unproven stop's context recording failure must keep the context_recording_failed pause.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("An unproven stop's context recording failure must be an object.");
+  }
+  const record = value as Record<string, unknown>;
+  const revision = record.revision;
+  if (revision !== undefined && typeof revision !== "string") {
+    throw new Error("An unproven stop's context recording revision must be text.");
+  }
+  return {
+    purpose: requiredString(record, "purpose"),
+    attempts: requiredNumber(record, "attempts"),
+    reason: requiredString(record, "reason"),
+    ...(revision ? { revision } : {}),
+  };
+}
+
+/**
+ * A worker attempt's unproven stop, its proof, and the scheduler's pause for it. Like a claim
+ * release they never advance the run, so pending guidance or an open question never refuses them:
+ * refusing them would leave a stop that may still be running with no durable record.
+ */
+function isUnprovenWorkerStopEvent(event: Pick<SchedulerEvent, "type" | "actor" | "payload">): boolean {
+  const scheduler = event.actor.role === "runner" && event.actor.id === "scheduler";
+  return scheduler && (event.type === "worker.stop_unproven" || event.type === "worker.stop_proven" ||
+    (event.type === "run.paused" && PROCESS_STOP_PAUSE_PREFIXES.some((prefix) => String(event.payload.reason).startsWith(prefix))));
 }
 
 const OWNER_REPAIR_ANSWERS: ReadonlySet<string> = new Set([
@@ -2478,6 +2542,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     event.type === "planning.assignment_released" ||
+    isUnprovenWorkerStopEvent(event) ||
     (event.type === "handoff.notes_recorded" && event.actor.role === "architect") ||
     // C3b repair cycle 2: the runner-owned attempt marker and failure
     // outcome link to the same eligible stop as the notes themselves, so
@@ -3927,6 +3992,9 @@ export function reduceSchedulerEvent(
     ...(current.tempRecords
       ? { tempRecords: Object.fromEntries(Object.entries(current.tempRecords).map(([key, record]) => [key, { ...record }])) }
       : {}),
+    ...(current.unprovenWorkerStops
+      ? { unprovenWorkerStops: Object.fromEntries(Object.entries(current.unprovenWorkerStops).map(([key, stop]) => [key, { ...stop, outcome: structuredClone(stop.outcome) }])) }
+      : {}),
     ...(current.contextRecording
       ? { contextRecording: cloneContextRecording(current.contextRecording) }
       : {}),
@@ -5168,6 +5236,60 @@ export function reduceSchedulerEvent(
         delete records[key];
         next.tempRecords = records;
       }
+      break;
+    }
+    case "worker.stop_unproven": {
+      if (event.actor.role !== "runner" || event.actor.id !== "scheduler") {
+        throw new Error("Only the scheduler may record an unproven worker stop.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const attempt = requiredNumber(event.payload, "attempt");
+      const workerId = requiredString(event.payload, "workerId");
+      const reason = requiredString(event.payload, "reason");
+      const outcome = event.payload.outcome;
+      if (!outcome || typeof outcome !== "object" || Array.isArray(outcome) ||
+        !["submitted", "guidance", "failed", "paused"].includes(String((outcome as { type?: unknown }).type))) {
+        throw new Error("An unproven worker stop must keep the attempt's settled outcome.");
+      }
+      const task = next.tasks[taskId];
+      if (!task || task.attempt !== attempt) {
+        throw new Error(`Unproven worker stop does not match task ${taskId} attempt.`);
+      }
+      if (task.assignedWorkerId !== undefined && task.assignedWorkerId !== workerId) {
+        throw new Error(`Unproven worker stop names ${workerId}, not the worker ${task.assignedWorkerId} of task ${taskId}.`);
+      }
+      const aborted = event.payload.aborted === true;
+      const contextRecordingFailure = parseStopContextRecordingFailure(event.payload.contextRecordingFailure, outcome);
+      const prior = next.unprovenWorkerStops?.[taskId];
+      if (prior && prior.attempt !== attempt) {
+        throw new Error(`Task ${taskId} already has an unproven stop for attempt ${prior.attempt}.`);
+      }
+      next.unprovenWorkerStops = {
+        ...(next.unprovenWorkerStops ?? {}),
+        [taskId]: prior ?? {
+          taskId, attempt, workerId, reason, outcome: structuredClone(outcome) as Record<string, unknown>,
+          ...(aborted ? { aborted: true } : {}),
+          ...(contextRecordingFailure ? { contextRecordingFailure } : {}),
+          sequence: event.sequence,
+        },
+      };
+      break;
+    }
+    case "worker.stop_proven": {
+      if (event.actor.role !== "runner" || event.actor.id !== "scheduler") {
+        throw new Error("Only the scheduler may record a proven worker stop.");
+      }
+      const taskId = requiredString(event.payload, "taskId");
+      const attempt = requiredNumber(event.payload, "attempt");
+      requiredString(event.payload, "evidence");
+      const pending = next.unprovenWorkerStops?.[taskId];
+      if (!pending || pending.attempt !== attempt) {
+        throw new Error(`Task ${taskId} attempt ${attempt} has no unproven stop to settle.`);
+      }
+      const stops = { ...next.unprovenWorkerStops };
+      delete stops[taskId];
+      if (Object.keys(stops).length > 0) next.unprovenWorkerStops = stops;
+      else delete next.unprovenWorkerStops;
       break;
     }
     case "run.browsing_configured": {

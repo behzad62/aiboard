@@ -1852,6 +1852,12 @@ export class BuildRuntime {
     if (projection.status === "paused") {
       return { status: "paused", action: projection.pauseReason?.reason };
     }
+    // A worker attempt whose stop was not proven keeps its claim; on resume
+    // its stop is retried before anything else. A stop still unproven pauses
+    // the run again; a proven one lets the attempt go on with its outcome.
+    if (await this.scheduler.settleUnprovenStops() === "paused") {
+      return { status: "paused", action: this.projection().pauseReason?.reason };
+    }
     await this.recoverPendingProjectDocs();
     events = this.store.readRun(this.runId);
     projection = events.length === 0

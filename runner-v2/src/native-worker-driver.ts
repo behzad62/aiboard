@@ -48,10 +48,12 @@ import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog, SkillDocument, SkillMetadata } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
 import type {
+  SettledWorkerOutcome,
   WorkerAssignment,
   WorkerOutcome,
   WorkerRuntimeDriver,
 } from "./task-scheduler.js";
+import { AgentCleanupUnverifiedError, errorMessage, isProcessStopUnprovenError, boundedText } from "./process-stop-proof.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
@@ -183,6 +185,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
   private readonly clock: () => string;
   private readonly contextLimits: ContextLimits;
+  /**
+   * Per attempt, cleanups only this Runner process can repeat (the attempt's
+   * managed Build tool runtime). Kept until the attempt's stop is proven.
+   */
+  private readonly retainedCleanups = new Map<string, Array<() => Promise<void>>>();
 
   constructor(private readonly options: NativeWorkerDriverOptions) {
     this.candidateById = new Map(
@@ -196,7 +203,128 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     return this.options.defectClassesFor?.() ?? this.options.defectClasses ?? [];
   }
 
+  /**
+   * Runs the attempt, then proves its stop: every managed process the
+   * attempt's worker started is stopped (closeAgent) before the outcome
+   * counts. A stop that is not proven, here or in the attempt's own agent
+   * cleanups, never returns its outcome: it returns `stop_unproven` with the
+   * outcome it had, and the scheduler keeps the claim and pauses the run.
+   */
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
+    const key = attemptKey(assignment);
+    // An entry left by an earlier run of this attempt is kept, never dropped.
+    const retained = this.retainedCleanups.get(key) ?? [];
+    this.retainedCleanups.set(key, retained);
+    let outcome: SettledWorkerOutcome | undefined;
+    let threw = false;
+    let primary: unknown;
+    try {
+      outcome = await this.runAttempt(assignment, (close) => retained.push(close));
+    } catch (error) {
+      threw = true;
+      primary = error;
+    }
+    // The stop proof: every retained cleanup (the attempt's managed Build
+    // tool runtime, and each subagent's exact owner: a subagent's own cleanup
+    // failure only reaches the worker as a tool error result), then the
+    // worker owner's managed processes.
+    const stopFailures: unknown[] = [];
+    for (const close of retained) {
+      try { await close(); } catch (error) { stopFailures.push(error); }
+    }
+    try {
+      await this.options.managedProcesses?.closeAgent(this.attemptOwner(assignment));
+    } catch (error) {
+      stopFailures.push(error);
+    }
+    const stopFailed = stopFailures.length > 0;
+    const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map((failure) => errorMessage(failure)).join(" "));
+    const cleanupUnproven = threw && isProcessStopUnprovenError(primary);
+    if (!stopFailed && !cleanupUnproven) {
+      this.retainedCleanups.delete(key);
+      if (threw) throw primary;
+      return outcome!;
+    }
+    const reasons = [
+      ...(cleanupUnproven ? [errorMessage(primary)] : []),
+      ...(stopFailed ? [`Managed process stop not proven: ${errorMessage(stopFailure)}`] : []),
+    ];
+    return {
+      type: "stop_unproven",
+      reason: reasons.join(" "),
+      outcome: threw ? { type: "failed", reason: boundedText(errorMessage(primary)) } : outcome!,
+      ...(threw ? { thrown: primary } : {}),
+    };
+  }
+
+  /**
+   * Stops again everything the attempt's owner started: the attempt's
+   * retained cleanups, its language servers, its MCP servers and its managed
+   * processes. Resolves only when every stop is proven.
+   *
+   * A fresh driver has nothing retained. It exists only after a crew or credential rebuild, which
+   * refuses to build it unless the previous handle closed (native-build-manager.ts rebuildRuntime:
+   * the binding close stops every managed process of the run and requires every streaming session
+   * released), or after a Runner restart, whose construction recovery releases every recovered MCP
+   * and language-server session fail-closed (native-build-factory.ts, cleanupRecovered*Transports).
+   * Managed processes survive both as records, so this retry stops them by owner either way.
+   */
+  async retryStop(assignment: WorkerAssignment): Promise<void> {
+    const key = attemptKey(assignment);
+    const owner = this.attemptOwner(assignment);
+    const failures: unknown[] = [];
+    const retained = this.retainedCleanups.get(key) ?? [];
+    for (const close of retained) {
+      try { await close(); } catch (error) { failures.push(error); }
+    }
+    try { await this.options.language?.closeAgent?.(owner); } catch (error) { failures.push(error); }
+    try { await this.options.mcpManager?.closeAgent(owner); } catch (error) { failures.push(error); }
+    try { await this.options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
+    // Its subagents run under their own owners. Their retained cleanups ran
+    // above; after a Runner restart only their managed-process records are
+    // left, so every live one of this attempt's subagents is stopped too.
+    try {
+      for (const subagent of await this.subagentOwnersWithLiveProcesses(owner)) {
+        try { await this.options.managedProcesses!.closeAgent(subagent); } catch (error) { failures.push(error); }
+      }
+    } catch (error) { failures.push(error); }
+    if (failures.length > 0) {
+      throw new AgentCleanupUnverifiedError(failures, `The worker's stop is still not proven: ${failures.map((failure) => errorMessage(failure)).join("; ")}`);
+    }
+    this.retainedCleanups.delete(key);
+  }
+
+  private async subagentOwnersWithLiveProcesses(owner: ReturnType<NativeWorkerDriver["attemptOwner"]>) {
+    if (!this.options.managedProcesses) return [];
+    const owners = new Map<string, { runId: string; sessionId: string; actor: { role: "subagent"; id: string } }>();
+    for (const record of await this.options.managedProcesses.listRun(owner.runId)) {
+      if (record.status === "stopped" || record.actor.role !== "subagent") continue;
+      if (!record.actor.id.startsWith(`${owner.actor.id}:`) || !record.sessionId.startsWith(`${owner.sessionId}:subagent:`)) continue;
+      owners.set(JSON.stringify([record.sessionId, record.actor.id]), { runId: owner.runId, sessionId: record.sessionId, actor: { role: "subagent", id: record.actor.id } });
+    }
+    return [...owners.values()];
+  }
+
+  /** The exact owner every process of this attempt's worker session runs under. */
+  private attemptOwner(assignment: WorkerAssignment) {
+    const sessionId = resolveWorkerSessionId(
+      assignment.runId,
+      assignment.task.id,
+      assignment.attempt,
+      assignment.workerId,
+      this.persistedRuntimeAssignment(assignment)?.sessionId,
+    );
+    return Object.freeze({
+      runId: assignment.runId,
+      sessionId,
+      actor: Object.freeze({ role: "worker" as const, id: assignment.workerId }),
+    });
+  }
+
+  private async runAttempt(
+    assignment: WorkerAssignment,
+    retainCleanup: (close: () => Promise<void>) => void,
+  ): Promise<SettledWorkerOutcome> {
     let lifecycleContinuations = 0;
     const persistedAssignment = this.persistedRuntimeAssignment(assignment);
     let runtimeId = persistedAssignment?.runtimeId;
@@ -421,6 +549,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ? { capabilityRegistry: this.options.capabilityRegistry }
           : {}),
         ...(this.options.language ? { language: this.options.language } : {}),
+        retainCleanup,
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
@@ -706,7 +835,7 @@ export function workerModelAttribution(
 export function recoverableWorkerSuspension(
   reason: AgentSuspensionReason,
   _error?: string
-): WorkerOutcome | undefined {
+): SettledWorkerOutcome | undefined {
   if (reason === "model_ended_without_lifecycle") {
     return {
       type: "paused",
@@ -728,7 +857,7 @@ export function recoverableWorkerSuspension(
 export function guidanceOutcomeFromProjection(
   projection: SchedulerProjection,
   requestId: string,
-): WorkerOutcome {
+): SettledWorkerOutcome {
   const guidance = projection.guidance[requestId];
   if (!guidance) return { type: "failed", reason: `missing_guidance:${requestId}` };
   return {
@@ -837,4 +966,8 @@ async function selectedSkills(
     limit
   );
   return await Promise.all(ranked.map((skill) => catalog.read(skill.id)));
+}
+
+function attemptKey(assignment: Pick<WorkerAssignment, "runId" | "task" | "attempt" | "workerId">): string {
+  return JSON.stringify([assignment.runId, assignment.task.id, assignment.attempt, assignment.workerId]);
 }

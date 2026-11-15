@@ -19,6 +19,13 @@ import {
   type SchedulerProjection,
   type SchedulerStore,
 } from "../src/scheduler-store.js";
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
+import { latestUnresolvedContextRecordingNote } from "../src/scheduler-store.js";
+import { createHash } from "node:crypto";
+import { captureSubmissionScopeIdentity } from "../src/submission-scope-capture.js";
+import { bindSubmissionScope } from "../src/submission-scope-contracts.js";
+import { inspectSubmissionScope } from "../src/submission-guard.js";
+import { localSubmissionClaim } from "../src/submission-guard-git.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
@@ -439,13 +446,14 @@ function seedReadyPlan(
   store: SchedulerStore,
   fixture: ReadyPlanFixture,
   runId = "run_t4",
+  initPayload: Record<string, unknown> = {},
 ): void {
   appendEvent(store, {
     runId,
     type: "run.initialized",
     actor: { role: "runner", id: "build-runtime" },
     idempotencyKey: "run:init",
-    payload: {},
+    payload: initPayload,
   });
   appendEvent(store, {
     runId,
@@ -1624,6 +1632,483 @@ test("R2-B5 managed interruption releases claims and allows fenced steering", as
 });
 
 
+// ---------------------------------------------------------------------------
+// Unproven worker stops keep the claim (risk 11 of the CLI workers plan)
+// ---------------------------------------------------------------------------
+
+/** A driver whose attempts all end the same way and whose stop retries follow a script. */
+class StopScriptDriver implements WorkerRuntimeDriver {
+  runs = 0;
+  readonly retries: WorkerAssignment[] = [];
+  constructor(
+    private readonly end: () => Promise<WorkerOutcome>,
+    private readonly retryResults: Array<"proven" | "unproven"> = [],
+  ) {}
+  run(): Promise<WorkerOutcome> {
+    this.runs += 1;
+    return this.end();
+  }
+  async retryStop(assignment: WorkerAssignment): Promise<void> {
+    this.retries.push(assignment);
+    if ((this.retryResults.shift() ?? "unproven") === "unproven") {
+      throw new Error("Shared managed cleanup did not prove release.");
+    }
+  }
+}
+
+function claimStatus(store: SchedulerStore, taskId: string) {
+  return Object.values(projectionOf(store, "run_t4").planning?.assignments ?? {})
+    .filter((entry) => entry.claim.packetId === taskId)
+    .map((entry) => ({ status: entry.status, evidence: entry.claim.writerStopEvidence }));
+}
+
+function cleanupUnverifiedError(): AggregateError {
+  const inner = Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+  return new AggregateError([inner], "Managed process cleanup remains unverified.");
+}
+
+test("an unproven worker stop keeps the claim, pauses, and resume retries the stop before anything else", async () => {
+  const fixture = openFixture("stop-unproven-kept");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U1", files: ["src/u1.ts"] },
+    ], { revisionId: "revision_u1", reviewId: "coverage_u1" }));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: Shared managed cleanup did not prove release.",
+      outcome: { type: "failed", reason: "tests failed" },
+    }), ["unproven", "proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U1");
+    assert.equal(projection.tasks.U1.status, "running", "the outcome waits for a proven stop");
+    assert.deepEqual(claimStatus(fixture.store, "U1"), [{ status: "claimed", evidence: undefined }],
+      "no release of any kind: the stray process may still write in the worktree");
+    assert.equal(projection.unprovenWorkerStops?.U1?.attempt, 1);
+
+    await scheduler.tick();
+    assert.equal(driver.retries.length, 0, "a paused run retries nothing");
+
+    scheduler.resume("resume:u1:1");
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(driver.retries.length, 1);
+    assert.equal(driver.retries[0]?.workerId, "worker_U1_1");
+    assert.equal(driver.retries[0]?.attempt, 1);
+    assert.equal(driver.runs, 1, "a still-unproven stop never starts the attempt again");
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U1");
+    assert.equal(projection.pauseReason?.detail,
+      "Managed process stop not proven: Shared managed cleanup did not prove release. Retry: Shared managed cleanup did not prove release.",
+      "the re-pause keeps the first cause in front of the retry's");
+    assert.deepEqual(claimStatus(fixture.store, "U1"), [{ status: "claimed", evidence: undefined }]);
+
+    scheduler.resume("resume:u1:2");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(driver.retries.length, 2);
+    assert.equal(driver.runs, 1);
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    const claims = claimStatus(fixture.store, "U1");
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0]?.status, "stopped_fenced");
+    assert.match(claims[0]?.evidence ?? "", /^worker stop proven on retry after: /);
+    assert.equal(projection.tasks.U1.status, "failed", "the attempt goes on with the outcome it had");
+    assert.equal(projection.tasks.U1.failureReason, "tests failed");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a thrown process_cleanup_unverified keeps the claim even after a lifecycle abort; a driver that cannot retry stays paused", async () => {
+  const fixture = openFixture("stop-unproven-thrown");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U2", files: ["src/u2.ts"] },
+    ], { revisionId: "revision_u2", reviewId: "coverage_u2" }));
+    const controller = new AbortController();
+    let runs = 0;
+    const driver: WorkerRuntimeDriver = {
+      run: async () => {
+        runs += 1;
+        controller.abort();
+        throw cleanupUnverifiedError();
+      },
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    (scheduler as unknown as { lifecycleSignal?: () => AbortSignal }).lifecycleSignal =
+      () => controller.signal;
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U2");
+    assert.deepEqual(claimStatus(fixture.store, "U2"), [{ status: "claimed", evidence: undefined }]);
+    assert.equal(projection.unprovenWorkerStops?.U2?.aborted, true, "the abort is kept with the stop");
+    assert.deepEqual(projection.unprovenWorkerStops?.U2?.outcome, {
+      type: "failed",
+      reason: "Managed process cleanup remains unverified. (Shared managed cleanup did not prove release.)",
+    }, "the outcome names the inner cause, not only the aggregate's message");
+    scheduler.resume("resume:u2");
+    await scheduler.tick();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "paused", "without retryStop the stop can never be proven here");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U2");
+    assert.equal(runs, 1);
+    assert.deepEqual(claimStatus(fixture.store, "U2"), [{ status: "claimed", evidence: undefined }]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a proven stop records a kept submission; the kept claim blocks an overlapping task meanwhile", async () => {
+  const fixture = openFixture("stop-unproven-submitted");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U3", files: ["src/shared.ts"] },
+      { id: "U4", files: ["src/shared.ts"] },
+    ], { revisionId: "revision_u3", reviewId: "coverage_u3" }));
+    const evidenceRecord = fixture.evidence.record({
+      runId: "run_t4",
+      taskId: "U3",
+      actor: { role: "worker", id: "worker_U3_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "U3 evidence",
+        capturedAt: fixture.clock(),
+        screenshotArtifactHash: "3".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: fixture.clock(),
+      idempotencyKey: "evidence:U3",
+      attempt: 1,
+    });
+    const started: string[] = [];
+    const retries: string[] = [];
+    let proven = false;
+    const driver: WorkerRuntimeDriver = {
+      run: async (assignment) => {
+        started.push(assignment.task.id);
+        return {
+          type: "stop_unproven",
+          reason: "Agent MCP cleanup remains unverified.",
+          outcome: {
+            type: "submitted",
+            changeSetId: "changeset-u3",
+            criterionEvidenceLinks: [{ criterionId: "done", evidenceId: evidenceRecord.id, artifactHashes: ["3".repeat(64)] }],
+          },
+        };
+      },
+      retryStop: async (assignment) => {
+        retries.push(assignment.task.id);
+        if (!proven) throw new Error("still running");
+      },
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.deepEqual(started, ["U3"], "U4 overlaps U3's files, so it waits");
+    scheduler.resume("resume:u3:1");
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.deepEqual(started, ["U3"], "the overlapping U4 still waits while U3's claim is kept");
+    assert.equal(projectionOf(fixture.store, "run_t4").tasks.U3.status, "running", "nothing is submitted while unproven");
+    proven = true;
+    scheduler.resume("resume:u3:2");
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.deepEqual(retries, ["U3", "U3"]);
+    assert.equal(projection.tasks.U3.status, "submitted");
+    assert.equal(projection.tasks.U3.changeSetId, "changeset-u3");
+    assert.equal(claimStatus(fixture.store, "U3")[0]?.status, "released",
+      "the kept submission is recorded while the claim is claimed and releases it as dispatch does");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("the real pump retries an unproven stop at the start of a resumed step, before the Architect's turn", async () => {
+  const fixture = openFixture("stop-unproven-pump");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U5", files: ["src/u5.ts"] },
+    ], { revisionId: "revision_u5", reviewId: "coverage_u5" }));
+    const order: string[] = [];
+    const first = schedulerFor(fixture.store, {
+      run: async () => ({ type: "stop_unproven", reason: "Agent MCP cleanup remains unverified.", outcome: { type: "failed", reason: "tests failed" } }),
+    });
+    await first.tick();
+    await first.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").pauseReason?.reason, "process_stop_unproven:U5");
+    first.resume("resume:u5");
+    const runtime = new BuildRuntime({
+      runId: "run_t4",
+      store: fixture.store,
+      artifacts: planningSourceArtifactsForRuntime(),
+      workerDriver: {
+        run: async () => { throw new Error("worker_not_expected"); },
+        retryStop: async () => { order.push("retryStop"); },
+      },
+      architectDriver: {
+        run: async () => {
+          order.push("architect");
+          throw new Error("architect_turn_reached");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => {
+          throw new Error("integration_not_expected");
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async (task, attempt) => `C:/work/${task.id}-${attempt}`,
+      clock: fixtureClock(),
+      finalVerificationProfileFor: async (revision) =>
+        emptyFinalVerificationProfile(revision),
+    });
+    await runtime.step().catch(() => undefined);
+    assert.equal(order[0], "retryStop", "the stop is retried before anything else");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.tasks.U5.status, "failed", "the proven stop let the attempt go on with its outcome");
+    assert.equal(claimStatus(fixture.store, "U5")[0]?.status, "stopped_fenced");
+    assert.ok(order.includes("architect"), "the Architect then resolves the failed task");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("an aborted attempt with an unproven stop keeps abort semantics once the stop is proven", async () => {
+  const fixture = openFixture("stop-unproven-aborted");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U6", files: ["src/u6.ts"] },
+    ], { revisionId: "revision_u6", reviewId: "coverage_u6" }));
+    const controller = new AbortController();
+    const driver = new StopScriptDriver(async () => {
+      controller.abort();
+      return { type: "stop_unproven", reason: "Agent MCP cleanup remains unverified.", outcome: { type: "paused", reason: "worker_cancelled" } };
+    }, ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    (scheduler as unknown as { lifecycleSignal?: () => AbortSignal }).lifecycleSignal =
+      () => controller.signal;
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").unprovenWorkerStops?.U6?.aborted, true);
+    scheduler.resume("resume:u6");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "running", "the kept worker_cancelled is not replayed as a second pause");
+    assert.equal(projection.tasks.U6.status, "running", "an aborted attempt is resumed later, never failed");
+    assert.equal(claimStatus(fixture.store, "U6")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a kept outcome that cannot be recorded after a proven stop fails the attempt instead of vanishing", async () => {
+  const fixture = openFixture("stop-unproven-unrecordable");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U7", files: ["src/u7.ts"] },
+    ], { revisionId: "revision_u7", reviewId: "coverage_u7" }));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Agent MCP cleanup remains unverified.",
+      outcome: {
+        type: "submitted",
+        changeSetId: "changeset-u7",
+        criterionEvidenceLinks: [{ criterionId: "done", evidenceId: "evidence_missing", artifactHashes: ["7".repeat(64)] }],
+      },
+    }), ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    scheduler.resume("resume:u7");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.tasks.U7.status, "failed");
+    assert.ok(projection.tasks.U7.failureReason, "the reason the submission could not be recorded is kept");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(claimStatus(fixture.store, "U7")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a context recording failure with an unproven stop records its note together with its own pause after the proof", async () => {
+  const fixture = openFixture("stop-unproven-context");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U8", files: ["src/u8.ts"] },
+    ], { revisionId: "revision_u8", reviewId: "coverage_u8" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    const notes = () => fixture.store.readRun("run_t4").filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes().length, 0, "the note waits for its pause");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U8");
+    assert.deepEqual(projection.unprovenWorkerStops?.U8?.outcome, { type: "paused", reason: "context_recording_failed" });
+    assert.equal(projection.unprovenWorkerStops?.U8?.contextRecordingFailure?.purpose, "worker:task");
+    scheduler.resume("resume:u8");
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "context_recording_failed", "after the proof the attempt goes on to its own pause");
+    assert.equal(notes().length, 1, "with its note, as on the catch path");
+    assert.equal(notes()[0]?.payload.taskId, "U8");
+    assert.ok(latestUnresolvedContextRecordingNote(projection), "the note is open under its own pause, which resolves it as on main");
+    assert.equal(claimStatus(fixture.store, "U8")[0]?.status, "stopped_fenced");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a held stop whose kept context pause is steered away leaves no unresolved note, so the run can still complete", async () => {
+  const fixture = openFixture("stop-unproven-context-steered");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U14", files: ["src/u14.ts"] },
+    ], { revisionId: "revision_u14", reviewId: "coverage_u14" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven", "proven"]);
+    const scheduler = schedulerFor(fixture.store, driver, { maxConcurrency: 1 });
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").pauseReason?.reason, "process_stop_unproven:U14");
+    appendEvent(fixture.store, {
+      type: "user.guidance_submitted",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "u14:guidance",
+      payload: { guidanceId: "guidance-u14", text: "Use the revised flow.", version: 1, interruptionProtocolVersion: 1 },
+    });
+    scheduler.resume("resume:u14");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear", "held until the guidance is answered");
+    appendEvent(fixture.store, {
+      type: "user.guidance_interruption_completed",
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: "u14:interruption",
+      payload: { guidanceId: "guidance-u14", expectedVersion: 1 },
+    });
+    appendEvent(fixture.store, {
+      type: "user.guidance_acknowledged",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "u14:steer",
+      payload: {
+        guidanceId: "guidance-u14",
+        expectedVersion: 1,
+        resolution: {
+          type: "plan_reconciled",
+          rationale: "Restart active work with revised intent.",
+          planReconciliation: {
+            revision: 2,
+            summary: "Steer U14 to the revised flow.",
+            taskUpdates: [{ taskId: "U14", action: "revise", objective: "Use the revised flow." }],
+          },
+        },
+      },
+    });
+    const steered = projectionOf(fixture.store, "run_t4").tasks.U14;
+    assert.ok(steered.status !== "running" || steered.attempt !== 1 || steered.assignedWorkerId !== "worker_U14_1",
+      `the steer moved the task on (${steered.status} attempt ${steered.attempt})`);
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(claimStatus(fixture.store, "U14")[0]?.status, "stopped_fenced");
+    assert.equal(fixture.store.readRun("run_t4").some((event) => event.type === "context_manifest.recording_failed"), false,
+      "no kept pause, so no note: nothing is left to resolve");
+    assert.equal(latestUnresolvedContextRecordingNote(projection), undefined, "completion and handoff are not refused");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a kept context pause the store refuses never turns into a failure: the note waits, Resume records both", async () => {
+  const fixture = openFixture("stop-unproven-context-refused");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U15", files: ["src/u15.ts"] },
+    ], { revisionId: "revision_u15", reviewId: "coverage_u15" }));
+    const thrown = new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full"));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Managed process stop not proven: still running.",
+      outcome: { type: "failed", reason: thrown.message },
+      thrown,
+    }), ["proven", "proven"]);
+    const append = fixture.store.append.bind(fixture.store);
+    let refuse = false;
+    (fixture.store as unknown as { append: typeof append }).append = (event) => {
+      if (refuse && event.type === "run.paused" && event.payload.reason === "context_recording_failed") {
+        throw new Error("store busy");
+      }
+      return append(event);
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    scheduler.resume("resume:u15:1");
+    refuse = true;
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_outcome_unrecorded:U15", "its own reason, not an unproven stop");
+    assert.match(projection.pauseReason?.detail ?? "", /could not be saved: store busy/);
+    assert.equal(projection.tasks.U15.status, "running", "no failure in place of the kept pause");
+    assert.equal(projection.unprovenWorkerStops?.U15?.attempt, 1, "the stop stays pending");
+    assert.equal(claimStatus(fixture.store, "U15")[0]?.status, "stopped_fenced", "the stop is proven, so the pause's own release stands");
+    refuse = false;
+    scheduler.resume("resume:u15:2");
+    assert.equal(await scheduler.settleUnprovenStops(), "paused");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "context_recording_failed");
+    assert.equal(fixture.store.readRun("run_t4").filter((event) => event.type === "context_manifest.recording_failed").length, 1,
+      "the note is recorded once, with its stable key");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("every other pause and failure still releases the claim as stopped_fenced", async () => {
+  const outcomes: Array<{ id: string; end: () => Promise<WorkerOutcome>; evidence: string }> = [
+    { id: "V1", end: async () => ({ type: "failed", reason: "tests failed" }), evidence: "driver returned: tests failed" },
+    { id: "V2", end: async () => ({ type: "paused", reason: "no_healthy_capability_match" }), evidence: "worker paused: no_healthy_capability_match" },
+    { id: "V3", end: async () => { throw new Error("workspace creation failed"); }, evidence: "driver returned: workspace creation failed" },
+  ];
+  for (const { id, end, evidence } of outcomes) {
+    const fixture = openFixture(`stop-proven-${id}`);
+    try {
+      seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+        { id, files: [`src/${id}.ts`] },
+      ], { revisionId: `revision_${id}`, reviewId: `coverage_${id}` }));
+      const scheduler = schedulerFor(fixture.store, { run: end });
+      await scheduler.tick();
+      await scheduler.awaitIdle();
+      assert.deepEqual(claimStatus(fixture.store, id), [{ status: "stopped_fenced", evidence }], id);
+      assert.equal(projectionOf(fixture.store, "run_t4").unprovenWorkerStops, undefined, id);
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+
 test("R2-B1 real pump resumes an in-flight same-owner task without admitting a fifth", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-r2-b1-pump-"));
   const database = join(root, "scheduler.sqlite");
@@ -1945,4 +2430,320 @@ test("T4 eligibility comes from dependencies, never phase completion", () => {
     dependencyBlockReason(missing, "Y") ?? "",
     /depends on missing task ghost/,
   );
+});
+
+test("a proven stop records a kept submission under submission-scope policy 1, whose scope needs the live claim", async () => {
+  const fixture = openFixture("stop-unproven-scope");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U9", files: ["src/u9.ts"] },
+    ], { revisionId: "revision_u9", reviewId: "coverage_u9" }), "run_t4", { submissionScopePolicyVersion: 1 });
+    const evidenceRecord = fixture.evidence.record({
+      runId: "run_t4",
+      taskId: "U9",
+      actor: { role: "worker", id: "worker_U9_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "U9 evidence",
+        capturedAt: fixture.clock(),
+        screenshotArtifactHash: "9".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: fixture.clock(),
+      idempotencyKey: "evidence:U9",
+      attempt: 1,
+    });
+    const baselineRevision = "b".repeat(40);
+    const taskRevision = "c".repeat(40);
+    const changeSetId = `changeset_${createHash("sha256").update(`run_t4\0U9\0${taskRevision}`).digest("hex")}`;
+    let proven = false;
+    const driver: WorkerRuntimeDriver = {
+      run: async (assignment) => {
+        appendEvent(fixture.store, {
+          type: "worker.runtime_assigned",
+          actor: { role: "runner", id: "runtime-router" },
+          idempotencyKey: "runtime:U9:1",
+          payload: { taskId: "U9", attempt: 1, runtimeId: "fake:model", sessionId: "session-u9" },
+        });
+        const identity = captureSubmissionScopeIdentity(projectionOf(fixture.store, "run_t4"), {
+          runId: "run_t4", taskId: "U9", attempt: 1, workerId: assignment.workerId, sessionId: "session-u9",
+          workspacePath: assignment.workspacePath, baselineRevision,
+        });
+        assert.ok(identity, "the policy-1 run captures the scope authority from the live claim");
+        const files = [{ path: "src/u9.ts", added: false }];
+        const findings = inspectSubmissionScope(files.map((file) => ({ ...file, addedLines: [] as string[] })),
+          localSubmissionClaim(identity.claim, assignment.workspacePath));
+        return {
+          type: "stop_unproven",
+          reason: "Agent MCP cleanup remains unverified.",
+          outcome: {
+            type: "submitted",
+            changeSetId,
+            submissionScope: bindSubmissionScope(identity, changeSetId, taskRevision, findings, files),
+            criterionEvidenceLinks: [{ criterionId: "done", evidenceId: evidenceRecord.id, artifactHashes: ["9".repeat(64)] }],
+          },
+        };
+      },
+      retryStop: async () => {
+        if (!proven) throw new Error("still running");
+      },
+    };
+    const scheduler = schedulerFor(fixture.store, driver, {
+      workspaceFor: async (task) => ({ path: `C:/work/${task.id}`, workspaceId: `ws-${task.id}`, baselineRevision }),
+    });
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").pauseReason?.reason, "process_stop_unproven:U9");
+    proven = true;
+    scheduler.resume("resume:u9");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    const projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.tasks.U9.status, "submitted", `the kept submission is valid: it was recorded before any release (${projection.tasks.U9.failureReason ?? ""})`);
+    assert.equal(projection.tasks.U9.changeSetId, changeSetId);
+    assert.ok(projection.tasks.U9.submissionScope);
+    assert.equal(claimStatus(fixture.store, "U9")[0]?.status, "released");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("steering guidance that aborts an attempt with an unproven stop still records the stop and pauses; the proof keeps abort semantics", async () => {
+  const fixture = openFixture("stop-unproven-steering");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U10", files: ["src/u10.ts"] },
+    ], { revisionId: "revision_u10", reviewId: "coverage_u10" }));
+    const controller = new AbortController();
+    let finish!: (outcome: WorkerOutcome) => void;
+    let runs = 0;
+    const retries: number[] = [];
+    const driver: WorkerRuntimeDriver = {
+      run: () => {
+        runs += 1;
+        return new Promise<WorkerOutcome>((resolveOutcome) => { finish = resolveOutcome; });
+      },
+      retryStop: async (assignment) => { retries.push(assignment.attempt); },
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    (scheduler as unknown as { lifecycleSignal?: () => AbortSignal }).lifecycleSignal = () => controller.signal;
+    await scheduler.tick();
+    appendEvent(fixture.store, {
+      type: "user.guidance_submitted",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "u10:guidance",
+      payload: { guidanceId: "guidance-u10", text: "Use the revised flow.", version: 1, interruptionProtocolVersion: 1 },
+    });
+    controller.abort();
+    finish({
+      type: "stop_unproven",
+      reason: "Agent MCP cleanup remains unverified.",
+      outcome: { type: "failed", reason: "aborted" },
+      thrown: new ContextManifestRecordingError({ runId: "run_t4", sessionId: "worker-session", purpose: "worker:task", attempts: 3 }, new Error("disk full")),
+    });
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U10", "pending guidance does not refuse the stop or its pause");
+    assert.equal(projection.unprovenWorkerStops?.U10?.aborted, true);
+    assert.deepEqual(claimStatus(fixture.store, "U10"), [{ status: "claimed", evidence: undefined }]);
+    assert.equal(fixture.store.readRun("run_t4").some((event) => event.type === "context_manifest.recording_failed"), false,
+      "an aborted attempt records no context-recording failure, as on main");
+    scheduler.resume("resume:u10");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear", "the proof is recorded under pending guidance");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(claimStatus(fixture.store, "U10")[0]?.status, "stopped_fenced");
+    assert.equal(projection.tasks.U10.status, "running", "an abort keeps nothing of its outcome");
+    await scheduler.tick();
+    assert.equal(runs, 1, "pending guidance still holds the attempt back");
+    assert.deepEqual(retries, [1]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("owner guidance sent while paused on an unproven stop, then Resume: the proven stop keeps its outcome and claim until the guidance is answered", async () => {
+  const fixture = openFixture("stop-unproven-guidance-resume");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U11", files: ["src/u11.ts"] },
+    ], { revisionId: "revision_u11", reviewId: "coverage_u11" }));
+    const driver = new StopScriptDriver(async () => ({
+      type: "stop_unproven",
+      reason: "Agent MCP cleanup remains unverified.",
+      outcome: { type: "failed", reason: "tests failed" },
+    }), ["proven", "proven", "proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(projectionOf(fixture.store, "run_t4").pauseReason?.reason, "process_stop_unproven:U11");
+    appendEvent(fixture.store, {
+      type: "user.guidance_submitted",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "u11:guidance",
+      payload: { guidanceId: "guidance-u11", text: "Try the other parser.", version: 1, interruptionProtocolVersion: 1 },
+    });
+    scheduler.resume("resume:u11");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear", "the run is not held paused: the Architect must answer");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "running");
+    assert.equal(projection.unprovenWorkerStops?.U11?.attempt, 1, "the stop stays pending with its kept outcome");
+    assert.equal(projection.tasks.U11.status, "running");
+    assert.deepEqual(claimStatus(fixture.store, "U11"), [{ status: "claimed", evidence: undefined }], "and keeps its claim");
+    const row = scheduler.schedulingView().tasks.find((entry) => entry.taskId === "U11");
+    assert.equal(row?.eligible, false);
+    assert.ok(row?.reasons.includes("Worker stop not yet settled"), "the scheduling view says why it waits");
+    await scheduler.tick();
+    assert.equal(driver.runs, 1, "the attempt is not run again meanwhile");
+    appendEvent(fixture.store, {
+      type: "user.guidance_interruption_completed",
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: "u11:interruption",
+      payload: { guidanceId: "guidance-u11", expectedVersion: 1 },
+    });
+    const ackEvidence = fixture.evidence.record({
+      runId: "run_t4",
+      taskId: "U11",
+      actor: { role: "architect", id: "architect_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "U11 guidance evidence",
+        capturedAt: fixture.clock(),
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: fixture.clock(),
+      idempotencyKey: "evidence:U11:ack",
+      attempt: 1,
+    });
+    appendEvent(fixture.store, {
+      type: "user.guidance_acknowledged",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "u11:ack",
+      payload: { guidanceId: "guidance-u11", expectedVersion: 1, resolution: { type: "no_plan_change", rationale: "The parser stays.", evidenceIds: [ackEvidence.id] } },
+    });
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(projection.tasks.U11.status, "failed", "once answered, the attempt goes on with the outcome it had");
+    assert.equal(projection.tasks.U11.failureReason, "tests failed");
+    assert.equal(claimStatus(fixture.store, "U11")[0]?.status, "stopped_fenced");
+    assert.equal(driver.retries.length, 3, "each settle retries the held stop again, the tick's included");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("an open Architect question admits the unproven stop and its pause; the kept outcome waits for the answer", async () => {
+  const fixture = openFixture("stop-unproven-question");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U13", files: ["src/u13.ts"] },
+    ], { revisionId: "revision_u13", reviewId: "coverage_u13" }));
+    let finish!: (outcome: WorkerOutcome) => void;
+    const retries: number[] = [];
+    const driver: WorkerRuntimeDriver = {
+      run: () => new Promise<WorkerOutcome>((resolveOutcome) => { finish = resolveOutcome; }),
+      retryStop: async (assignment) => { retries.push(assignment.attempt); },
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    appendEvent(fixture.store, {
+      type: "architect.question_requested",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "u13:question",
+      payload: { questionId: "question-u13", version: 1, decisionKind: "authority_decision", question: "Which parser is authoritative?" },
+    });
+    assert.equal(projectionOf(fixture.store, "run_t4").blockingArchitectQuestionId, "question-u13");
+    finish({ type: "stop_unproven", reason: "Agent MCP cleanup remains unverified.", outcome: { type: "failed", reason: "tests failed" } });
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U13", "the open question does not refuse the stop or its pause");
+    assert.deepEqual(claimStatus(fixture.store, "U13"), [{ status: "claimed", evidence: undefined }]);
+    scheduler.resume("resume:u13");
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops?.U13?.attempt, 1, "proven, but held until the answer");
+    assert.equal(projection.tasks.U13.status, "running");
+    assert.deepEqual(claimStatus(fixture.store, "U13"), [{ status: "claimed", evidence: undefined }]);
+    appendEvent(fixture.store, {
+      type: "architect.question_answered",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "u13:answer",
+      payload: { questionId: "question-u13", expectedVersion: 1, answer: "The new one." },
+    });
+    assert.equal(await scheduler.settleUnprovenStops(), "clear");
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+    assert.equal(projection.tasks.U13.status, "failed");
+    assert.equal(claimStatus(fixture.store, "U13")[0]?.status, "stopped_fenced");
+    assert.deepEqual(retries, [1, 1]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("an unproven stop that cannot be recorded keeps the run paused; a restarted scheduler retries the stop before running the attempt again", async () => {
+  const fixture = openFixture("stop-unproven-unrecorded");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U12", files: ["src/u12.ts"] },
+    ], { revisionId: "revision_u12", reviewId: "coverage_u12" }));
+    const append = fixture.store.append.bind(fixture.store);
+    let refuse = true;
+    (fixture.store as unknown as { append: typeof append }).append = (event) => {
+      if (refuse && event.type === "worker.stop_unproven") throw new Error("disk full");
+      return append(event);
+    };
+    const first = schedulerFor(fixture.store, {
+      run: async () => ({ type: "stop_unproven", reason: "Agent MCP cleanup remains unverified.", outcome: { type: "failed", reason: "tests failed" } }),
+    });
+    await first.tick();
+    await first.awaitIdle().catch(() => undefined);
+    assert.equal(await first.settleUnprovenStops(), "paused", "no Architect turn while a stop is unrecorded");
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unrecorded:U12", "its own reason: only a restart retries it");
+    assert.match(projection.pauseReason?.detail ?? "", /could not save the record/);
+    assert.equal(projection.unprovenWorkerStops, undefined, "nothing durable records the stop");
+    assert.deepEqual(claimStatus(fixture.store, "U12"), [{ status: "claimed", evidence: undefined }]);
+    first.resume("resume:u12:1");
+    assert.equal(await first.settleUnprovenStops(), "paused", "this process stays paused until it restarts");
+    refuse = false;
+
+    // The restarted Runner: a fresh scheduler and driver, nothing in memory.
+    let runs = 0;
+    let proven = false;
+    const retries: number[] = [];
+    const second = schedulerFor(fixture.store, {
+      run: async () => {
+        runs += 1;
+        return { type: "failed", reason: "rerun" };
+      },
+      retryStop: async (assignment) => {
+        retries.push(assignment.attempt);
+        if (!proven) throw new Error("still running");
+      },
+    });
+    second.resume("resume:u12:2");
+    await second.tick();
+    await second.awaitIdle();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(runs, 0, "the same attempt never runs again before its earlier stop is proven");
+    assert.deepEqual(retries, [1]);
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U12");
+    assert.equal(projection.unprovenWorkerStops?.U12?.aborted, true);
+    assert.deepEqual(claimStatus(fixture.store, "U12"), [{ status: "claimed", evidence: undefined }]);
+    proven = true;
+    second.resume("resume:u12:3");
+    await second.tick();
+    await second.awaitIdle();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(runs, 1);
+    assert.deepEqual(retries, [1, 1, 1], "the pending stop's proof, then the restart check before the dispatch");
+    assert.equal(projection.tasks.U12.status, "failed");
+    assert.equal(projection.tasks.U12.failureReason, "rerun");
+  } finally {
+    fixture.close();
+  }
 });
