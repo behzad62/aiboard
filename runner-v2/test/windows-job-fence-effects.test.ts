@@ -19,11 +19,12 @@
 // - D4: the live supervisor authenticates /wait-status with Bearer.
 // Every fault below is restored byte-exact (sha256 before == after).
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import test, { after, type TestContext } from "node:test";
 import { Worker } from "node:worker_threads";
 
@@ -185,6 +186,66 @@ test("px2b: fused claim+attach rejects stale writers before observing", { timeou
     }
     try {
       await service.releaseOwned(launched.processId, OWNER, launched.startedAt, { ...current });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
+});
+
+// The supervisor reads the process record to check each fenced request's fence, outside the Runner's lock, so a
+// request it handles late can hold the record open while the Runner writes it. Renaming over an open file fails on
+// Windows with EPERM; the write waits for the reader instead of failing the effect (it paused a Build on main).
+test("a fenced record write waits while another process holds the record open", { timeout: 55_000 }, async (t) => {
+  if (!needsWindows(t)) return;
+  const root = mkdtempSync(join(tmpdir(), "aiboard-record-held-"));
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const stateDirectory = join(root, "job-host");
+  const service = createWindowsJobProcessHost({ stateDirectory });
+  const target = launchArgs("setTimeout(() => process.exit(0), 30000)");
+  const launched = await service.launchOwned({
+    ...OWNER,
+    command: target.executable,
+    args: target.args,
+    workingDirectory: workspace,
+    environment: allowedEnv(),
+    interactive: true,
+    fence: { ...FENCE },
+  });
+  const upgraded: WindowsJobWriterFence = { ownerId: FENCE.ownerId, fencingToken: FENCE.fencingToken + 1 };
+  const recordPath = join(stateDirectory, `${launched.processId}.json`);
+  try {
+    const holder = spawn(process.execPath, ["-e",
+      "const fs=require('fs');const fd=fs.openSync(process.argv[1],'r');process.stdout.write('held\\n');" +
+      "setTimeout(()=>{process.stdout.write('closing '+Date.now()+'\\n');fs.closeSync(fd);process.exit(0)},500)",
+      recordPath], { stdio: ["ignore", "pipe", "inherit"] });
+    let closingAt: number | undefined;
+    const lines = createInterface({ input: holder.stdout! });
+    const held = new Promise<void>((resolve) => lines.on("line", (line) => {
+      if (line === "held") resolve();
+      else if (line.startsWith("closing ")) closingAt = Number(line.slice("closing ".length));
+    }));
+    const exited = new Promise<void>((resolve) => holder.on("exit", () => resolve()));
+    await held;
+    // The fence upgrade persists the record inside its fence effect while the holder still has it open.
+    const state = await service.claimAndAttachOwnedChannel!(launched.processId, OWNER, { ...upgraded });
+    const settledAt = Date.now();
+    await exited;
+    assert.ok(closingAt !== undefined, "the holder reported when it closed the record");
+    assert.ok(settledAt >= closingAt, "the effect settled only after the holder closed the record: its write waited");
+    assert.equal(state.snapshot.processId, launched.processId);
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as { currentFence?: WindowsJobWriterFence };
+    assert.deepEqual(record.currentFence, upgraded, "the upgraded fence reached the record");
+    assert.deepEqual(readdirSync(stateDirectory).filter((name) => name.endsWith(".tmp")), [], "no temporary record is left");
+  } finally {
+    try {
+      await service.signalOwned(launched.processId, "SIGKILL", OWNER, { ...upgraded });
+    } catch {
+      // Already terminal.
+    }
+    try {
+      await service.releaseOwned(launched.processId, OWNER, launched.startedAt, { ...upgraded });
     } catch {
       // Best-effort cleanup only.
     }

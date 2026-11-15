@@ -1195,7 +1195,7 @@ test("spare pin: a post-ack failure surfaces and never runs the call twice", { t
     const counter = join(world.root, `n2a-${randomUUID().slice(0, 8)}.txt`);
     const owned = world.service as unknown as {
       applyStatus(...args: never[]): unknown;
-      persist(record: unknown): void;
+      persist(record: unknown): Promise<void>;
     };
     const origApply = owned.applyStatus.bind(world.service);
     let thrown = false;
@@ -1273,11 +1273,11 @@ test("spare pin: a failing claimed-record persist surfaces and never runs the ca
     const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
     const counter = join(world.root, `n2b-${randomUUID().slice(0, 8)}.txt`);
     const owned = world.service as unknown as {
-      persist(record: unknown): void;
+      persist(record: unknown): Promise<void>;
     };
     const origPersist = owned.persist.bind(world.service);
     let thrown = false;
-    owned.persist = (record: unknown): void => {
+    owned.persist = async (record: unknown): Promise<void> => {
       if ((record as { spareClaimed?: unknown })?.spareClaimed === true && !thrown) {
         const end = Date.now() + 10_000;
         while (Date.now() < end) {
@@ -1288,7 +1288,7 @@ test("spare pin: a failing claimed-record persist surfaces and never runs the ca
         thrown = true;
         throw new Error("EPERM injected after ack (persist)");
       }
-      origPersist(record);
+      await origPersist(record);
     };
     let failure: unknown;
     try {

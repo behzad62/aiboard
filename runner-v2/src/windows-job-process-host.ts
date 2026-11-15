@@ -9,6 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
+import { replaceFileWhenFree } from "./windows-file-replace.js";
 import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-path-limits.mjs";
 
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
@@ -702,7 +703,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.records.delete(processId);
         if (value.spareClaimInFlight === true) {
           try {
-            this.persist({ ...value, spareReapedAt: this.clock() });
+            this.persistOnce({ ...value, spareReapedAt: this.clock() });
           } catch {}
         } else {
           this.removeSpareFiles(processId);
@@ -763,12 +764,14 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       outputSequences: { stdout: 0, stderr: 0 },
       ...(input.fence ? { currentFence: { ...input.fence } } : {}),
     };
-    this.records.set(processId, record); this.persist(record);
+    this.records.set(processId, record);
     // PX-2a repair 1: the digest is this runner process's in-memory pin and
     // travels over the private stdin channel, never argv, env, or HTTP; a
     // null here omits the fields and the Job host falls back to in-process
     // Add-Type compile.
     try {
+      // Inside the try: a record that cannot be written aborts the supervisor waiting for its config.
+      await this.persist(record);
       await writeSupervisorConfig(launcher, JSON.stringify({
         processId, token, statusPath, stdoutPath: windowsNativeFilePath(record.stdoutPath), stderrPath: windowsNativeFilePath(record.stderrPath),
         eventPath: windowsNativeFilePath(join(processDirectory, "job-events.jsonl")),
@@ -783,7 +786,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
-      this.applyStatus(record, status);
+      await this.applyStatus(record, status);
       if (status.status === "stopped" && status.error) throw new WindowsJobHostError("process_start_failed", status.error);
       if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
     } catch (error) {
@@ -902,11 +905,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       outputSequences: { stdout: 0, stderr: 0 },
       spare: true, spareClaimed: false,
     };
-    this.records.set(processId, record); this.persist(record);
+    this.records.set(processId, record);
     // PX-2a repair 1: the digest is this runner process's in-memory pin and
     // still travels over the private stdin channel per call site.
     const idleTimeoutMs = this.spareOptions.idleTimeoutMs;
     try {
+      // Inside the try: a record that cannot be written aborts the spare and forgets it.
+      await this.persist(record);
       await writeSupervisorConfig(launcher, JSON.stringify({
         processId, token, statusPath, stdoutPath: windowsNativeFilePath(record.stdoutPath), stderrPath: windowsNativeFilePath(record.stderrPath),
         eventPath: windowsNativeFilePath(join(processDirectory, "job-events.jsonl")),
@@ -1023,8 +1028,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       // PX-2c repair 1 (M3/L3): mark the claim window durably BEFORE the IPC
       // claim lands, so a concurrent run-end sweep skips this pair instead of
       // killing a call mid-claim, and a crash here keeps an audit trail.
+      // One synchronous attempt, never a wait: the spare is already taken from `spareEntries`, and a run-end sweep
+      // reading the record from disk must see this mark at once. A record held open falls back to a fresh launch.
       const claiming: HostRecord = { ...record, spareClaimInFlight: true, updatedAt: this.clock(), ...(input.fence ? { currentFence: { ...input.fence } } : {}) };
-      this.records.set(processId, claiming); this.persist(claiming);
+      this.records.set(processId, claiming); this.persistOnce(claiming);
       const acknowledged = await this.sendSpareClaim(launcher, entry.token, input);
       if (!acknowledged) {
         // N7: a missing acknowledgement is no proof the claim never landed (the supervisor may have
@@ -1044,11 +1051,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(input.fence ? { currentFence: { ...input.fence } } : {}),
         spare: true, spareClaimed: true, spareClaimInFlight: false,
       };
-      this.records.set(processId, claimed); this.persist(claimed);
+      this.records.set(processId, claimed); await this.persist(claimed);
       if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
       try {
         const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
-        this.applyStatus(claimed, live);
+        await this.applyStatus(claimed, live);
         if (live.status === "stopped" && live.error) throw new WindowsJobHostError("process_start_failed", live.error);
         if (live.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
       } catch (error) {
@@ -1197,7 +1204,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       try {
         status = await this.withFenceEffect(record, fence, "signal", async (current) => {
           const result = await supervisorRequest<SupervisorStatus>(current.supervisor, "/signal", "POST", { signal, deadlineMs: this.stopDeadlineMs, fence }, this.stopDeadlineMs + 250);
-          this.assertStatusIdentity(current, result); this.applyStatus(current, result); this.throwIfTerminalOutputPending(result); stoppedRecord = current; return result;
+          this.assertStatusIdentity(current, result); await this.applyStatus(current, result); this.throwIfTerminalOutputPending(result); stoppedRecord = current; return result;
         });
       } catch (error) {
         const terminal = await this.withFenceEffect(record, fence, "reconcile", async current => await this.authenticatedStatus(current));
@@ -1282,7 +1289,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         const candidate = { ...current, backendOwnershipReleasedAt: releasedAt, updatedAt: releasedAt };
         // Persisted once the rename lands: a failure of the flush after it is the release's own failure, never a
         // reason to finish the release from the record (the catch below does that only for a release not persisted).
-        this.persist(candidate, { afterRename: () => { this.records.set(processId, candidate); releaseEffectPersisted = true; } });
+        await this.persist(candidate, { afterRename: () => { this.records.set(processId, candidate); releaseEffectPersisted = true; } });
         return { ...this.snapshot(candidate), ownershipReleased: true };
       });
     } catch (error) {
@@ -1331,7 +1338,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
           byteLength: bytes.byteLength, digest: createHash("sha256").update(bytes).digest("hex") };
         output[stream] = bytes; remaining -= bytes.byteLength; changed = true;
       }
-      if (changed) { current.outputFrames = frames; this.persist(current); this.records.set(processId, current); }
+      if (changed) { current.outputFrames = frames; await this.persist(current); this.records.set(processId, current); }
       return { ...output, next: { stdout: offsets.stdout + output.stdout.byteLength, stderr: offsets.stderr + output.stderr.byteLength } };
     });
   }
@@ -1417,7 +1424,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.assertActive(current);
       const fenced = current.currentFence;
       if (fenced && (fence.fencingToken < fenced.fencingToken || (fence.fencingToken === fenced.fencingToken && fence.ownerId !== fenced.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
-      if (!fenced || fence.fencingToken > fenced.fencingToken) { current.currentFence = { ...fence }; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current); }
+      if (!fenced || fence.fencingToken > fenced.fencingToken) { current.currentFence = { ...fence }; current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current); }
       this.assertCurrentFence(current, fence);
       if (!current.interactive) throw new WindowsJobHostError("process_control_unavailable", "Windows Job process has no interactive input channel.");
       const status = await this.authenticatedStatus(current);
@@ -1447,7 +1454,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       if (sequence !== (current.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
       const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.controlDeadlineMs + 250);
       if (result.acknowledged !== true || result.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
-      current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current); return result;
+      current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current); return result;
     });
     return acknowledged;
   }
@@ -1459,7 +1466,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       await this.authenticatedStatus(current);
       if (current.inputClosed) return;
       await supervisorRequest<{ acknowledged: true }>(current.supervisor, "/close-input", "POST", { fence }, this.controlDeadlineMs + 250);
-      current.inputClosed = true; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
+      current.inputClosed = true; current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current);
     });
   }
 
@@ -1480,13 +1487,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         throw new WindowsJobHostError("process_control_unavailable", "Windows Job supervisor output acknowledgement is invalid.");
       this.assertStatusIdentity(current, acknowledged.status);
       this.assertOutputEvidence(current, acknowledged.status);
-      this.applyStatus(current, acknowledged.status, false);
+      this.setStatusFields(current, acknowledged.status);
       current.outputOffsets = { ...offsets, [stream]: endOffset };
       const sequences = current.outputSequences ?? { stdout: 0, stderr: 0 };
       current.outputSequences = { ...sequences, [stream]: sequences[stream] + 1 };
       if (frame) { const frames = { ...current.outputFrames }; delete frames[stream]; current.outputFrames = frames; }
       if (acknowledged.status.status === "stopped") this.assertJobOutputSettled(current, acknowledged.status);
-      current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current);
+      current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current);
     });
   }
 
@@ -1499,7 +1506,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.assertActive(record);
         const current = record.currentFence;
         if (current && (fence.fencingToken < current.fencingToken || (fence.fencingToken === current.fencingToken && fence.ownerId !== current.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
-        if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); this.persist(record); this.records.set(processId, record); }
+        if (!current || fence.fencingToken > current.fencingToken) { record.currentFence = { ...fence }; record.updatedAt = this.clock(); await this.persist(record); this.records.set(processId, record); }
       }, { assertAuthority: () => this.assertActive(this.ownedRecord(processId, owner)) });
     } catch (error) {
       if (error instanceof WindowsJobHostError) throw error;
@@ -1539,7 +1546,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // publish status; an outside observation alone cannot certify release.
     if (persistRecord) {
       if (status.status === "stopped") this.assertJobOutputSettled(record, status);
-      this.applyStatus(record, status);
+      await this.applyStatus(record, status);
     }
     return status;
   }
@@ -1569,29 +1576,60 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
    * only record that ownership was released. Its data is flushed before the rename and the renamed file after it
    * (Node cannot open a directory on Windows, so that is as far as it reaches). `afterRename` runs once the record is
    * in place, before that last flush.
+   *
+   * The rename waits while another process holds the record open (the supervisor reads it to check a request's
+   * fence), on timers that leave the event loop free (windows-file-replace.ts); a record that cannot be replaced
+   * leaves no temporary file behind.
    */
-  private persist(record: HostRecord, durable?: { readonly afterRename: () => void }): void {
+  private async persist(record: HostRecord, durable?: { readonly afterRename: () => void }): Promise<void> {
     const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
-    if (!durable) { writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 }); renameSync(temporary, destination); return; }
-    const content = Buffer.from(JSON.stringify(record, null, 2));
-    const written = openSync(temporary, "wx", 0o600);
-    try {
-      for (let offset = 0; offset < content.length;) offset += writeSync(written, content, offset);
-      fsyncSync(written);
-    } finally { closeSync(written); }
-    renameSync(temporary, destination);
+    if (!durable) writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 });
+    else {
+      const content = Buffer.from(JSON.stringify(record, null, 2));
+      const written = openSync(temporary, "wx", 0o600);
+      try {
+        for (let offset = 0; offset < content.length;) offset += writeSync(written, content, offset);
+        fsyncSync(written);
+      } finally { closeSync(written); }
+    }
+    try { await replaceFileWhenFree(temporary, destination); }
+    catch (error) {
+      try { rmSync(temporary, { force: true }); } catch {}
+      throw error;
+    }
+    if (!durable) return;
     durable.afterRename();
     this.flushRecord(record.processId);
+  }
+  /**
+   * One synchronous attempt, for a write that must land at once or not at all: the constructor's best-effort mark on
+   * a reaped spare (its caller ignores a failure), and a spare's claim-window mark (a failure falls back to a fresh
+   * launch).
+   */
+  private persistOnce(record: HostRecord): void {
+    const destination = this.containedProcessPath(record.processId, ".json"); const temporary = `${destination}.${randomUUID()}.tmp`;
+    writeFileSync(temporary, JSON.stringify(record, null, 2), { mode: 0o600 });
+    try { renameSync(temporary, destination); }
+    catch (error) {
+      try { rmSync(temporary, { force: true }); } catch {}
+      throw error;
+    }
   }
   /** Flushes a record file in place: the renamed release record, and again before a release is finished from it. */
   private flushRecord(processId: string): void {
     const renamed = openSync(this.containedProcessPath(processId, ".json"), "r+");
     try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
-  private applyStatus(record: HostRecord, status: SupervisorStatus, persistRecord = true): void {
+  /** Takes a supervisor status into the record and persists it. */
+  private async applyStatus(record: HostRecord, status: SupervisorStatus): Promise<void> {
+    this.setStatusFields(record, status);
+    await this.persist(record);
+  }
+  /** Takes a supervisor status into the record without persisting it; the caller persists the record afterwards. */
+  private setStatusFields(record: HostRecord, status: SupervisorStatus): void {
     this.assertStatusIdentity(record, status); record.pid = status.childPid; record.supervisor.port = status.port;
     record.status = status.status === "stopped" ? "stopped" : status.status === "exited_unknown" ? "exited_unknown" : "running";
-    record.exitCode = status.exitCode; record.signal = status.signal; record.updatedAt = status.updatedAt; if (persistRecord) this.persist(record);
+    record.exitCode = status.exitCode; record.signal = status.signal; record.updatedAt = status.updatedAt;
   }
   private assertSupervisor(value: SupervisorRecord): void {
     if (value.protocol !== PROTOCOL || value.token.length < 32 || value.supervisorPid < 1 || value.port < 0 || value.port > 65_535)
@@ -1685,7 +1723,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       });
     } catch (error) {
       if (error instanceof WindowsJobHostError) throw error;
-      throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence effect lock is unavailable: ${String(error)}`);
+      // The lock, or the effect's own work (a record write that ran out of time, say): the cause names which.
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job writer fence effect failed: ${String(error)}`);
     } finally {
       finishTurn();
       if (this.effectTails.get(record.processId) === tail) this.effectTails.delete(record.processId);
