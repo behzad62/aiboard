@@ -1,6 +1,6 @@
 # CLI Workers: Codex CLI, Claude Code and agy as Build Workers — Implementation Plan
 Date: 2026-11-14
-Status: **Waiting for the owner's approval** (CWD-6, CWD-7 and CWD-9 decided 2026-11-16). No packet starts before it. It runs after the AIBoard home (done 2026-11-12) and the build verification plan (VF1–VF9, done 2026-11-14), and before the AIBoard Build of Simple Build and `aiboard exec` (OD-33, OD-34, VD-1).
+Status: **Approved by the owner on 2026-11-16**, with CWD-6, CWD-7 and CWD-9 as the owner decided them and the other recommendations accepted. CW0's real prompts still need the owner's "go" in words to the CW0 session (CWD-1). It runs after the AIBoard home (done 2026-11-12) and the build verification plan (VF1–VF9, done 2026-11-14), and before the AIBoard Build of Simple Build and `aiboard exec` (OD-33, OD-34, VD-1).
 Audience: the owner, and whoever implements the packets: a person or a Claude Code session.
 Primary repository: D:\repos\ai-discussion-board, read at bb35b8e4 (main, 2026-11-14) refreshed against a17669d9 (main, 2026-11-15, Runner 0.3.20), and again against 6dfeb0b0 (main, 2026-11-16, after #220 and #221). Bare file names are under `runner-v2/src/`; `test/...` is `runner-v2/test/...`; other paths are repo-relative.
 Sources: docs/plans/2026-11-03-simple-build-and-delegate.md (§2, §6.5, §9, §11.4, §12.3, OD-33–OD-36); docs/plans/2026-11-13-build-verification.md (§4.5, §4.8, §9); the design session "Worker delegation with local CLI tools" (2026-11-11). That session's citations predate the home and the verification plan; every one used here was re-read at bb35b8e4, and the ones that moved are listed in §2.6. Each refresh re-read every citation in a file that changed; §2.7 and §2.8 list what changed.
@@ -433,7 +433,7 @@ None of these blocks a later packet's code; CW10 lists the ones still pending.
 
 ## 7. Owner decisions
 
-CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16. The others are recommendations, accepted with the plan's approval unless the owner says otherwise.
+CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16. The owner approved the plan the same day, which accepts the other recommendations. CWD-1 is accepted as a rule: CW0 still waits for the owner's "go" in words before it spends any quota.
 
 | Id | Question | Recommendation or decision |
 |---|---|---|
@@ -451,4 +451,4 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16. The others are r
 
 | Packet | State | Pull request |
 |---|---|---|
-| CW0–CW10, CW5a | Waiting for the owner's approval of this plan | — |
+| CW0–CW10, CW5a | Plan approved 2026-11-16; not started. CW0 waits for the owner's "go" (CWD-1); CW1 and CW5a can start beside it | — |
