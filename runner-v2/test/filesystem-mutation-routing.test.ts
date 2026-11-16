@@ -30,6 +30,10 @@ const privateOwners = new Set([
   "sqlite-agent-session-store.ts", "sqlite-budget-ledger.ts", "sqlite-build-spec-store.ts", "sqlite-context-manifest-store.ts", "sqlite-event-store.ts",
   "sqlite-evidence-store.ts", "sqlite-project-memory.ts", "sqlite-scheduler-store.ts", "sqlite-tool-ledger.ts",
   "streaming-session-store.ts", "verification-workspace.ts", "windows-job-process-host.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
+  // Reviewed 2026-11-16 (PR #221): renames a caller's own temporary over the caller's destination, retrying on Windows
+  // while another process holds the destination open. Its only caller is windows-job-process-host.ts (process records
+  // under the Job host's state directory). It creates, opens and removes nothing itself; never a tool target.
+  "windows-file-replace.ts",
   // Reviewed 2026-10-31 (docs/runner-v2/filesystem-owner-review-2026-10-31.md). State and extension
   // home are refused at startup when they resolve into the project, lexically or through a link
   // (runner-start isInsideProject); remote-only nested state is deliberate and its owned roots are
