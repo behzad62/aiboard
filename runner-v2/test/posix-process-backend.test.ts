@@ -976,9 +976,9 @@ test("FL2 released tombstone is flushed before its rename and the rename after i
 });
 
 // The Windows Job host's release record is its only record of a release since FL2, so the release writes it durably.
-test("FL2 Windows Job release record is flushed before its rename and the renamed file after it, persisted once in place", () => {
+test("FL2 Windows Job release record is flushed before its rename and the renamed file after it, persisted once in place", async () => {
   const source = readFileSync(new URL("../src/windows-job-process-host.ts", import.meta.url), "utf8");
-  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n(?:\s*\/\/[^\n]*\n){0,3}\s*this\.persist\((\w+)(, \{ afterRename: [^\n]*releaseEffectPersisted = true[^\n]*)?\)/g)];
+  const releases = [...source.matchAll(/backendOwnershipReleasedAt: releasedAt[^\n]*\n(?:\s*\/\/[^\n]*\n){0,3}\s*await this\.persist\((\w+)(, \{ afterRename: [^\n]*releaseEffectPersisted = true[^\n]*)?\)/g)];
   assert.equal(releases.length, 1, "one release effect writes the release record");
   assert.ok(releases[0]![2], "and it writes it durably, marking the release persisted once the record is in place");
   // A release finished from the record (recoverReleasedFence) flushes the record first, before the lock is removed.
@@ -994,7 +994,7 @@ test("FL2 Windows Job release record is flushed before its rename and the rename
   find(file);
   assert.ok(persist?.body, "missing production persist");
   const parameters = persist.parameters.map((parameter) => parameter.getText(file)).join(", ");
-  const method = ts.transpileModule(`function persist(${parameters}) ${persist.body.getText(file)}`, {
+  const method = ts.transpileModule(`async function persist(${parameters}) ${persist.body.getText(file)}`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
   const calls: string[] = [];
@@ -1009,7 +1009,9 @@ test("FL2 Windows Job release record is flushed before its rename and the rename
     },
     fsyncSync: (descriptor: number) => { calls.push(`fsync ${names.get(descriptor)}`); },
     closeSync: (descriptor: number) => { calls.push(`close ${names.get(descriptor)}`); },
-    renameSync: (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
+    // The rename that waits while another process holds the record open (windows-file-replace.ts).
+    replaceFileWhenFree: async (from: string, to: string) => { calls.push(`rename ${from} ${to}`); },
+    rmSync: (path: string) => { calls.push(`rm ${path}`); },
     writeFileSync: (path: string) => { calls.push(`writeFile ${path}`); },
   });
   vm.runInContext(method, context);
@@ -1022,10 +1024,25 @@ test("FL2 Windows Job release record is flushed before its rename and the rename
   context.host = { containedProcessPath: (id: string, suffix: string) => `root/${id}${suffix}` };
   vm.runInContext("host.flushRecord = flushRecord", context);
   context.calls = calls;
-  vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, { afterRename: () => calls.push('persisted') })", context);
+  await vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, { afterRename: () => calls.push('persisted') })", context);
   assert.deepEqual(calls, [
     "open root/p.json.u.tmp wx", "write root/p.json.u.tmp", "fsync root/p.json.u.tmp", "close root/p.json.u.tmp",
     "rename root/p.json.u.tmp root/p.json", "persisted", "open root/p.json r+", "fsync root/p.json", "close root/p.json",
+  ]);
+  // A rename that never lands (the record held open past the ceiling): the release is not persisted, nothing is
+  // flushed, and the temporary record is removed.
+  calls.length = 0;
+  context.replaceFileWhenFree = async (from: string, to: string) => {
+    calls.push(`rename refused ${from} ${to}`);
+    throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+  };
+  await assert.rejects(
+    vm.runInContext("persist.call(host, { processId: 'p', backendOwnershipReleasedAt: 'now' }, { afterRename: () => calls.push('persisted') })", context) as Promise<void>,
+    /EPERM/,
+  );
+  assert.deepEqual(calls, [
+    "open root/p.json.u.tmp wx", "write root/p.json.u.tmp", "fsync root/p.json.u.tmp", "close root/p.json.u.tmp",
+    "rename refused root/p.json.u.tmp root/p.json", "rm root/p.json.u.tmp",
   ]);
 });
 
