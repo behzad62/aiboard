@@ -369,17 +369,24 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   }
 }
 
+/**
+ * The batch rule both Windows backends apply to the executable they launch: a `.cmd` or `.bat` path is refused
+ * unless this host's batch-argv fact is `verified`. Pure; it reads only the path's extension. CW5a: the managed
+ * runtime applies it to the path it resolved before any streaming launch state exists (execution-host-managed-transport.ts).
+ */
+export function assertWindowsBatchLaunchAvailable(executable: string, fact: ProcessHostSemanticFact): void {
+  const extension = extname(executable).toLowerCase();
+  if ((extension === ".cmd" || extension === ".bat") && fact !== "verified")
+    throw new WindowsBatchLaunchUnavailableError();
+}
+
 function assertWindowsBatchSemantics(request: ProcessLaunchRequest, fact: ProcessHostSemanticFact): ProcessLaunchRequest {
   request = canonicalizeWindowsResolutionEnvironment(request);
-  const lexicalExtension = extname(request.intent.executable).toLowerCase();
-  if ((lexicalExtension === ".cmd" || lexicalExtension === ".bat") && fact !== "verified")
-    throw new WindowsBatchLaunchUnavailableError();
-  if (lexicalExtension) return request;
+  assertWindowsBatchLaunchAvailable(request.intent.executable, fact);
+  if (extname(request.intent.executable)) return request;
   const resolved = resolveWindowsExecutable(request);
   if (!resolved) return request;
-  const resolvedExtension = extname(resolved).toLowerCase();
-  if ((resolvedExtension === ".cmd" || resolvedExtension === ".bat") && fact !== "verified")
-    throw new WindowsBatchLaunchUnavailableError();
+  assertWindowsBatchLaunchAvailable(resolved, fact);
   return { ...request, intent: { ...request.intent, executable: resolved } };
 }
 

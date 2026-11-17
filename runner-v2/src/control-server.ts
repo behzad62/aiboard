@@ -1434,7 +1434,7 @@ export class ControlServer {
   /**
    * Pushed configs without secrets (§9, HM3). A config that takes its key from the home is resolved
    * from it: the home's transport, base URL and protocol, stored with `secretSource: "home"` and no
-   * key (HOME_SECRET_PLACEHOLDER). Account-peer configs and configs that carry their own secret pass through as pushed. On
+   * key (HOME_SECRET_PLACEHOLDER). Account-peer configs, CLI workers and configs that carry their own secret pass through as pushed. On
    * the first push that names the home, the secrets already stored for home-backed providers are
    * deleted: each such config is re-resolved from the home, or dropped when the home cannot serve it.
    */
@@ -1448,7 +1448,7 @@ export class ControlServer {
     const resolved = incoming.map((config) => (takesKeyFromHome(config) ? resolvePushedConfig(home, config) : config));
     const pushedIds = new Set(incoming.map((config) => config.runtimeId));
     const kept = previous.flatMap((config) => {
-      if (pushedIds.has(config.runtimeId) || config.transport === "account-runner" || config.secretSource === "home") return [config];
+      if (pushedIds.has(config.runtimeId) || config.transport === "account-runner" || config.transport === "cli" || config.secretSource === "home") return [config];
       try {
         return [resolvePushedConfig(home, { ...config, secret: "", baseUrl: undefined, runnerToken: undefined })];
       } catch (error) {
@@ -2069,6 +2069,8 @@ function redactProviderConfig(config: RunnerProviderConfig) {
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.protocol ? { protocol: config.protocol } : {}),
     ...(config.secretSource ? { secretSource: config.secretSource } : {}),
+    // Not a secret: a CLI worker's effort, held to the CLI argument charset.
+    ...(config.cli ? { cli: { ...config.cli } } : {}),
     configured: true,
   };
 }
@@ -2182,6 +2184,9 @@ async function homeView(location: AiboardHomeLocation): Promise<Record<string, u
       : null,
     ...(keysError ? { keysError } : {}),
     catalogVersion,
+    // What this Runner's home can hold beyond the HM sections: `cliWorkers` (CLI workers plan §3.3, CW1).
+    // A page writes `cliWorkers.<providerId>` only when this is true; an older Runner refuses the path.
+    capabilities: { cliWorkers: true },
   };
 }
 

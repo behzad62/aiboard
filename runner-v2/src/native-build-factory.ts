@@ -4288,6 +4288,10 @@ function createTransportModel(
   config: RunnerProviderConfig,
   artifacts?: ArtifactStore
 ): AgentModel {
+  if (config.transport === "cli") {
+    // A CLI worker runs its own CLI and has no model; it never reaches a provider adapter (CLI workers plan §3.13).
+    throw new Error(`CLI runtime ${config.runtimeId} is a CLI worker and has no model.`);
+  }
   if (config.transport === "account-runner") {
     if (!config.baseUrl) {
       throw new Error(`Account runtime ${config.runtimeId} requires a baseUrl.`);

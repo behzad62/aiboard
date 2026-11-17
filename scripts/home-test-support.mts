@@ -46,7 +46,7 @@ export interface HomeRunner {
 }
 
 /** A stub Runner whose `/v2/home` is the real home store; GET as control-server.ts homeView, POST as its batch route. */
-export function installHomeRunner(options: { capabilities?: Record<string, boolean>; upstream?: StubRunnerOptions["upstream"]; proxyTokens?: string[]; location?: AiboardHomeLocation } = {}): HomeRunner {
+export function installHomeRunner(options: { capabilities?: Record<string, boolean>; upstream?: StubRunnerOptions["upstream"]; proxyTokens?: string[]; location?: AiboardHomeLocation; /** false: a Runner from before CW1, whose home view has no `capabilities.cliWorkers`. */ cliWorkers?: boolean } = {}): HomeRunner {
   const runner: HomeRunner = {
     location: options.location ?? makeHome(),
     posts: [],
@@ -80,6 +80,7 @@ export function installHomeRunner(options: { capabilities?: Record<string, boole
             customModels: keys(snapshot.credentials.customModels),
             ...(snapshot.credentials.remoteMcpAuthorizationToken ? { remoteMcpAuthorizationToken: { hasKey: true, keyHint: snapshot.credentials.remoteMcpAuthorizationToken.keyHint } } : {}),
           } : null,
+          ...(options.cliWorkers === false ? {} : { capabilities: { cliWorkers: true } }),
         });
       }
       if (method === "POST") {

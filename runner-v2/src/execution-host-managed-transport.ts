@@ -14,6 +14,8 @@ import { resolveLanguageServerExecutable } from "./language-server-executable.js
 import type { ArtifactStore } from "./artifact-store.js";
 import { ManagedProcessError, type ManagedOutputEvidence, type ManagedProcessSnapshot } from "./managed-process-contracts.js";
 import type { ManagedProcessIdentity, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
+import type { ProcessHostSemanticFact } from "./process-host-semantic-probes.js";
+import { assertWindowsBatchLaunchAvailable } from "./windows-process-backend.js";
 import type { OperationAuthorizationAssertion, SessionInteractionAuthorization, SessionOperationAuthorization } from "./session-authority.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
@@ -41,6 +43,11 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   artifacts?: ArtifactStore;
   /** VF7b: the run's per-owner values, so the launch resolves the command on the same PATH it runs with. */
   processEnvironment?: RunnerProcessEnvironmentResolver;
+  /**
+   * CW5a: the Windows batch-argv fact the run's process backends launch under; absent off Windows. A resolved
+   * `.cmd` or `.bat` is refused against it before any streaming launch state exists.
+   */
+  windowsBatchArgv?: ProcessHostSemanticFact;
 }>): ManagedProcessRunRuntime {
   const { run } = options; const entries = new Map<string, Entry>();
   const environments = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("Managed credential grants are not configured."); } },
@@ -83,6 +90,21 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     if (final && final.state !== "released" || !final && launch && launch.state !== "released")
       throw new ManagedProcessError("process_cleanup_unverified", "Exact managed release conjunction is not verified.");
   };
+  /**
+   * CW5a: a record the service saved `stopped` with pid 0 that never had a streaming session. Only the service's
+   * stopExact saves that, after this runtime's stop proved release (cleanup() found no session, or none left), so
+   * its start failed before any session existed: a refused or unresolvable launch. A host launch for it, if one was
+   * written, must be released. A record with any session, live, unknown or released, never matches.
+   */
+  const neverStarted = (target: ManagedProcessTarget): boolean => {
+    if (target.status !== "stopped" || target.pid !== 0 || recordOf(target)) return false;
+    const launch = run.streamingState.readHostLaunch(launchId(target.processId));
+    return !launch || launch.state === "released";
+  };
+  /** Bounded terminal metadata from the record; not a PID-based observation or release proof. */
+  const recordedStop = (target: ManagedProcessTarget, maximum: number): ManagedProcessSnapshot => Object.freeze({
+    processId: target.processId, pid: 0, status: "stopped" as const, exitCode: target.exitCode, signal: target.signal,
+    startedAt: target.startedAt, updatedAt: target.updatedAt, stdout: tail(target.stdout, maximum), stderr: tail(target.stderr, maximum) });
   // Keyed by the exact frozen call context the service threads through one interaction.
   const interactions = new WeakMap<object, InteractionAuthority>();
   // Keyed the same way: the launching call's one observation, reused by that call's later reads.
@@ -151,7 +173,16 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
             : undefined;
           const launchExecutable = executable?.path ?? imageExecutable!;
           const launchIdentity = executable ?? Object.freeze({ imageExecutable });
+          const requiredLifecycleScope = resolveRequiredLifecycleScope({
+            permissionProfile: options.permissionProfile,
+            lifecycleRequirements: freezeExecutionLifecycleRequirements(request.lifecycleRequirements),
+          });
           if (signal.aborted) throw cancelled();
+          // CW5a: the backends refuse a .cmd or .bat on this fact too, but only after the streaming runtime has durably
+          // begun the launch, whose cleanup then cannot be proven. Only a full process_group launch selects the
+          // unconfined provider, whose prepareExecution hands the backend this exact path; refuse that path first.
+          if (executable && requiredLifecycleScope === "process_group" && options.windowsBatchArgv !== undefined)
+            assertWindowsBatchLaunchAvailable(executable.path, options.windowsBatchArgv);
           const id = request.identity.processId;
           return await run.openStreaming({ sessionId: sessionId(id), launchId: launchId(id),
             grant: request.context.executionGrant!, binding: bindingFor(request.context, options.permissionProfile), signal,
@@ -161,10 +192,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
             ...(imageExecutable ? { imageExecutable } : {}),
             intent: { invocationId: launchId(id), runId: run.runId, sessionId: request.identity.sessionId, kind: "command",
               executable: launchExecutable, arguments: request.args, workingDirectory: cwd,
-              requiredLifecycleScope: resolveRequiredLifecycleScope({
-                permissionProfile: options.permissionProfile,
-                lifecycleRequirements: freezeExecutionLifecycleRequirements(request.lifecycleRequirements),
-              }), requestedCapabilities: [] },
+              requiredLifecycleScope, requestedCapabilities: [] },
             // Arbitrary commands have no application handshake. The shared host
             // has already authenticated launch and channel ownership at this seam.
             verifyHandshake: async () => createHash("sha256").update(JSON.stringify({ id, executable: launchIdentity, args: request.args, cwd })).digest("hex"),
@@ -192,16 +220,15 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       if (!context && (!durable || durable.state !== "active" && durable.state !== "released")) {
         return Object.freeze({ ...target, stdout: tail(target.stdout, maximum), stderr: tail(target.stderr, maximum) });
       }
-      if (!durable && target.status === "stopped" && target.pid === 0) {
-        // A rejected static discovery never acquired a session. This is bounded
-        // terminal metadata, not a PID-based native observation or release proof.
+      if (neverStarted(target)) {
+        // A rejected static discovery or a launch refused before its session never acquired a session. This is
+        // bounded terminal metadata, not a PID-based native observation or release proof.
         if (context) {
           assertCall(context, target, run.runId, ["process.poll", "process.list"]);
           const claims = run.executionGrants.consume(context.executionGrant!, bindingFor(context, options.permissionProfile));
           assertCurrentConsumedExecutionGrantClaims(claims);
         }
-        return Object.freeze({ processId: target.processId, pid: 0, status: "stopped" as const, exitCode: target.exitCode, signal: target.signal,
-          startedAt: target.startedAt, updatedAt: target.updatedAt, stdout: tail(target.stdout, maximum), stderr: tail(target.stderr, maximum) });
+        return recordedStop(target, maximum);
       }
       if (!context) { recordOf(target); return await snapshot(target, undefined, undefined, maximum); }
       const assertion = expected(target, context, "observe");
@@ -218,12 +245,21 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
     async observeMany(targets, context, maximum) {
       if (targets.length < 1 || targets.length > 128) throw refused("Managed observation batch exceeds its bound.");
       const assertions = targets.map(target => { recordOf(target); return expected(target, context, "observe"); });
-      for (const target of targets) entries.get(target.processId)?.facade?.retainOwnership();
-      const authorizations = run.sessionAuthority.authorizeObservationBatch({ ...noExtraAccess,
-        sessionIds: assertions.map(item => item.sessionId), binding: bindingFor(context, options.permissionProfile), grant: context.executionGrant! });
-      const results = await Promise.all(targets.map((target, index) => snapshot(target, authorizations[index], assertions[index], maximum)));
+      // CW5a: a never-started record has no session to authorize; it is answered from the record, the rest as one batch.
+      const live = targets.flatMap((target, index) => neverStarted(target) ? [] : [index]);
+      for (const index of live) entries.get(targets[index]!.processId)?.facade?.retainOwnership();
+      const binding = bindingFor(context, options.permissionProfile);
+      let authorizations: readonly SessionOperationAuthorization[] = [];
+      if (live.length) {
+        authorizations = run.sessionAuthority.authorizeObservationBatch({ ...noExtraAccess,
+          sessionIds: live.map(index => assertions[index]!.sessionId), binding, grant: context.executionGrant! });
+      } else assertCurrentConsumedExecutionGrantClaims(run.executionGrants.consume(context.executionGrant!, binding));
+      const results = await Promise.all(targets.map((target, index) => {
+        const position = live.indexOf(index);
+        return position < 0 ? recordedStop(target, maximum) : snapshot(target, authorizations[position], assertions[index], maximum);
+      }));
       if (context.signal?.aborted) throw cancelled();
-      authorizations.forEach((authorization, index) => run.sessionAuthority.assertOperationAuthorization(authorization, assertions[index]!));
+      live.forEach((index, position) => run.sessionAuthority.assertOperationAuthorization(authorizations[position]!, assertions[index]!));
       return Object.freeze(results);
     },
     async stop(target, context, signal = "SIGTERM", timeoutMs = AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS) {
@@ -246,6 +282,11 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           const claims = run.executionGrants.consume(context.executionGrant!, bindingFor(context, options.permissionProfile));
           assertCurrentConsumedExecutionGrantClaims(claims);
           await cleanup(target, timeoutMs);
+        } else if (neverStarted(target)) {
+          // CW5a: nothing of this launch exists; the call's grant is used once and cleanup() re-proves there is no session.
+          assertCurrentConsumedExecutionGrantClaims(run.executionGrants.consume(context.executionGrant!, bindingFor(context, options.permissionProfile)));
+          await cleanup(target, timeoutMs);
+          return recordedStop(target, 65536);
         } else throw new ManagedProcessError("process_cleanup_unverified", "Managed stop requires active exact authority or verified terminal history.");
       } else await cleanup(target, timeoutMs);
       if (!recordOf(target)) return Object.freeze({ ...target, status: "stopped" as const, updatedAt: new Date().toISOString() });

@@ -1,10 +1,13 @@
 import type { AgentHostedToolDefinition } from "./agent-contracts.js";
+import { CLI_DEFAULT_MODEL_ID, isCliArgumentValue, isCliWorkerProviderId } from "./cli-worker-config.js";
 
 export type ProviderTransport =
   | "account-runner"
   | "openai-compatible"
   | "anthropic"
-  | "google";
+  | "google"
+  /** A CLI worker (Codex CLI, Claude Code, agy): the CLI signs in with its own login, never a key (§3.1). */
+  | "cli";
 
 export type ProviderBillingBasis =
   | "account_not_metered"
@@ -47,6 +50,8 @@ export interface RunnerProviderConfig {
   contextWindowTokens?: number;
   /** Optional per-response generation limit for OpenAI-compatible endpoints. */
   maxOutputTokens?: number;
+  /** Only for `transport: "cli"`: the effort passed to the CLI, held to the CLI argument charset. */
+  cli?: { reasoningEffort?: string };
 }
 
 export interface ProviderConfigStore {
@@ -108,11 +113,13 @@ export function validateProviderConfigs(
 ): void {
   const ids = new Set<string>();
   for (const config of configs) {
+    if (config.transport === "cli") validateCliProviderConfig(config);
+    else if (config.cli !== undefined) throw new Error(`Provider runtime ${config.runtimeId} has a CLI block but is not a CLI worker.`);
     if (
       !config.runtimeId ||
       !config.providerId ||
       !config.modelId ||
-      (config.secretSource === undefined ? !config.secret : config.secret !== HOME_SECRET_PLACEHOLDER)
+      (config.transport !== "cli" && (config.secretSource === undefined ? !config.secret : config.secret !== HOME_SECRET_PLACEHOLDER))
     ) {
       throw new Error("Provider runtime identity and secret are required.");
     }
@@ -188,6 +195,36 @@ export function validateProviderConfigs(
   }
 }
 
+/**
+ * A `cli` config (§3.1). The CLI uses the user's own login, so the config holds no way to reach a
+ * provider: its `secret` is empty and it has no base URL, Runner token or secret source. It is
+ * unmetered, has no AIBoard tools and no image input (the prompt is text), and its model id and effort
+ * become CLI arguments, so both are held to the CLI argument charset.
+ */
+function validateCliProviderConfig(config: RunnerProviderConfig): void {
+  const id = typeof config.runtimeId === "string" ? config.runtimeId : "(no id)";
+  const refuse = (what: string): never => { throw new Error(`CLI runtime ${id} ${what}.`); };
+  if (config.secret !== "") refuse(typeof config.secret === "string" ? "must not carry a secret: the CLI signs in with its own login" : "needs an empty secret");
+  if (config.baseUrl !== undefined) refuse("must not have a base URL");
+  if (config.runnerToken !== undefined) refuse("must not have a Runner token");
+  if (config.secretSource !== undefined) refuse("must not name a secret source");
+  if (!isCliWorkerProviderId(config.providerId)) refuse("names a provider that is not a CLI worker");
+  if (config.modelId !== CLI_DEFAULT_MODEL_ID && !isCliArgumentValue(config.modelId)) refuse("has a model id outside the CLI argument charset");
+  if (config.runtimeId !== `${config.providerId}:${config.modelId}`) refuse(`must be named ${String(config.providerId)}:<model or "${CLI_DEFAULT_MODEL_ID}">`);
+  if (config.reasoningEffort !== undefined) refuse("takes its effort in cli.reasoningEffort");
+  if (config.cli !== undefined) {
+    if (typeof config.cli !== "object" || config.cli === null || Array.isArray(config.cli) ||
+        Object.keys(config.cli).some((key) => key !== "reasoningEffort")) refuse("has an invalid CLI block");
+    if (config.cli.reasoningEffort !== undefined && !isCliArgumentValue(config.cli.reasoningEffort)) refuse("has an effort outside the CLI argument charset");
+  }
+  if (config.billingBasis !== undefined && config.billingBasis !== "account_not_metered") refuse("is not metered: its billing basis is account_not_metered");
+  if (PRICING_FIELDS.some((field) => config[field] !== undefined)) refuse("is not metered and takes no pricing");
+  if (config.supportsTools === true) refuse("runs no AIBoard tools");
+  if (config.hostedTools !== undefined) refuse("has no hosted tools");
+  if (config.protocol !== undefined) refuse("has no protocol");
+  if (config.inputCapabilities !== undefined && Object.values(config.inputCapabilities).some((value) => value !== false)) refuse("takes text only");
+}
+
 export function resolvedProviderBillingBasis(
   config: Pick<
     RunnerProviderConfig,
@@ -197,7 +234,7 @@ export function resolvedProviderBillingBasis(
     | "outputCostMicrosPerMillion"
   >
 ): ProviderBillingBasis {
-  if (config.billingBasis === "account_not_metered") return "account_not_metered";
+  if (config.billingBasis === "account_not_metered" || config.transport === "cli") return "account_not_metered";
   if (config.billingBasis === "unknown") return "unknown";
   if (config.billingBasis === "api_priced") {
     return hasUsableNormalPricing(config) ? "api_priced" : "unknown";
@@ -223,6 +260,7 @@ const TRANSPORTS = [
   "openai-compatible",
   "anthropic",
   "google",
+  "cli",
 ] as const;
 
 const OPENAI_PROTOCOLS = ["chat-completions", "responses"] as const;
@@ -254,5 +292,6 @@ export function cloneProviderConfigs(
     ...(config.hostedTools
       ? { hostedTools: config.hostedTools.map((tool) => ({ ...tool, ...(tool.parameters ? { parameters: { ...tool.parameters } } : {}) })) }
       : {}),
+    ...(config.cli ? { cli: { ...config.cli } } : {}),
   }));
 }
