@@ -18,19 +18,24 @@
     "<root>/w/codex-killed-r0-a8c5fa",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "You are working in a small Node.js repository. Add an exported function mul(a, b) that returns a * b to sum.js, and add one test for it to sum.test.js. Then run `node --test` once to check it. Do not commit. When done: Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary, question and replanReason null, the command you ran in checks (executable and args separately), notRun and concerns empty arrays.",
+  "stdinBytes": 440,
   "exitCode": null,
   "exitSignal": null,
   "managedStatus": "stopped",
   "signalled": "SIGTERM",
   "timedOutByHarness": false,
   "durationMs": 13497,
-  "stdoutBytes": 1570,
+  "stdoutBytes": 1555,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [
     {
-      "name": "codex-code-mode"
+      "name": "codex-code-mode",
+      "pid": 15510,
+      "inAnyJob": null,
+      "verdict": "real survivor: codex-code-mode in its own process group"
     }
   ],
   "notes": "Non-root; SIGTERM 12 s after launch: partial JSONL, empty -o file; the managed record shows exit code and signal null. codex-code-mode (own process group) was alive right after the group stop and a zombie later."

@@ -1,0 +1,20 @@
+{
+  "cli": "agy",
+  "cliVersion": "1.5.10",
+  "capturedAt": "2026-11-17",
+  "checks": [
+    {
+      "command": "agy models",
+      "exitCode": 0,
+      "stream": "stdout",
+      "file": "models.txt"
+    },
+    {
+      "command": "agy --output-format json -p=/quota",
+      "exitCode": 0,
+      "stream": "stdout",
+      "file": "quota.json",
+      "note": "No model turn: num_turns 0, all token counts 0, conversation_id \"\", command.name \"usage\". Figures replaced with synthetic values."
+    }
+  ]
+}

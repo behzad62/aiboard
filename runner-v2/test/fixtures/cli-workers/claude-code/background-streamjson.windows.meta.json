@@ -17,16 +17,18 @@
     "--session-id",
     "8aadb5b0-b06a-4394-9b2f-f42614de8239"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
   "exitCode": null,
   "exitSignal": null,
   "managedStatus": null,
   "signalled": null,
   "timedOutByHarness": true,
   "durationMs": 90953,
-  "stdoutBytes": 27677,
+  "stdoutBytes": 15295,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
-  "notes": "--output-format stream-json --verbose: the result event (with structured_output) arrives ~6 s in, at the end of the turn, while the process stays up for its run_in_background task until the harness stopped it at 90 s. rate_limit_event carries utilization and resetsAt (unix seconds)."
+  "notes": "--output-format stream-json --verbose: the result event (with structured_output) arrives at the end of the turn (duration_ms 8242), while the process stays up for its run_in_background task until the harness stopped it at 90 s. rate_limit_event values are synthetic (shape only). The server (node.exe under bash.exe) was in the tree and was killed by the stop."
 }

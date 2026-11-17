@@ -1,0 +1,27 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "capturedAt": "2026-11-17",
+  "checks": [
+    {
+      "command": "codex debug models",
+      "exitCode": 0,
+      "stream": "stdout",
+      "file": "debug-models.json"
+    },
+    {
+      "command": "codex login status",
+      "state": "logged in",
+      "exitCode": 0,
+      "stream": "stderr",
+      "file": "login-status.logged-in.txt"
+    },
+    {
+      "command": "codex login status",
+      "state": "logged out (Linux, fresh home)",
+      "exitCode": 1,
+      "stream": "stderr",
+      "file": "login-status.logged-out.txt"
+    }
+  ]
+}

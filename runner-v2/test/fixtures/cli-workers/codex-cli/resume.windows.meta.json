@@ -18,7 +18,8 @@
     "--dangerously-bypass-approvals-and-sandbox",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Do not change any file. Reply only with JSON that matches the given schema: outcome \"done\", and in summary name the function you added in the previous turn; question and replanReason null; checks, notRun and concerns empty arrays.",
+  "stdinBytes": 230,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -27,6 +28,7 @@
   "durationMs": 11046,
   "stdoutBytes": 505,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
   "notes": "`exec resume <thread_id> -`: thread.started repeats the same thread_id."

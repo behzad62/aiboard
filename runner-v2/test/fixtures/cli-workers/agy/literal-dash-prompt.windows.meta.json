@@ -16,7 +16,8 @@
     "0",
     "-p=-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "You are working in a small Node.js repository. Add an exported function mul(a, b) that returns a * b to sum.js, and add one test for it to sum.test.js. Then run `node --test` once to check it. Do not commit. When done: Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary, question and replanReason null, the command you ran in checks (executable and args separately), notRun and concerns empty arrays.",
+  "stdinBytes": 440,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -25,6 +26,7 @@
   "durationMs": 18982,
   "stdoutBytes": 1501,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
   "notes": "`-p=-` is a literal prompt \"-\" (stdin ignored) under --output-format json: shows the json result shape."

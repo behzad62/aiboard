@@ -18,7 +18,8 @@
     "<root>\\w\\codex-decision-r0-6e76d8",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "The owner wants a divide(a, b) function in sum.js, but has not said what it should do when b is 0. Do not change any file and do not guess. Reply only with JSON that matches the given schema: outcome \"needs_decision\", your question for the owner in question, a one-sentence summary, replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 347,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -27,6 +28,7 @@
   "durationMs": 12211,
   "stdoutBytes": 581,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
   "notes": "outcome needs_decision through --output-schema."

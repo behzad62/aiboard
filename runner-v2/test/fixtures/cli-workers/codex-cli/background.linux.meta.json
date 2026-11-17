@@ -18,7 +18,8 @@
     "<root>/w/codex-background-r0-6e8c96",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -27,7 +28,18 @@
   "durationMs": 11992,
   "stdoutBytes": 1314,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
-  "notes": "Non-root. The server ran under sh -lc in a new session (outside the managed group); the stop result is group-scoped."
+  "aliveButMissedBySampler": [
+    {
+      "name": "node (MainThread)",
+      "pid": 9809,
+      "pgid": 9808,
+      "sid": 9808,
+      "state": "zombie when checked",
+      "verdict": "real escape from the process group, missed by the sampler"
+    }
+  ],
+  "notes": "Non-root. Codex ran `/bin/sh -lc \"nohup node … &\"`. The shell exited between two 150 ms samples, so the sampler never saw it or the server, and aliveAfterStop is empty by construction. The server ran in its own session (sid 9808, outside the managed group), was reparented to PID 1, and is a zombie in the container now; when it died is not recorded."
 }

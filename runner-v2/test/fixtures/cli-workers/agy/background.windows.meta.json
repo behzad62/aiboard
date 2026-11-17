@@ -18,16 +18,18 @@
     "0",
     "-p="
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "{\"event\":\"user\",\"message\":{\"content\":\"Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \\\"require('http').createServer((q,s)=>s.end('ok')).listen(0)\\\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \\\"done\\\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.\"}}\n",
+  "stdinBytes": 451,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
   "signalled": null,
   "timedOutByHarness": false,
   "durationMs": 16459,
-  "stdoutBytes": 5226,
+  "stdoutBytes": 5180,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
-  "notes": "agy ran the server with run_command IsDaemon=true, then exited 0 with its result; the server stayed inside the Job and the stop killed it."
+  "notes": "agy ran the server with run_command (parameters: CommandLine only; agy's own reply text says IsDaemon=true), then exited 0 with its result. The server (node.exe under powershell.exe) was in the tree and was killed by the stop."
 }

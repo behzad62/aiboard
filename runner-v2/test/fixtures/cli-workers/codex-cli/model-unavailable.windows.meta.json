@@ -20,7 +20,8 @@
     "<root>\\w\\codex-bad-model-r0-f920f2",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Reply only with JSON that matches the given schema: outcome \"done\", summary \"ok\", question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 159,
   "exitCode": 1,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -29,16 +30,21 @@
   "durationMs": 7398,
   "stdoutBytes": 557,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [
     {
       "name": "python.exe",
-      "inAnyJob": false
+      "pid": 16416,
+      "inAnyJob": false,
+      "verdict": "real survivor: a hook process from a user-installed Codex plugin (python), outside any Job; it exited on its own later"
     },
     {
       "name": "conhost.exe",
-      "inAnyJob": false
+      "pid": 62968,
+      "inAnyJob": false,
+      "verdict": "real survivor: that hook's console host, outside any Job"
     }
   ],
-  "notes": "-m cw0-no-such-model with a ChatGPT login: error + turn.failed events, the -o file is empty, exit 1. A Codex hook process (the owner's plugin) outlived the stop, in no job (see the report)."
+  "notes": "-m cw0-no-such-model with a ChatGPT login: error + turn.failed events, the -o file exists with 0 bytes, exit 1. A hook process from a user-installed Codex plugin outlived the stop, in no Job (see the report)."
 }

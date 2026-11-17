@@ -18,7 +18,8 @@
     "--session-id",
     "c8a9abef-bd7b-4d20-bc6d-b437c8c36d08"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Reply only with JSON that matches the given schema: outcome \"done\", summary \"ok\", question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 159,
   "exitCode": 1,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -27,6 +28,7 @@
   "durationMs": 10842,
   "stdoutBytes": 1417,
   "stderrBytes": 84,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
   "notes": "--model cw0-no-such-model: is_error true, api_error_status 404, api_error_type not_found_error, exit 1; stderr [claude-code:unrecognized_model]."

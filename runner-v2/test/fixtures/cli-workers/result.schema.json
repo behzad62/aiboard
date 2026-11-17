@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome", "summary", "question", "replanReason", "checks", "notRun", "concerns"],
+  "properties": {
+    "outcome": { "type": "string", "enum": ["done", "needs_decision", "cannot_do"] },
+    "summary": { "type": "string" },
+    "question": { "type": ["string", "null"] },
+    "replanReason": { "type": ["string", "null"] },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "executable", "args"],
+        "properties": {
+          "label": { "type": "string" },
+          "executable": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "notRun": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": false, "required": ["what", "why"], "properties": { "what": { "type": "string" }, "why": { "type": "string" } } }
+    },
+    "concerns": { "type": "array", "items": { "type": "string" } }
+  }
+}

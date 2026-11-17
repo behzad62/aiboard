@@ -18,23 +18,33 @@
     "<root>\\w\\codex-background-r0-bd480f",
     "-"
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
   "exitCode": 0,
   "exitSignal": null,
   "managedStatus": "stopped",
   "signalled": null,
   "timedOutByHarness": false,
   "durationMs": 18182,
-  "stdoutBytes": 1590,
+  "stdoutBytes": 1562,
   "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [
     {
-      "name": "node.exe"
+      "name": "node.exe",
+      "pid": 66540,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "real survivor: Codex's Start-Process server, outside any Job (IsProcessInJob false, checked by hand 4 minutes after the stop); stopped by hand"
     },
     {
-      "name": "conhost.exe"
+      "name": "conhost.exe",
+      "pid": 59088,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "real survivor: the server's console host (child of the node.exe above)"
     }
   ],
-  "notes": "Started a server with pwsh Start-Process; after the proven Job stop that node.exe was alive and in no job (see the report)."
+  "notes": "Codex ran the Store pwsh (WindowsApps alias) with Start-Process to start the server. After the stop the Runner reported as proven, the node.exe server was alive and in no Job; it was stopped by hand."
 }

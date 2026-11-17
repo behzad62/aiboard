@@ -1,0 +1,32 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "capturedAt": "2026-11-17",
+  "checks": [
+    {
+      "command": "claude auth status",
+      "state": "logged in (Windows)",
+      "exitCode": 0,
+      "stream": "stdout",
+      "file": "auth-status.logged-in.json",
+      "note": "email, orgId, orgName and loginExpiresAt replaced."
+    },
+    {
+      "command": "claude auth status",
+      "state": "logged out (Linux, root, fresh home)",
+      "exitCode": 1,
+      "stream": "stdout",
+      "file": "auth-status.logged-out.json"
+    },
+    {
+      "command": "claude -p --output-format stream-json --verbose --json-schema <schema-json> --effort low --dangerously-skip-permissions --session-id <uuid>",
+      "state": "logged out (Linux, non-root user, HOME set to a fresh empty folder; run with docker exec, not under the harness)",
+      "stdin": "Reply with JSON.",
+      "exitCode": 1,
+      "stream": "stdout",
+      "stderrBytes": 0,
+      "file": "logged-out-streamjson.linux.stdout.jsonl",
+      "note": "init, then an assistant event with error, then result: subtype \"success\" with is_error true and result \"Not logged in · Please run /login\". No request is sent."
+    }
+  ]
+}

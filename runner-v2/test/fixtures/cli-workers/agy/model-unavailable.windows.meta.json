@@ -20,7 +20,8 @@
     "0",
     "-p="
   ],
-  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "stdin": "{\"event\":\"user\",\"message\":{\"content\":\"Reply only with JSON that matches the given schema: outcome \\\"done\\\", summary \\\"ok\\\", question and replanReason null, and empty checks, notRun and concerns arrays.\"}}\n",
+  "stdinBytes": 205,
   "exitCode": 1,
   "exitSignal": null,
   "managedStatus": "stopped",
@@ -29,7 +30,8 @@
   "durationMs": 6796,
   "stdoutBytes": 389,
   "stderrBytes": 133,
+  "bytesCounted": "after scrubbing",
   "stopProven": true,
   "aliveAfterStop": [],
-  "notes": "--model cw0-no-such-model --effort low: refused locally before any model call, exit 1."
+  "notes": "--model cw0-no-such-model --effort low: agy refused the --effort flag for that model locally, before any model call; exit 1, conversation_id \"\", no init event."
 }

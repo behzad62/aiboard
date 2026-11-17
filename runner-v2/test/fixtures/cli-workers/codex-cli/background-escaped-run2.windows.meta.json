@@ -1,0 +1,45 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "windows",
+  "case": "background-escaped-run2",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>\\schemas\\result.schema.json",
+    "-o",
+    "<root>\\out-C2\\codex-background-r0-cd19ac/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>\\w\\codex-background-r0-cd19ac",
+    "-"
+  ],
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 18017,
+  "stdoutBytes": 1536,
+  "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "aliveButMissedBySampler": [
+    {
+      "name": "node.exe",
+      "pid": 54776,
+      "created": "2026-11-17T14:10:06Z",
+      "inAnyJob": false,
+      "parent": "gone",
+      "verdict": "real survivor: Codex's Start-Process server; found by command line, not by the sampler; left running for CW0b"
+    }
+  ],
+  "notes": "Same prompt, second run. The harness reported nothing alive after the stop, but the server escaped here too: its pwsh parent (pid 69624) was never seen in the tree, most likely because it exited between two 0.5 s samples, so the sampler never linked node.exe. Found by command line hours later, still running and in no Job."
+}
