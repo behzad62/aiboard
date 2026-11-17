@@ -1253,6 +1253,7 @@ export class NativeBuildFactory {
       schedulerStore.readRun(spec.runId)
     );
     const health = new ProviderHealthRegistry({ initial: initialHealth });
+    // CW4: no CLI worker driver yet (CW5 sets cliWorkerDriver), so CLI workers are never assigned a task.
     const workerRouter = new RuntimeRouter({
       candidates: workerCandidates,
       health,
@@ -2371,26 +2372,37 @@ export class NativeBuildFactory {
                   ...(this.options.cliWorkerFreeChecks ? { freeChecks: this.options.cliWorkerFreeChecks } : {}),
                   platform: host.platform,
                   ...(windowsBatchArgv ? { windowsBatchArgv } : {}),
-                  // The folders a launch names (§3.5): a task worktree (WorkspaceManager) and the CLI state folder.
+                  // The folders a launch names (§3.5): a task worktree under this run's real worktree root, and the
+                  // CLI state folder. The segments below them (task and session names) are Runner-made from
+                  // [a-z0-9-] and the run segment, so only these roots can hold a character a .cmd shim refuses.
                   launchFolders: {
-                    worktree: join(this.options.stateDirectory, "workspaces", runSegment, "task"),
+                    worktree: join(workspaceManager.root, "task"),
                     cliState: join(this.options.stateDirectory, "cli-workers", runSegment, "session"),
                   },
                 });
                 return checked;
               },
-              recorded: (checked: import("./cli-worker-crew.js").CliWorkersChecked, epoch: number) => {
-                for (const cli of checked.clis) {
-                  if (cli.status !== "unhealthy" || !cli.failureKind) continue;
-                  const state = health.recordFailure(cli.providerId, {
-                    kind: cli.failureKind,
-                    message: cli.reason ?? `${cli.providerId} failed a free check.`,
-                    ...(cli.retryAfterMs !== undefined ? { retryAfterMs: cli.retryAfterMs } : {}),
-                  });
+              applyHealth: (checked: import("./cli-worker-crew.js").CliWorkersChecked, epoch: number) => {
+                const source = `${CLI_WORKER_CHECK_HEALTH_SOURCE}:${epoch}`;
+                const persist = (state: ProviderHealthState) => {
                   try {
-                    persistProviderHealth(schedulerStore, spec.runId, state, `cli-workers-checked:${epoch}`);
+                    persistProviderHealth(schedulerStore, spec.runId, state, source);
                   } catch {
-                    // The in-memory cooldown holds for this runtime; the next epoch checks again.
+                    // The in-memory state holds for this runtime; the next epoch checks again.
+                  }
+                };
+                for (const cli of checked.clis) {
+                  if (cli.status === "unhealthy" && cli.failureKind) {
+                    persist(health.recordFailure(cli.providerId, {
+                      kind: cli.failureKind,
+                      message: cli.reason ?? `${cli.providerId} failed a free check.`,
+                      ...(cli.retryAfterMs !== undefined ? { retryAfterMs: cli.retryAfterMs } : {}),
+                    }));
+                  } else if (cli.status === "ready" && !health.isAvailable(cli.providerId) &&
+                      cooldownCausedByCliCheck(schedulerStore.readRun(spec.runId), cli.providerId)) {
+                    // A check found it logged out (or out of /quota); now it passes, so that cooldown ends. A cooldown a
+                    // real run caused (a usage limit in a task) stays: a free check proves nothing about it.
+                    persist(health.recordSuccess(cli.providerId));
                   }
                 }
               },
@@ -4224,6 +4236,20 @@ export function providerHealthFromSchedulerEvents(
   return Object.values(
     rebuildSchedulerProjection(events).runtime.providerHealth
   ).filter(isProviderHealthState);
+}
+
+/** CW4: the source of the health changes the CLI free checks record (`provider-health:cli-workers-checked:<epoch>:…`). */
+const CLI_WORKER_CHECK_HEALTH_SOURCE = "cli-workers-checked";
+
+/** Whether this provider's latest health change came from a CLI free check. */
+export function cooldownCausedByCliCheck(events: readonly SchedulerEvent[], providerId: string): boolean {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== "provider.health_changed") continue;
+    if ((event.payload.state as { providerId?: unknown } | undefined)?.providerId !== providerId) continue;
+    return event.idempotencyKey.startsWith(`provider-health:${CLI_WORKER_CHECK_HEALTH_SOURCE}:`);
+  }
+  return false;
 }
 
 function persistProviderHealth(

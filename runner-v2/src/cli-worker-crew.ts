@@ -42,12 +42,15 @@ export { CLI_RUNTIME_ROLE_REFUSED, CLI_WORKERS_REQUIRE_FULL_ACCESS };
 export const CLI_WORKER_PLATFORM_REFUSED = "cli_worker_platform_refused";
 /** Claude Code refused while the Runner runs as root (§3.12). */
 export const CLI_WORKER_ROOT_REFUSED = "cli_worker_root_refused";
+/** A `cli` config whose provider is not a CLI worker AIBoard knows (CW1's validator refuses one too). */
+export const CLI_WORKER_UNKNOWN = "cli_worker_unknown";
 
 export type CliCrewRuleCode =
   | typeof CLI_RUNTIME_ROLE_REFUSED
   | typeof CLI_WORKERS_REQUIRE_FULL_ACCESS
   | typeof CLI_WORKER_PLATFORM_REFUSED
-  | typeof CLI_WORKER_ROOT_REFUSED;
+  | typeof CLI_WORKER_ROOT_REFUSED
+  | typeof CLI_WORKER_UNKNOWN;
 
 /** A Build or crew refused by a CLI crew rule. The control server answers it with 409 and its code. */
 export class CliCrewRuleError extends Error {
@@ -93,7 +96,7 @@ export function assertCliCrewRules(
     const providerId = configs.find((config) => config.runtimeId === runtimeId)?.providerId;
     // CW1's validator refuses a `cli` config whose provider is not a CLI worker; a stray one is refused here too.
     if (!isCliWorkerProviderId(providerId)) {
-      throw new CliCrewRuleError(CLI_WORKER_PLATFORM_REFUSED, `${runtimeId} is not a known CLI worker.`, runtimeId);
+      throw new CliCrewRuleError(CLI_WORKER_UNKNOWN, `${runtimeId} is not a known CLI worker.`, runtimeId);
     }
     const platform = cliWorkerPlatformRefusal(providerId, host.platform);
     if (platform) throw new CliCrewRuleError(CLI_WORKER_PLATFORM_REFUSED, platform, runtimeId);

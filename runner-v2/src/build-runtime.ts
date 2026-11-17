@@ -497,13 +497,14 @@ export interface BuildRuntimeOptions {
   environmentInventory?: (input: { trigger: InventoryTrigger }) => Promise<EnvironmentInventory>;
   /**
    * CW4: the free checks of the crew's CLI workers, run with the inventory: once before the first planning
-   * step and once after each resume. The step records what `check` returns as one `cli_workers.checked`
-   * event, then hands it to `recorded`, which marks a CLI that failed unhealthy in the run's provider health
-   * before any task is assigned. Absent when the crew has no CLI worker.
+   * step and once after each resume. The step hands what `check` returns to `applyHealth` first, which records
+   * a CLI that failed as unhealthy (and ends a cooldown an earlier check caused once it passes) through durable
+   * `provider.health_changed` events, then records the checks as one `cli_workers.checked` event. A crash in
+   * between leaves no record for the epoch, so the next step checks again. Absent when the crew has no CLI worker.
    */
   cliWorkers?: {
     check(input: { trigger: InventoryTrigger }): Promise<CliWorkersChecked>;
-    recorded(checked: CliWorkersChecked, epoch: number): void;
+    applyHealth(checked: CliWorkersChecked, epoch: number): void;
   };
   /**
    * VF7b: a fresh run records `run.browsing_configured` before its first plan
@@ -4559,9 +4560,9 @@ export class BuildRuntime {
   }
 
   /**
-   * CW4: records one `cli_workers.checked` per epoch (the run's start, then each `run.resumed`), then lets the
-   * factory mark each CLI that failed unhealthy. Checks that throw, or a record that is refused, are not retried
-   * by this instance and never fail or pause the step: an unchecked CLI is launched as before and fails over.
+   * CW4: the CLI free checks once per epoch (the run's start, then each `run.resumed`): health first, then one
+   * `cli_workers.checked`. Checks that throw, or a record that is refused, are not retried by this instance and
+   * never fail or pause the step; the CLIs then keep the health they had, and CW5 refuses an unsafe launch itself.
    */
   private async recordCliWorkerChecksIfDue(events: readonly SchedulerEvent[]): Promise<boolean> {
     if (!this.cliWorkers || events.length === 0) return false;
@@ -4580,6 +4581,7 @@ export class BuildRuntime {
     let checked: CliWorkersChecked;
     try {
       checked = await this.cliWorkers.check({ trigger: lastResume > 0 ? "resume" : "planning" });
+      this.cliWorkers.applyHealth(checked, lastResume);
       this.store.append({
         runId: this.runId,
         type: "cli_workers.checked",
@@ -4591,7 +4593,6 @@ export class BuildRuntime {
     } catch {
       return false;
     }
-    this.cliWorkers.recorded(checked, lastResume);
     return true;
   }
 

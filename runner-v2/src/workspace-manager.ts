@@ -102,6 +102,11 @@ export class WorkspaceManager {
     this.beforeWorkspaceRootRemoval = options.beforeWorkspaceRootRemoval;
   }
 
+  /** The folder this run's task worktrees are created in; read only (CW4 checks its path before planning). */
+  get root(): string {
+    return this.workspaceRoot;
+  }
+
   async createTaskWorkspace(
     taskId: string,
     options: TaskWorkspaceOptions = {}

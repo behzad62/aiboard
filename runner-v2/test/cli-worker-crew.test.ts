@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import test from "node:test";
 
-import { CLI_CREW_PROVIDER_IDS, isCliRuntimeId, nativeBuildCliCrewRefusal } from "../src/cli-crew-policy.js";
+import { CLI_CREW_PROVIDER_IDS, CLI_MODEL_ALIASES, isCliRuntimeId, nativeBuildCliCrewRefusal } from "../src/cli-crew-policy.js";
+import { CLAUDE_CODE_MODEL_ALIASES } from "../src/cli-worker-adapters.js";
 import { CLI_WORKER_PROVIDER_IDS, type CliWorkerProviderId } from "../src/cli-worker-config.js";
+import { ControlServer } from "../src/control-server.js";
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
+import type { SchedulerEvent } from "../src/scheduler-store.js";
 import {
   assertCliCrewRules,
   checkCliWorkers,
@@ -17,7 +22,7 @@ import {
   type CliWorkerFreeCheck,
 } from "../src/cli-worker-crew.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
-import { selectRuntimeCandidates } from "../src/native-build-factory.js";
+import { cooldownCausedByCliCheck, NativeBuildFactory, selectRuntimeCandidates } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -78,6 +83,9 @@ test("CW4 a CLI is refused as Architect, reviewer or verifier, before any host f
     [{ architectRuntimeId: "claude-code:default" }, "Architect", "claude-code:default"],
     [{ reviewerRuntimeId: "agy:default" }, "the reviewer", "agy:default"],
     [{ workerRuntimeIds: ["agy:default"], verifierRuntimeIds: ["openai:sol", "agy:default"] }, "a verifier", "agy:default"],
+    // Codex is also refused on Windows, but the role rule comes first.
+    [{ verifierRuntimeIds: ["openai:sol", "codex-cli:default"] }, "a verifier", "codex-cli:default"],
+    [{ workerRuntimeIds: ["codex-cli:default"], reviewerRuntimeId: "codex-cli:default" }, "the reviewer", "codex-cli:default"],
   ];
   for (const [crew, role, runtimeId] of cases) {
     const refused = refusal(() => assertCliCrewRules(CONFIGS, spec(crew), WINDOWS));
@@ -263,7 +271,6 @@ test("CW4 the cli_workers.checked event replays, and a malformed or non-Runner r
     let store = new SqliteSchedulerStore(path);
     store.append({ runId, type: "run.initialized", occurredAt: "2026-11-18T00:00:00.000Z", actor: { role: "runner", id: "test" }, idempotencyKey: "init", payload: { objective: "o" } });
     const older = rebuildSchedulerProjection(store.readRun(runId));
-    assert.equal("cliWorkersChecked" in older, false, "a run without CLI workers has no CLI checks");
     const { checked } = await checkCliWorkers(checkInput({ results: [
       { providerId: "claude-code", status: "unhealthy", executable: { path: "C:\\bin\\claude.exe", form: "exe" }, failure: { kind: "authentication", message: "Claude Code is not logged in." } },
       { providerId: "agy", status: "ready", version: "1.5.6" },
@@ -298,4 +305,139 @@ test("CW4 the pure crew rule matches the Runner's, by runtime id", () => {
   assert.equal(nativeBuildCliCrewRefusal({ architectRuntimeId: "openai:sol", workerRuntimeIds: ["claude-code:default"], verifierRuntimeIds: ["openai:sol"], permissionProfile: "project" })?.code, "cli_workers_require_full_access");
   assert.equal(nativeBuildCliCrewRefusal({ architectRuntimeId: "agy:default", workerRuntimeIds: ["openai:sol"], verifierRuntimeIds: [], permissionProfile: "full" })?.role, "architect");
   assert.equal(nativeBuildCliCrewRefusal({ architectRuntimeId: "openai:sol", workerRuntimeIds: ["openai:sol"], verifierRuntimeIds: ["openai:sol"], permissionProfile: "guarded" }), null);
+});
+
+test("CW4 the Runner's alias list is CW2's", () => {
+  assert.deepEqual([...CLI_MODEL_ALIASES], CLAUDE_CODE_MODEL_ALIASES.map((alias) => alias.id));
+});
+
+test("CW4 a Build whose crew breaks a CLI rule is refused by prepareSpec before anything of it is written", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw4-prepare-"));
+  const state = join(root, "state");
+  mkdirSync(state);
+  const factory = new NativeBuildFactory({
+    projectRoot: root,
+    stateDirectory: state,
+    providerConfigs: { load: () => CONFIGS, save: () => undefined, close: () => undefined },
+    baselineFor: () => { throw new Error("prepareSpec reads no baseline"); },
+    cliWorkerHost: WINDOWS,
+  });
+  const listing = () => readdirSync(state, { recursive: true }).map(String).sort();
+  try {
+    const before = listing();
+    const cases: [Partial<NativeBuildSpec>, string][] = [
+      [{ architectRuntimeId: "claude-code:default" }, "cli_runtime_role_refused"],
+      [{ verifierRuntimeIds: ["openai:sol", "agy:default"] }, "cli_runtime_role_refused"],
+      [{ workerRuntimeIds: ["google:gemini", "agy:default"], permissionProfile: "project" }, "cli_workers_require_full_access"],
+      [{ workerRuntimeIds: ["google:gemini", "agy:default"], permissionProfile: "guarded" }, "cli_workers_require_full_access"],
+      // On Windows, Codex CLI workers wait for CW0b's fix.
+      [{ workerRuntimeIds: ["google:gemini", "codex-cli:default"] }, "cli_worker_platform_refused"],
+    ];
+    for (const [crew, code] of cases) {
+      await assert.rejects(
+        factory.prepareSpec(spec(crew)),
+        (error: unknown) => error instanceof CliCrewRuleError && error.code === code && error.status === 409,
+        code,
+      );
+    }
+    assert.deepEqual(listing(), before, "a refused Build writes nothing");
+  } finally {
+    await factory.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CW4 POST /v2/runs refuses a crew that breaks a CLI rule with 409 and its code, before the run is created", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw4-control-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(root, "events.sqlite")), { clock: () => "2026-11-18T00:00:00.000Z" });
+  const created: NativeBuildSpec[] = [];
+  let bootstrapped = 0;
+  const token = "cw4-control-token";
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => ({ available: true, version: "2.45.1", code: "git_ready", reason: null }),
+    bootstrapRun: async () => { bootstrapped += 1; return { baselineRevision: "a".repeat(40), baselineRef: "refs/aiboard/runs/cw4/baseline" }; },
+    providerConfigs: { load: () => CONFIGS.map((config) => ({ ...config })), save: () => undefined, close: () => undefined },
+    buildProvisioner: { create: async (next) => { created.push(next); return {} as never; }, listSpecs: () => created },
+  });
+  try {
+    const { url } = await server.start(0);
+    const post = async (permissionProfile: string, build: Record<string, unknown>) => await fetch(`${url}/v2/runs`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId: "run_cw4_control",
+        projectPath: join(root, "project"),
+        permissionProfile,
+        idempotencyKey: "create:run_cw4_control",
+        build: {
+          projectId: "cw4", objective: "Build it.", architectRuntimeId: "openai:sol", workerRuntimeIds: ["google:gemini", "claude-code:default"],
+          verifierRuntimeIds: ["openai:sol", "google:gemini"], alwaysRequireIndependentVerifier: false, maxConcurrency: 2,
+          runPolicy: "finish", budgetLimits: {}, ...build,
+        },
+      }),
+    });
+    const cases: [string, Record<string, unknown>, string][] = [
+      ["project", {}, "cli_workers_require_full_access"],
+      ["guarded", {}, "cli_workers_require_full_access"],
+      ["full", { reviewerRuntimeId: "agy:default", verifierRuntimeIds: ["openai:sol", "agy:default"] }, "cli_runtime_role_refused"],
+    ];
+    for (const [permissionProfile, build, code] of cases) {
+      const response = await post(permissionProfile, build);
+      assert.equal(response.status, 409, code);
+      const body = (await response.json()) as { code?: string; error?: string };
+      assert.equal(body.code, code);
+      assert.match(body.error ?? "", /CLI worker/);
+    }
+    assert.deepEqual(supervisor.listRuns(), [], "no run is created, so a retry with a fixed crew starts clean");
+    assert.equal(bootstrapped, 0, "no baseline is captured");
+    assert.deepEqual(created, []);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CW4 the checks are recorded while the owner's guidance is pending and while an Architect question is open", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw4-waiting-"));
+  const { checked } = await checkCliWorkers(checkInput({ results: [{ providerId: "claude-code", status: "ready" }, { providerId: "agy", status: "ready" }] }));
+  try {
+    for (const waiting of ["guidance", "question"] as const) {
+      const store = new SqliteSchedulerStore(join(root, `${waiting}.sqlite`));
+      const runId = `run_cw4_${waiting}`;
+      try {
+        store.append({ runId, type: "run.initialized", occurredAt: "2026-11-18T00:00:00.000Z", actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "init", payload: { objective: "o" } });
+        if (waiting === "guidance") {
+          store.append({ runId, type: "user.guidance_submitted", occurredAt: "2026-11-18T00:00:01.000Z", actor: { role: "user", id: "local-user" }, idempotencyKey: "guidance", payload: { guidanceId: "guidance-1", text: "Use the API.", version: 1, interruptionProtocolVersion: 1 } });
+          assert.ok(Object.values(rebuildSchedulerProjection(store.readRun(runId)).userGuidance).some((guidance) => guidance.status === "submitted"));
+        } else {
+          store.append({
+            runId, type: "architect.question_requested", occurredAt: "2026-11-18T00:00:01.000Z", actor: { role: "architect", id: "architect_1" }, idempotencyKey: "question",
+            payload: { questionId: "question-1", version: 1, decisionKind: "external_dependency", question: "Which API?", checkpoint: { reason: { type: "plan_required" }, sequence: 1 } },
+          });
+          assert.equal(rebuildSchedulerProjection(store.readRun(runId)).blockingArchitectQuestionId, "question-1");
+        }
+        store.append({ runId, type: "cli_workers.checked", occurredAt: "2026-11-18T00:00:02.000Z", actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "cli-workers-checked:0", payload: { ...checked } });
+        assert.equal(rebuildSchedulerProjection(store.readRun(runId)).cliWorkersChecked?.sequence, 3, waiting);
+      } finally {
+        store.close();
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CW4 a passing check ends only a cooldown that a check caused", () => {
+  const health = (sequence: number, providerId: string, source: string, status = "cooldown"): SchedulerEvent => ({
+    eventId: `event_${sequence}`, runId: "run", sequence, type: "provider.health_changed", occurredAt: "2026-11-18T00:00:00.000Z",
+    actor: { role: "runner", id: "runtime-router" }, idempotencyKey: `provider-health:${source}:${providerId}:${sequence}:1:${status}`,
+    payload: { state: { providerId, status } },
+  });
+  const events = [health(1, "agy", "cli-workers-checked:0"), health(2, "claude-code", "cli-workers-checked:0"), health(3, "claude-code", "worker:claude-code:default")];
+  assert.equal(cooldownCausedByCliCheck(events, "agy"), true);
+  assert.equal(cooldownCausedByCliCheck(events, "claude-code"), false, "a later real failure (a usage limit in a task) keeps its cooldown");
+  assert.equal(cooldownCausedByCliCheck(events, "codex-cli"), false);
 });

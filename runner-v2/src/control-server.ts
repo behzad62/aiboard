@@ -57,7 +57,7 @@ import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./proces
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
-import { CliCrewRuleError } from "./cli-worker-crew.js";
+import { assertCliCrewRules, CliCrewRuleError } from "./cli-worker-crew.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { applyHomeBatch, keyHint, readAiboardHome, type AiboardHomeSnapshot, type HomeOp } from "./aiboard-home-store.js";
@@ -664,6 +664,17 @@ export class ControlServer {
         const git = await this.gitPreflight();
         if (!git.available) {
           throw new HttpError(412, git.code, git.reason);
+        }
+        // CW4: a crew that breaks a CLI rule is refused before the run is created, so a retry with a fixed crew or
+        // access level does not land on a run recorded with the refused one (the factory checks again).
+        if (body.build && this.providerConfigs) {
+          assertCliCrewRules(this.providerConfigs.load(), {
+            architectRuntimeId: body.build.architectRuntimeId,
+            ...(body.build.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: body.build.reviewerRuntimeId } : {}),
+            workerRuntimeIds: body.build.workerRuntimeIds,
+            verifierRuntimeIds: body.build.verifierRuntimeIds,
+            permissionProfile: body.permissionProfile,
+          });
         }
         let projection = this.supervisor.createRun(body);
         if (!projection.baselineRevision) {

@@ -46,7 +46,6 @@ import { ModelConnectionError } from "./model-proxy-client";
 import { loadAttachmentPayloads } from "./attachments";
 import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import { followUpObjective } from "./build-notes";
-import { isCliRuntimeId } from "@/runner-v2/src/cli-crew-policy";
 import { initialBuildVisualInputs } from "./build-user-attachments";
 import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from "./build-crew";
 import {
@@ -487,7 +486,7 @@ function emitArchitectHandoffPause(
  * Runtime order is provider priority (index), and Runner V2 picks the plan critic and independent
  * verifier as the highest-priority model that is neither the Architect nor an accepted-change author.
  * An explicit reviewer is therefore configured right after the Architect and is never a worker, so it
- * stays independent of every change it reviews. A CLI worker is never a verifier (CLI workers plan §3.13).
+ * stays independent of every change it reviews.
  */
 export function selectNativeBuildRuntimes(
   modelIds: readonly string[],
@@ -516,7 +515,7 @@ export function selectNativeBuildRuntimes(
   return {
     configuredRuntimeIds,
     workerRuntimeIds: workers,
-    verifierRuntimeIds: configuredRuntimeIds.filter((runtimeId) => !isCliRuntimeId(runtimeId)),
+    verifierRuntimeIds: [...configuredRuntimeIds],
   };
 }
 

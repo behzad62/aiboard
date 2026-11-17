@@ -78,3 +78,16 @@ export function nativeBuildCliCrewRefusal(
   }
   return null;
 }
+
+/** cli-worker-adapters.ts `CLAUDE_CODE_MODEL_ALIASES`; a test pins the two lists together. */
+export const CLI_MODEL_ALIASES: readonly string[] = Object.freeze(["opus", "sonnet", "haiku"]);
+
+/**
+ * Whether a CLI runtime's model id names no model AIBoard can compare: the CLI's own default (`default`) or a
+ * Claude Code alias. A change such a worker wrote has an unknown author model, so a verifier of it is never
+ * recorded as a distinct model (CW5 records the model the CLI reports).
+ */
+export function isUnresolvedCliModelIdentity(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  return id === "default" || CLI_MODEL_ALIASES.includes(id);
+}
