@@ -1,0 +1,1 @@
+[claude-code:unrecognized_model] {"model":"cw0-no-such-model","query_source":"sdk"}

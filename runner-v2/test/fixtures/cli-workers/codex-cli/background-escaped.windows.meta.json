@@ -1,0 +1,50 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "windows",
+  "case": "background-escaped",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>\\schemas\\result.schema.json",
+    "-o",
+    "<root>\\out-C\\codex-background-r0-bd480f/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>\\w\\codex-background-r0-bd480f",
+    "-"
+  ],
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 18182,
+  "stdoutBytes": 1562,
+  "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "node.exe",
+      "pid": 66540,
+      "inAnyJob": false,
+      "inAnyJobNote": "checked by hand (IsProcessInJob)",
+      "verdict": "real survivor: Codex's Start-Process server, outside any Job (IsProcessInJob false, checked by hand 4 minutes after the stop); stopped by hand"
+    },
+    {
+      "name": "conhost.exe",
+      "pid": 59088,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "real survivor: the server's console host (child of the node.exe above)"
+    }
+  ],
+  "notes": "Codex ran the Store pwsh (WindowsApps alias) with Start-Process to start the server. After the stop the Runner reported as proven, the node.exe server was alive and in no Job; it was stopped by hand."
+}

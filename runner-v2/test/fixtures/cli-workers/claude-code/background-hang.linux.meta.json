@@ -1,0 +1,40 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "linux",
+  "case": "background-hang",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "415d67a8-5d5a-488b-a181-5a701eff3ad3"
+  ],
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
+  "exitCode": null,
+  "exitSignal": null,
+  "managedStatus": null,
+  "signalled": null,
+  "timedOutByHarness": true,
+  "durationMs": 120149,
+  "stdoutBytes": 0,
+  "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "MainThread",
+      "pid": 9857,
+      "inAnyJob": null,
+      "verdict": "real survivor: the run_in_background server in its own session (bash -c)"
+    }
+  ],
+  "notes": "Non-root. As on Windows: run_in_background server, `claude -p` never exited and printed nothing; the harness stopped it at 120 s. The server (bash -c, new session) was alive right after the group stop and a zombie later."
+}

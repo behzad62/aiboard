@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1e9c8-f5ad-7260-86a6-02b931857687"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"outcome\":\"needs_decision\",\"summary\":\"The behavior of divide(a, b) when b is 0 needs the owner's decision.\",\"question\":\"What should divide(a, b) do when b is 0?\",\"replanReason\":null,\"checks\":[],\"notRun\":[],\"concerns\":[]}"}}
+{"type":"turn.completed","usage":{"input_tokens":17816,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":72,"reasoning_output_tokens":0}}

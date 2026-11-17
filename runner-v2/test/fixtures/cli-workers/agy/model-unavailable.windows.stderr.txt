@@ -1,0 +1,1 @@
+error: invalid model selection (--model "cw0-no-such-model" --effort "low"): --effort is not supported for model "cw0-no-such-model"

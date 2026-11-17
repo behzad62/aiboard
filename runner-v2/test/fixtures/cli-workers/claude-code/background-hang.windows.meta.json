@@ -1,0 +1,133 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "windows",
+  "case": "background-hang",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "14d8474d-0d29-427e-90cb-259a5a67bd01"
+  ],
+  "stdin": "Start this command as a background process that keeps running after your reply, without waiting for it to finish: node -e \"require('http').createServer((q,s)=>s.end('ok')).listen(0)\" . Do not change any file. Then Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary of how you started it, question and replanReason null, and empty checks, notRun and concerns arrays.",
+  "stdinBytes": 405,
+  "exitCode": null,
+  "exitSignal": null,
+  "managedStatus": null,
+  "signalled": null,
+  "timedOutByHarness": true,
+  "durationMs": 600347,
+  "stdoutBytes": 0,
+  "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "node.exe",
+      "pid": 69740,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "conhost.exe",
+      "pid": 63328,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "node.exe",
+      "pid": 63956,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "node.exe",
+      "pid": 66940,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "bash.exe",
+      "pid": 72416,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "helper.exe",
+      "pid": 73104,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "powershell.exe",
+      "pid": 72520,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "node.exe",
+      "pid": 70712,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "bash.exe",
+      "pid": 33132,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "conhost.exe",
+      "pid": 71700,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "powershell.exe",
+      "pid": 67812,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "node.exe",
+      "pid": 74932,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "conhost.exe",
+      "pid": 36108,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    },
+    {
+      "name": "cmd.exe",
+      "pid": 62428,
+      "inAnyJob": null,
+      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "verdict": "unclassified: this record cannot tell a real survivor from pid-reuse noise; it is not the run_in_background server (see survivorAnalysis)"
+    }
+  ],
+  "survivorAnalysis": "This run predates two harness fixes: the creation-time rule against Windows pid reuse and the IsProcessInJob check. Its 600 s tree (149 entries) holds processes Claude Code cannot have started (docker.exe, gh.exe, git-remote-https.exe from other work on the machine), so it is polluted by pid reuse. Claude Code's own session log shows one Bash call only (the node server, run_in_background). That server never exits on its own, and none of the 14 survivors was alive 5 minutes after the stop, so the server is not among them: it stayed in the Job. A machine-wide search by command line for the server's code (createServer) and the spike's paths, the evening of 2026-11-17, found no Claude Code server either; it found only Codex's second background server. The other 13 cannot be classified from this record. The stream-json rerun of the same prompt (background-streamjson.windows), with both fixes, saw the server in its tree and found nothing alive after the stop.",
+  "notes": "Bash run_in_background server: the turn ended in about 8 s (structured output given, Stop hook ran) but `claude -p` never exited and printed nothing; the harness stopped it at 600 s."
+}

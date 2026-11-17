@@ -1,0 +1,33 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "linux",
+  "case": "success-before-signal",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "3986db69-0900-477a-b298-08caec0f1467"
+  ],
+  "stdin": "You are working in a small Node.js repository. Add an exported function mul(a, b) that returns a * b to sum.js, and add one test for it to sum.test.js. Then run `node --test` once to check it. Do not commit. When done: Reply only with JSON that matches the given schema: outcome \"done\", a one-sentence summary, question and replanReason null, the command you ran in checks (executable and args separately), notRun and concerns empty arrays.",
+  "stdinBytes": 440,
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 10404,
+  "stdoutBytes": 2498,
+  "stderrBytes": 0,
+  "bytesCounted": "after scrubbing",
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "Non-root; the run finished in 10.4 s, before the 12 s SIGTERM, so this is a second success shape, not a crash."
+}

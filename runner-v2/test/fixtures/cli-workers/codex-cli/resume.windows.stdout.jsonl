@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a1e9c2-d41e-7543-ba78-0ce6501b9a8f"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{\"outcome\":\"done\",\"summary\":\"Added mul(a, b) in the previous turn.\",\"question\":null,\"replanReason\":null,\"checks\":[],\"notRun\":[],\"concerns\":[]}"}}
+{"type":"turn.completed","usage":{"input_tokens":95150,"cached_input_tokens":54400,"cache_write_input_tokens":0,"output_tokens":480,"reasoning_output_tokens":0}}

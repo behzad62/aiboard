@@ -13,3 +13,6 @@ scripts/install/* text eol=lf
 
 # Signed release manifests are verified byte for byte; never convert their line endings.
 public/release/** -text
+
+# CLI worker fixtures are the CLIs' captured bytes (scrubbed); never convert their line endings.
+runner-v2/test/fixtures/cli-workers/** -text
