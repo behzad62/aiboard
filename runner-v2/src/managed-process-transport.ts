@@ -1,4 +1,5 @@
 import type { ToolExecutionContext } from "./agent-contracts.js";
+import { isProcessStopUnprovenError } from "./process-stop-proof.js";
 import type { ManagedProcessSnapshot } from "./managed-process-contracts.js";
 
 export type ManagedProcessOwner = Readonly<Pick<ToolExecutionContext, "runId" | "sessionId" | "actor">>;
@@ -18,6 +19,25 @@ export interface ManagedProcessLaunchRequest {
   readonly lifecycleRequirements?: import("./execution-lifecycle-policy.js").ExecutionLifecycleRequirements;
   /** Terminal metadata only; never a protocol callback, byte stream or control capability. */
   readonly onTerminal: (observation: Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>) => void;
+}
+
+/**
+ * CW5a: a runtime's `start` throws this only when it has proven that nothing of the launch exists: no process, no
+ * fence authority, and no launch or session state that would need a stop. `refusal` is the coded refusal that
+ * stopped the launch (for example `windows_batch_argv_unverified`). The managed service then records the process
+ * as stopped and throws `refusal` alone, with no stop. A runtime that cannot prove this throws the refusal itself,
+ * and the service keeps its exact stop.
+ */
+export class ManagedLaunchNeverStartedError extends Error {
+  readonly refusal: Error & { readonly code: string };
+  constructor(refusal: Error & { readonly code: string }) {
+    if (!(refusal instanceof Error) || typeof refusal.code !== "string" || !refusal.code)
+      throw new TypeError("A never-started launch needs the coded refusal that stopped it.");
+    if (isProcessStopUnprovenError(refusal)) throw new TypeError("An unproven stop is never a launch that never started.");
+    super(refusal.message, { cause: refusal });
+    this.name = "ManagedLaunchNeverStartedError";
+    this.refusal = refusal;
+  }
 }
 
 /** A run-bound shared-session adapter, not an OS process host. No caller can

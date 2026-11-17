@@ -340,6 +340,7 @@ async function round4Wait(predicate: () => boolean): Promise<void> {
 }
 
 import {
+  assertWindowsBatchLaunchAvailable,
   createWindowsProcessBackend,
   WindowsBatchLaunchUnavailableError,
   WindowsJobObjectProcessBackend,
@@ -1006,6 +1007,18 @@ test("Windows extensionless resolution preserves directory priority before PATHE
     });
     assert.equal(launchedCommand.toLowerCase(), expected.toLowerCase());
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("CW5a: the managed runtime's early batch check is the backends' own rule, by extension and fact only", () => {
+  for (const executable of [String.raw`C:\tools\a.cmd`, String.raw`C:\tools\a.BAT`, String.raw`relative\b.Cmd`]) {
+    for (const fact of ["unavailable", "partial"] as const) {
+      assert.throws(() => assertWindowsBatchLaunchAvailable(executable, fact),
+        (error: unknown) => error instanceof WindowsBatchLaunchUnavailableError && error.code === "windows_batch_argv_unverified");
+    }
+    assert.doesNotThrow(() => assertWindowsBatchLaunchAvailable(executable, "verified"));
+  }
+  for (const executable of [String.raw`C:\tools\a.exe`, String.raw`C:\tools\a.cmd.exe`, String.raw`C:\tools\cmd`, "node"])
+    assert.doesNotThrow(() => assertWindowsBatchLaunchAvailable(executable, "unavailable"));
 });
 
 test("unverified batch argv rejects Job batch targets without disabling native Job launch", async () => {

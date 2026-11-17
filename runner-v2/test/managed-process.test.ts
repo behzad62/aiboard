@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { readHistoricalManagedProcessObservations } from "../src/managed-process.js";
+import { ManagedProcessError, ManagedProcessService, readHistoricalManagedProcessObservations, type ManagedProcessSnapshot } from "../src/managed-process.js";
+import { ManagedLaunchNeverStartedError, type ManagedProcessLaunchRequest, type ManagedProcessRunRuntime } from "../src/managed-process-transport.js";
+import type { ToolExecutionContext } from "../src/agent-contracts.js";
+import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
+import { isProcessStopUnprovenError } from "../src/process-stop-proof.js";
+import { WindowsBatchLaunchUnavailableError } from "../src/windows-process-backend.js";
 test("historical process observation reads persisted records without reconciliation writes", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-managed-process-historical-"));
   const state = join(root, "state");
@@ -87,4 +92,95 @@ test("historical observations read current-schema records beside legacy ones (tu
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// CW5a: a launch refused before any spawn is never started. In-memory runtimes only; the real Windows refusal
+// through the ExecutionHost is in managed-refused-launch-windows.test.ts.
+type FakeStart = (request: ManagedProcessLaunchRequest, live: Set<string>) => Promise<ManagedProcessSnapshot>;
+function refusedLaunchFixture(start: FakeStart, options: { proveStop?: () => boolean } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-managed-refused-launch-"));
+  const live = new Set<string>(); const stops: string[] = [];
+  const runtime: ManagedProcessRunRuntime = {
+    runId: "run",
+    start: async (request) => await start(request, live),
+    async observe(target) { return { ...target, status: live.has(target.processId) ? "running" : "stopped" }; },
+    async stop(target) {
+      stops.push(target.processId);
+      if (options.proveStop?.() ?? true) live.delete(target.processId);
+      return { ...target, status: live.has(target.processId) ? "running" : "stopped", updatedAt: new Date().toISOString() };
+    },
+  };
+  const service = new ManagedProcessService({ stateDirectory: join(root, "state"), idFactory: () => "refused" });
+  const detach = service.registerRuntime(runtime);
+  const context: ToolExecutionContext = { runId: "run", sessionId: "agent", actor: { role: "worker", id: "worker" }, workspacePath: root,
+    callId: "call-1", toolName: "process.start", executionGrant: Object.freeze({}) as OpaqueExecutionGrant };
+  const record = () => {
+    const files = readdirSync(join(root, "state")).filter((name) => name.endsWith(".json"));
+    assert.equal(files.length, 1, files.join(", "));
+    return JSON.parse(readFileSync(join(root, "state", files[0]!), "utf8")) as { status: string; processId: string };
+  };
+  return { root, live, stops, service, detach, context, record };
+}
+const running = (request: ManagedProcessLaunchRequest): ManagedProcessSnapshot => ({ processId: request.identity.processId, pid: 7, status: "running",
+  exitCode: null, signal: null, startedAt: "2026-11-17T00:00:00.000Z", updatedAt: "2026-11-17T00:00:00.000Z", stdout: "", stderr: "" });
+
+test("a runtime that refuses before any spawn: only the coded refusal, a stopped record, no stop and a free detach", async () => {
+  const refusal = new WindowsBatchLaunchUnavailableError();
+  const f = refusedLaunchFixture(async () => { throw new ManagedLaunchNeverStartedError(refusal); });
+  try {
+    let error: unknown;
+    try { await f.service.start({ command: "tool.cmd" }, f.context, f.root); } catch (caught) { error = caught; }
+    assert.equal(error, refusal, "the service throws the refusal itself, not a wrapper or an aggregate");
+    assert.equal((error as WindowsBatchLaunchUnavailableError).code, "windows_batch_argv_unverified");
+    assert.equal(error instanceof AggregateError, false);
+    assert.equal(isProcessStopUnprovenError(error), false);
+    assert.deepEqual(f.stops, [], "nothing started, so nothing is stopped");
+    assert.equal(f.record().status, "stopped");
+    assert.doesNotThrow(() => f.detach(), "the runtime detaches: no record of its run is left unstopped");
+    await f.service.close();
+    assert.deepEqual(f.stops, []);
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a runtime that refuses after creating state keeps the exact stop and its unverified-cleanup aggregate", async () => {
+  const refusal = new WindowsBatchLaunchUnavailableError(); let prove = false;
+  const f = refusedLaunchFixture(async (request, live) => { live.add(request.identity.processId); throw refusal; }, { proveStop: () => prove });
+  try {
+    let error: unknown;
+    try { await f.service.start({ command: "tool.cmd" }, f.context, f.root); } catch (caught) { error = caught; }
+    assert.ok(error instanceof AggregateError, String(error));
+    assert.equal(error.message, "Managed failed start retains unverified exact cleanup.");
+    assert.equal(error.errors[0], refusal);
+    assert.equal((error.errors[1] as ManagedProcessError).code, "process_cleanup_unverified");
+    assert.equal(isProcessStopUnprovenError(error), true, "an unproven stop still pauses the scheduler");
+    assert.deepEqual(f.stops, [f.record().processId]);
+    assert.notEqual(f.record().status, "stopped");
+    assert.throws(() => f.detach(), (caught: unknown) => (caught as ManagedProcessError).code === "process_cleanup_unverified");
+    prove = true; await f.service.close();
+    assert.equal(f.record().status, "stopped");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("every other start failure keeps the exact stop, even a coded refusal without the never-started proof", async () => {
+  for (const failure of [new Error("spawn failed"), new WindowsBatchLaunchUnavailableError()]) {
+    const f = refusedLaunchFixture(async (request, live) => { live.add(request.identity.processId); throw failure; });
+    try {
+      await assert.rejects(f.service.start({ command: "tool" }, f.context, f.root), (caught: unknown) => caught === failure);
+      assert.deepEqual(f.stops, [f.record().processId], "the proven stop still runs");
+      assert.equal(f.record().status, "stopped");
+      assert.doesNotThrow(() => f.detach());
+    } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }
+  const f = refusedLaunchFixture(async (request) => running(request));
+  try { assert.equal((await f.service.start({ command: "tool" }, f.context, f.root)).status, "running"); }
+  finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("a never-started launch needs a coded refusal that is not an unproven stop", () => {
+  assert.throws(() => new ManagedLaunchNeverStartedError(new Error("no code") as Error & { code: string }), TypeError);
+  assert.throws(() => new ManagedLaunchNeverStartedError(new ManagedProcessError("process_cleanup_unverified", "unproven")), TypeError,
+    "an error the scheduler reads as an unproven stop can never mark a record stopped");
+  const refusal = new WindowsBatchLaunchUnavailableError();
+  const wrapped = new ManagedLaunchNeverStartedError(refusal);
+  assert.equal(wrapped.refusal, refusal); assert.equal(wrapped.cause, refusal);
 });

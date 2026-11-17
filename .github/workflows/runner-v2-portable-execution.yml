@@ -112,6 +112,7 @@ jobs:
           runner-v2/test/native-build-manager-readers.test.ts
           runner-v2/test/runner-resource-cleanup.test.ts
           runner-v2/test/static-adapter-policy.test.ts
+          runner-v2/test/managed-process.test.ts
           runner-v2/test/windows-job-active-probe.test.ts
           runner-v2/test/native-build-rollback-order.test.ts
           runner-v2/test/verification-plan-v2-contract.test.ts
@@ -139,6 +140,13 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/windows-birth-assembly.test.ts
           runner-v2/test/windows-birth-exit-race.test.ts
+      # CW5a: a real .cmd launch refused on a host whose batch-argv fact is not verified, through the production
+      # ExecutionHost, under facts that select each Windows backend (a few seconds).
+      - name: Run refused batch launch contract on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/managed-refused-launch-windows.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

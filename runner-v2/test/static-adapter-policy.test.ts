@@ -147,6 +147,23 @@ test("authorized stop cleanup budget reaches every production joiner and physica
   const harness = readFileSync(join(runnerRoot, "test", "support", "real-streaming-harness.ts"), "utf8");
   assert.match(harness, /AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS/);
 });
+test("CW5a: only the managed transport may report a launch never started, and only for a refusal before openStreaming", () => {
+  const constructors = sourceCodeFiles(sourceRoot)
+    .filter((path) => /new ManagedLaunchNeverStartedError\(/.test(readFileSync(path, "utf8")))
+    .map((path) => relative(runnerRoot, path).replaceAll("\\", "/"));
+  assert.deepEqual(constructors, ["src/execution-host-managed-transport.ts"]);
+  const transport = readFileSync(join(sourceRoot, "execution-host-managed-transport.ts"), "utf8");
+  const check = transport.indexOf("assertWindowsBatchLaunchAvailable(executable.path");
+  const open = transport.indexOf("await run.openStreaming(");
+  assert.ok(check > 0 && open > check, "the batch refusal precedes every streaming launch effect");
+  assert.equal((transport.match(/refusedBeforeOpen = refusal;/g) ?? []).length, 1);
+  assert.match(transport, /primary === refusedBeforeOpen && primary instanceof WindowsBatchLaunchUnavailableError[\s\S]{0,240}!recordOf\(request\.identity\) && !run\.streamingState\.readHostLaunch\(launchId\(request\.identity\.processId\)\)\)\s*throw new ManagedLaunchNeverStartedError/);
+  const service = readFileSync(join(sourceRoot, "managed-process.ts"), "utf8");
+  const start = service.slice(service.indexOf("  async start("), service.indexOf("  async poll("));
+  assert.ok(start.indexOf("primary instanceof ManagedLaunchNeverStartedError") > 0 &&
+    start.indexOf("primary instanceof ManagedLaunchNeverStartedError") < start.indexOf("this.stopExact("), "only a proven never-started launch skips the exact stop");
+  assert.match(start, /AggregateError\(\[primary, cleanup\], "Managed failed start retains unverified exact cleanup\."\)/);
+});
 test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway", () => {
   const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8");
   assert.match(

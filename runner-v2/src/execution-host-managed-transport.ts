@@ -13,7 +13,9 @@ import { createChildEnvironmentFactory, type RunnerProcessEnvironmentResolver } 
 import { resolveLanguageServerExecutable } from "./language-server-executable.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { ManagedProcessError, type ManagedOutputEvidence, type ManagedProcessSnapshot } from "./managed-process-contracts.js";
-import type { ManagedProcessIdentity, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
+import { ManagedLaunchNeverStartedError, type ManagedProcessIdentity, type ManagedProcessRunRuntime, type ManagedProcessTarget } from "./managed-process-transport.js";
+import type { ProcessHostSemanticFact } from "./process-host-semantic-probes.js";
+import { assertWindowsBatchLaunchAvailable, WindowsBatchLaunchUnavailableError } from "./windows-process-backend.js";
 import type { OperationAuthorizationAssertion, SessionInteractionAuthorization, SessionOperationAuthorization } from "./session-authority.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
@@ -41,6 +43,11 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
   artifacts?: ArtifactStore;
   /** VF7b: the run's per-owner values, so the launch resolves the command on the same PATH it runs with. */
   processEnvironment?: RunnerProcessEnvironmentResolver;
+  /**
+   * CW5a: the Windows batch-argv fact the run's process backends launch under; absent off Windows. A resolved
+   * `.cmd` or `.bat` is refused against it before any streaming launch state exists.
+   */
+  windowsBatchArgv?: ProcessHostSemanticFact;
 }>): ManagedProcessRunRuntime {
   const { run } = options; const entries = new Map<string, Entry>();
   const environments = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("Managed credential grants are not configured."); } },
@@ -137,6 +144,8 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       let expired = false;
       const timer = setTimeout(() => { expired = true; abort.abort(); }, request.startTimeoutMs);
       const startedAt = new Date().toISOString();
+      // CW5a: set only when the launch was refused before run.openStreaming was called.
+      let refusedBeforeOpen: unknown;
       try {
         entry.opening = (async () => {
           const cwd = await realpath(request.cwd);
@@ -151,7 +160,13 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
             : undefined;
           const launchExecutable = executable?.path ?? imageExecutable!;
           const launchIdentity = executable ?? Object.freeze({ imageExecutable });
+          // CW5a: the backends refuse a .cmd or .bat on this fact too, but only after the streaming runtime has
+          // durably begun the launch, whose cleanup then cannot be proven. Refusing the same path here comes first.
           if (signal.aborted) throw cancelled();
+          if (executable && options.windowsBatchArgv !== undefined) {
+            try { assertWindowsBatchLaunchAvailable(executable.path, options.windowsBatchArgv); }
+            catch (refusal) { refusedBeforeOpen = refusal; throw refusal; }
+          }
           const id = request.identity.processId;
           return await run.openStreaming({ sessionId: sessionId(id), launchId: launchId(id),
             grant: request.context.executionGrant!, binding: bindingFor(request.context, options.permissionProfile), signal,
@@ -180,6 +195,11 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           signal: entry.terminal?.signal ?? null, startedAt, updatedAt: startedAt, stdout: "", stderr: "" };
         return await snapshot(initial, undefined, undefined, request.maxOutputBytes);
       } catch (primary) {
+        // CW5a: openStreaming never ran, so no session, host launch, lease or process exists for this identity;
+        // the durable store must agree before the service is told nothing started.
+        if (primary === refusedBeforeOpen && primary instanceof WindowsBatchLaunchUnavailableError &&
+            !recordOf(request.identity) && !run.streamingState.readHostLaunch(launchId(request.identity.processId)))
+          throw new ManagedLaunchNeverStartedError(primary);
         try { await cleanup(request.identity, request.cleanupTimeoutMs); }
         catch (cleanupError) { throw new AggregateError([primary, cleanupError], "Managed startup retains unverified shared cleanup."); }
         if (expired) throw new ManagedProcessError("process_start_timeout", "Managed startup exceeded its bound.");
