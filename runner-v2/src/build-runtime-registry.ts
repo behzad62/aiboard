@@ -47,6 +47,8 @@ export interface BuildControlPlane {
   changeCrew?(runId: string, crew: import("./build-spec.js").NativeBuildCrew, idempotencyKey: string): Promise<SchedulerProjection>;
   /** Rebuilds paused Builds whose providers' credentials changed; returns the refreshed run ids. */
   providerCredentialsChanged?(changes: readonly { runtimeId: string; providerId: string }[]): Promise<string[]>;
+  /** A Settings test of this provider passed: its cooldowns end in running and paused Builds (CLI workers §3.4, CWD-4). */
+  providerTestPassed?(providerId: string): Promise<string[]>;
   selectVerifierRuntime(
     runId: string,
     runtimeId: string,

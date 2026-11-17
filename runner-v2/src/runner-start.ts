@@ -1,6 +1,8 @@
 import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
 import { installPlaywrightCliShims, PlaywrightCliSessions, resolvePlaywrightCliInstall } from "./playwright-cli.js";
 import { BrowserInstallService } from "./browser-install.js";
+import { createCheckToolLookup } from "./check-tool-lookup.js";
+import { CliWorkerDetection } from "./cli-worker-detection.js";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
@@ -556,6 +558,15 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         environment: executionHost.filteredEnvironmentSource(),
         workingDirectory: options.stateDirectory,
       }),
+      // CLI workers CW3: the free checks and the Test button run as Runner-internal commands from Runner-owned folders.
+      ...(homeLocation ? { cliWorkers: new CliWorkerDetection({
+        stateDirectory: options.stateDirectory,
+        processes: executionHost.internalProcesses,
+        environment: () => executionHost.filteredEnvironmentSource(),
+        lookup: createCheckToolLookup({ environment: () => executionHost.filteredEnvironmentSource() }),
+        home: homeLocation,
+        windowsBatchArgv: async () => (await executionHost.windowsProcessFacts?.())?.windowsBatchArgv,
+      }) } : {}),
       ...(modelProxy ? { modelProxy } : {}),
       localAgentsUnavailableNestedState: remoteOnly,
       remoteStatus: () => remote.current()?.status(),
