@@ -1,0 +1,9 @@
+{
+  "cli": "codex-cli",
+  "case": "rate-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "CW0's logged-out.linux run (reconnect notices as error events, then turn.failed with the last status), with 429 Too Many Requests in place of 401 Unauthorized.",
+  "exitCode": 1
+}

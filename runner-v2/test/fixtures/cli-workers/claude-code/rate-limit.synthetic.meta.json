@@ -1,0 +1,9 @@
+{
+  "cli": "claude-code",
+  "case": "rate-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "CW0's model-unavailable.windows result (api_error_status and api_error_type set, is_error true) in the stream-json form, with Anthropic's 429 rate_limit_error and no rejected rate_limit_event.",
+  "exitCode": 1
+}

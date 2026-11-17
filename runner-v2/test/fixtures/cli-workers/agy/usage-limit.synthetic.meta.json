@@ -1,0 +1,9 @@
+{
+  "cli": "agy",
+  "case": "usage-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "The owner's logs (docs/plans/2026-11-03-simple-build-and-delegate.md §2.1 and §2.3): exit 3, \"Resets in 4h53m36s\" as prose, and retryable true. The stream shape (init, the user step, a result with status ERROR, the error repeated on stderr) is CW0's model-unavailable.windows and stream-input-missing-event.windows runs. The sentence before \"Resets in\" is not from a log.",
+  "exitCode": 3
+}

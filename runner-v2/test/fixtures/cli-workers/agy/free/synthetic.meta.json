@@ -1,0 +1,22 @@
+{
+  "cli": "agy",
+  "synthetic": true,
+  "writtenAt": "2026-11-17",
+  "checks": [
+    {
+      "command": "agy models",
+      "state": "logged out",
+      "exitCode": 1,
+      "stream": "stderr",
+      "file": "models-logged-out.synthetic.stderr.txt",
+      "modelledOn": "agy was only seen logged in (CW0). The exit code and the wording are not agy's; the parser treats any non-zero exit with a login message as logged out."
+    },
+    {
+      "command": "agy --output-format json -p=/quota",
+      "exitCode": 0,
+      "stream": "stdout",
+      "file": "quota-exhausted.synthetic.json",
+      "modelledOn": "quota.json (CW0, shape real, figures synthetic) with the Claude and GPT models' five-hour bucket at remaining_fraction 0."
+    }
+  ]
+}

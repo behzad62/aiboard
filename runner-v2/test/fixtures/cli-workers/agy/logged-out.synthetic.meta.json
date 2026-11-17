@@ -1,0 +1,9 @@
+{
+  "cli": "agy",
+  "case": "logged-out",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "CW0's model-unavailable.windows run (refused before any model call: no init, a result with status ERROR and an empty conversation_id, the error on stderr), with a login message. agy was only seen logged in; the wording is not agy's.",
+  "exitCode": 1
+}

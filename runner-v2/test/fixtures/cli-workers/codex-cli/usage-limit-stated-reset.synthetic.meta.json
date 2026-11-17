@@ -1,0 +1,9 @@
+{
+  "cli": "codex-cli",
+  "case": "usage-limit-stated-reset",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "usage-limit.synthetic with a stated duration appended. The appended sentence is not from a log: it is a form the stated-reset rule reads (plan §3.8).",
+  "exitCode": 1
+}

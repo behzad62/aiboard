@@ -1,0 +1,9 @@
+{
+  "cli": "agy",
+  "case": "rate-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "As usage-limit.synthetic, with a 429 message; no agy 429 was ever captured.",
+  "exitCode": 3
+}
