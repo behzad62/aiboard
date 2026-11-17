@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -924,7 +924,8 @@ test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the gr
   assert.equal(acted.status, 0, acted.stderr);
   const record = JSON.parse(readFileSync(join(directory, "agy-run.json"), "utf8")) as FakeCliRecord;
   assert.ok(Number.isSafeInteger(record.grandchildPid) && record.grandchildPid! > 0);
-  assert.equal(record.cwd, repo);
+  // process.cwd() is the real path: on macOS the temp folder under /var is reached through /private/var.
+  assert.equal(record.cwd, realpathSync.native(repo));
   assert.equal(readFileSync(join(repo, "docs", "project", "plan.md"), "utf8"), "edited by the CLI\n");
   assert.equal(spawnSync("git", ["log", "-1", "--format=%s"], { cwd: repo, encoding: "utf8" }).stdout.trim(), "cli commit");
   assert.deepEqual(spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim().split(/\r?\n/), ["docs/project/plan.md"]);
