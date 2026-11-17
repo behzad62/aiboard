@@ -35,7 +35,10 @@ export interface CliWorkerResultV1 {
   concerns?: string[];
 }
 
-/** The bounds the parser holds a result to. Longer text is cut; more entries than allowed are dropped with a concern. */
+/**
+ * The bounds the parser holds a result to. Longer text is cut; a check over a bound, or more checks than allowed,
+ * are dropped with a concern.
+ */
 export const CLI_RESULT_LIMITS = Object.freeze({
   summary: 4_000,
   question: 4_000,
@@ -135,11 +138,14 @@ export function parseCliWorkerResult(value: unknown): CliWorkerResultParse {
   if (!Array.isArray(value.checks)) return { ok: false, reason: "The result's checks are not a list." };
   const concerns: string[] = [];
   const checks: CliWorkerCheckV1[] = [];
-  for (const entry of value.checks) {
+  // A check the parser cannot keep (a field of the wrong type, an empty output path, more args, outputs or criterion
+  // ids than allowed) is dropped with a concern, as a 13th check is: one bad claim never throws away the result.
+  value.checks.forEach((entry, index) => {
     const check = parseCheck(entry);
-    if (!check) return { ok: false, reason: "A check in the result is malformed." };
-    checks.push(check);
-  }
+    if (check) checks.push(check);
+    else concerns.push(`Check ${index + 1} the CLI reported was dropped: it is malformed or over AIBoard's limits.`);
+  });
+  if (concerns.length > CLI_RESULT_LIMITS.checks) concerns.splice(CLI_RESULT_LIMITS.checks, Infinity, `${concerns.length - CLI_RESULT_LIMITS.checks} more checks were dropped.`);
   if (checks.length > CLI_RESULT_LIMITS.checks) {
     concerns.push(`The CLI reported ${checks.length} checks; only the first ${CLI_RESULT_LIMITS.checks} are kept.`);
     checks.length = CLI_RESULT_LIMITS.checks;

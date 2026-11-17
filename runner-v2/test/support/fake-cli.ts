@@ -1,6 +1,7 @@
 /**
  * Fake CLIs for CLI worker tests (packet CW2): `node fake-cli.mjs <the CLI's argv>` with AIBOARD_FAKE_CLI_SCENARIO
- * naming a scenario file. fake-cli.mjs documents the scenario's fields.
+ * naming a scenario file. fake-cli.mjs documents the scenario's fields, and why on Windows a test injects
+ * `[process.execPath, FAKE_CLI_SCRIPT]` where the resolved CLI would go rather than hiding the fake behind a `.cmd`.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,7 +29,16 @@ export interface FakeCliScenario {
   lineDelayMs?: number;
   holdMs?: number;
   grandchildMs?: number;
+  actions?: Array<{ write: string; content?: string } | { commit: string }>;
   record?: string;
+}
+
+/** What the fake wrote to `record`. */
+export interface FakeCliRecord {
+  argv: string[];
+  stdin: string;
+  cwd: string;
+  grandchildPid?: number;
 }
 
 /** A fixture's path; scenario paths may be absolute, so tests point straight into the fixtures folder. */

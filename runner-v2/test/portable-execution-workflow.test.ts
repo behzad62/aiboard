@@ -40,6 +40,10 @@ const deterministicPrTests = [
   // image_inspect over AIBoard Remote: the byte limit, MCP image content in one jobs_result page and the path rules,
   // in memory with a stub host (no process, about 2 s of tests).
   "runner-v2/test/remote-image-content.test.ts",
+  // CW1: the cli transport and the home's cliWorkers section, in memory (no process, about 1 s).
+  "runner-v2/test/cli-worker-config.test.ts",
+  // CW2: the CLI worker adapters on the CW0 fixtures, with a few fake-CLI node runs (no real CLI, about 1 s).
+  "runner-v2/test/cli-worker-adapters.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

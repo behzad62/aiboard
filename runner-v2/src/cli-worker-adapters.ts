@@ -34,6 +34,7 @@ import {
   statedResetFromText,
   statedResetFromUnixSeconds,
   type CliFailureKind,
+  type LocalClock,
   type StatedReset,
 } from "./cli-worker-failures.js";
 import { cliWorkerResultSchemaJson, parseCliWorkerResult, parseCliWorkerResultText, type CliWorkerResultV1 } from "./cli-worker-result.js";
@@ -118,7 +119,12 @@ export interface CliExecutableLookupInput {
   executablePath?: string;
   /** VF2's lookup (check-tool-lookup.ts), so a CLI is found where a launch would find it. */
   lookup: CheckToolLookup;
-  /** The folder the lookup searches first on Windows (the launch's working folder). */
+  /**
+   * The folder the lookup runs from. On Windows VF2's lookup searches it before PATH, so it must be a Runner-owned
+   * folder (the Runner's state folder), never a worktree or project folder: a `claude.cmd` or `codex.exe` committed
+   * at a repository's root would otherwise shadow the real CLI and run with the bypass flags. A CLI found in this
+   * folder itself is refused, whatever folder the caller passed.
+   */
   cwd: string;
   platform?: NodeJS.Platform;
   /** Test seam: what is at a path. */
@@ -146,6 +152,10 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
   const found = await input.lookup(CLI_WORKER_EXECUTABLES[input.providerId], { cwd: input.cwd });
   if (found.status === "missing") return { status: "missing", source: "path" };
   if (found.status === "unknown") return { status: "unknown", source: "path", reason: found.reason };
+  const paths = platform === "win32" ? win32 : posix;
+  const folder = (path: string) => (platform === "win32" ? paths.resolve(path).toLowerCase() : paths.resolve(path));
+  if (folder(paths.dirname(found.path)) === folder(input.cwd))
+    return { status: "refused", source: "path", path: found.path, reason: `${paths.basename(found.path)} was found in the lookup's own folder, not on PATH; AIBoard does not launch it.` };
   const form = executableForm(found.path, platform);
   if (!form) return { status: "refused", source: "path", path: found.path, reason: windowsFormReason(found.path) };
   return { status: "found", path: found.path, source: "path", form };
@@ -290,10 +300,14 @@ export function parseAgyQuota(stdout: string, now: number): AgyQuotaGroup[] | un
  * no model name (the CLI default) or a model no group lists, only every group having an empty bucket counts. The
  * reset is the latest `reset_time` among the empty buckets that count, since the group is usable only when all
  * have refreshed; with none stated, the failure has no `retryAfterMs`.
+ *
+ * `modelName` is the model's display name from `agy models`, not its id: CW3 maps the id through that list
+ * (`claude-opus-5-5-low` → "Claude Opus 5.5 (Low)"). A trailing parenthetical (the effort) is dropped, and the rest
+ * must equal a name the group lists, ignoring case: "Claude Opus 5" never matches "Claude Opus 5.5".
  */
 export function agyQuotaFailure(groups: readonly AgyQuotaGroup[], now: number, modelName?: string): ProviderFailure | undefined {
-  const name = modelName?.trim().toLowerCase();
-  const matched = name ? groups.filter((group) => group.models.some((model) => name.startsWith(model.toLowerCase()))) : [];
+  const name = modelName?.replace(/\s*\([^()]*\)\s*$/, "").trim().toLowerCase();
+  const matched = name ? groups.filter((group) => group.models.some((model) => model.toLowerCase() === name)) : [];
   const empty = (group: AgyQuotaGroup) => group.buckets.filter((bucket) => bucket.remainingFraction <= 0);
   const exhausted = matched.length
     ? matched.filter((group) => empty(group).length > 0)
@@ -593,10 +607,16 @@ export interface CliRunInput {
   exitCode: number | null;
   /** Codex's `-o` file as read after exit; null or undefined when it could not be read. */
   outputFile?: string | Uint8Array | null;
-  /** The Runner stopped the CLI: its attempt deadline, or the Build was cancelled. */
+  /**
+   * The Runner stopped the CLI: its attempt deadline, or the Build was cancelled. Then any reading other than a
+   * result is `stopped`, never a provider failure (§3.8): what the CLI printed while it was being stopped ("Request
+   * was aborted.", "Turn interrupted", a reconnect notice) says nothing about its provider.
+   */
   stoppedBy?: "deadline" | "cancelled";
   /** The time stated resets are measured from. */
   now?: number;
+  /** The zone a stated clock time is read in; this machine's by default. */
+  localClock?: LocalClock;
 }
 
 export type CliRunOutcome =
@@ -624,53 +644,66 @@ export interface CliStreamReader {
   end(): void;
   readonly turnEnded: boolean;
   readonly sessionId: string | undefined;
-  /** Classifies the run once the CLI exited, delivered its result, or was stopped. */
+  /**
+   * Classifies the run once the CLI exited, delivered its result, or was stopped. In this order: a result the CLI
+   * delivered; the Runner's own stop; the CLI's decisive failure (Codex `turn.failed`, Claude Code's `is_error`
+   * result, agy's `ERROR` result), read by itself; then, with none of those, a failure stderr names; else no result.
+   */
   read(input: Omit<CliRunInput, "stdout">): CliRunReading;
 }
 
-/** A line longer than this is dropped (and a result it held is then missing, which reads as no result). */
+/** A line longer than this is dropped unread (and a result it held is then missing, which reads as no result). */
 export const CLI_STREAM_LINE_MAX_CHARS = 16 * 1024 * 1024;
 const TEXT_KEEP = 8_000;
 const SIDE_MESSAGES_KEEP = 8;
 
 abstract class JsonLineReader implements CliStreamReader {
-  private pending = "";
+  /** The unfinished line's pieces; each chunk is scanned for a newline once, so reading is linear in the output. */
+  private pending: string[] = [];
+  private pendingLength = 0;
+  /** The unfinished line is over the cap: its pieces are discarded until its newline. */
   private dropping = false;
   abstract readonly turnEnded: boolean;
   abstract readonly sessionId: string | undefined;
 
   push(chunk: string): void {
-    let text = this.pending + chunk;
-    this.pending = "";
-    let newline = text.indexOf("\n");
+    let start = 0;
+    let newline = chunk.indexOf("\n");
     while (newline >= 0) {
-      const line = text.slice(0, newline);
-      text = text.slice(newline + 1);
-      if (this.dropping) this.dropping = false;
-      else this.line(line);
-      newline = text.indexOf("\n");
+      this.take(chunk.slice(start, newline));
+      this.finishLine();
+      start = newline + 1;
+      newline = chunk.indexOf("\n", start);
     }
-    if (this.dropping) return;
-    if (text.length > CLI_STREAM_LINE_MAX_CHARS) {
-      this.dropping = true;
-      return;
-    }
-    this.pending = text;
+    if (start < chunk.length) this.take(chunk.slice(start));
   }
 
   end(): void {
-    const rest = this.pending;
-    this.pending = "";
-    if (!this.dropping && rest.trim()) this.line(rest);
-    this.dropping = false;
+    this.finishLine();
   }
 
-  private line(raw: string): void {
-    const line = raw.replace(/\r$/, "").trim();
-    if (!line.startsWith("{")) return;
+  private take(piece: string): void {
+    if (this.dropping) return;
+    if (this.pendingLength + piece.length > CLI_STREAM_LINE_MAX_CHARS) {
+      this.dropping = true;
+      this.pending = [];
+      this.pendingLength = 0;
+      return;
+    }
+    this.pending.push(piece);
+    this.pendingLength += piece.length;
+  }
+
+  private finishLine(): void {
+    const line = this.dropping ? "" : this.pending.join("");
+    this.pending = [];
+    this.pendingLength = 0;
+    this.dropping = false;
+    const trimmed = line.replace(/\r$/, "").trim();
+    if (!trimmed.startsWith("{")) return;
     let value: unknown;
     try {
-      value = JSON.parse(line);
+      value = JSON.parse(trimmed);
     } catch {
       return;
     }
@@ -681,7 +714,16 @@ abstract class JsonLineReader implements CliStreamReader {
   abstract read(input: Omit<CliRunInput, "stdout">): CliRunReading;
 }
 
-/** Codex `exec --json`: thread id, usage, `turn.failed`, and its `error` events, which alone are never fatal (CW0). */
+/**
+ * Codex's notices that it is retrying a connection. A retry that later succeeds says nothing about the run, so they
+ * are never side messages: a recovered 401 must not cool Codex down for a day.
+ */
+const CODEX_RETRY_NOTICE = /^\s*(?:Reconnecting\.\.\.|Falling back from WebSockets)/i;
+
+/**
+ * Codex `exec --json`: thread id, usage, `turn.completed` and `turn.failed`. Its `error` events and items are never
+ * fatal on their own (CW0): only `turn.failed` ends a turn as a failure.
+ */
 class CodexStreamReader extends JsonLineReader {
   private threadId: string | undefined;
   private completed = false;
@@ -718,6 +760,7 @@ class CodexStreamReader extends JsonLineReader {
   }
 
   private side(message: string): void {
+    if (CODEX_RETRY_NOTICE.test(message)) return;
     this.sideMessages.push(keep(message));
     if (this.sideMessages.length > SIDE_MESSAGES_KEEP) this.sideMessages.shift();
   }
@@ -725,23 +768,20 @@ class CodexStreamReader extends JsonLineReader {
   read(input: Omit<CliRunInput, "stdout">): CliRunReading {
     const now = input.now ?? Date.now();
     const base = { ...(this.threadId ? { sessionId: this.threadId } : {}), turnEnded: this.turnEnded, ...(this.usage ? { usage: this.usage } : {}) };
-    if (this.failedMessage !== undefined) {
-      const kind = classifyCliFailureText(this.failedMessage);
-      if (kind !== "transient") return { ...base, outcome: failure(kind, this.failedMessage, now, "cli_error") };
-      const side = sideFailure([...this.sideMessages].reverse(), input.stderr, now);
-      return { ...base, outcome: side ?? failure("transient", this.failedMessage, now, "cli_error") };
-    }
-    // The -o file exists even when the run failed or was killed, then with 0 bytes: present means non-empty and parsable.
+    // A result is this run's: the turn completed, Codex exited 0, and the -o file parses. The file exists even when a
+    // run failed or was killed (0 bytes, CW0), and one left by an earlier attempt has no turn.completed in this stream.
+    const completedRun = this.completed && this.failedMessage === undefined && input.exitCode === 0;
     const fileText = input.outputFile === undefined || input.outputFile === null ? "" : typeof input.outputFile === "string"
       ? input.outputFile : Buffer.from(input.outputFile).toString("utf8");
-    if (fileText.trim()) {
-      const parsed = parseCliWorkerResultText(fileText);
-      if (parsed.ok && input.exitCode === 0) return { ...base, outcome: { type: "result", result: parsed.result } };
-      if (!parsed.ok && !input.stoppedBy) return { ...base, outcome: failure("transient", `Codex's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
-    }
-    const side = sideFailure([...this.sideMessages].reverse(), input.stderr, now);
-    if (side) return { ...base, outcome: side };
+    const parsed = completedRun && fileText.trim() ? parseCliWorkerResultText(fileText) : undefined;
+    if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
     if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
+    if (this.failedMessage !== undefined)
+      return { ...base, outcome: failure(classifyCliFailureText(this.failedMessage), this.failedMessage, now, "cli_error", undefined, input.localClock) };
+    if (parsed) return { ...base, outcome: failure("transient", `Codex's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
+    if (completedRun) return { ...base, outcome: failure("transient", "Codex completed its turn but wrote no result.", now, "no_result") };
+    const side = sideFailure([...this.sideMessages].reverse(), input.stderr, now, input.localClock);
+    if (side) return { ...base, outcome: side };
     return { ...base, outcome: failure("transient", noResultMessage("Codex", input.exitCode), now, "no_result") };
   }
 }
@@ -821,32 +861,32 @@ class ClaudeCodeStreamReader extends JsonLineReader {
       ...((model ?? this.initModel) ? { model: (model ?? this.initModel)! } : {}),
       ...(rateLimits.length ? { rateLimits } : {}),
     };
+    const text = result && typeof result.result === "string" ? keep(result.result) : "";
+    const parsed = result && result.is_error !== true
+      ? result.structured_output !== undefined && result.structured_output !== null
+        ? parseCliWorkerResult(result.structured_output) : parseCliWorkerResultText(text)
+      : undefined;
+    if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
+    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
     const rejected = [...this.windows.values()].filter((window) => window.status === "rejected");
     const rejectedReset = rejected
       .map((window) => statedResetFromUnixSeconds(window.resetSeconds, now))
       .filter((reset): reset is StatedReset => reset !== undefined)
       .sort((a, b) => b.retryAfterMs - a.retryAfterMs)[0];
-    if (result) {
-      const text = typeof result.result === "string" ? keep(result.result) : "";
-      if (result.is_error === true) return { ...base, outcome: this.errorOutcome(result, text, rejected.length > 0, rejectedReset, now) };
-      const parsed = result.structured_output !== undefined && result.structured_output !== null
-        ? parseCliWorkerResult(result.structured_output) : parseCliWorkerResultText(text);
-      if (parsed.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
-      return { ...base, outcome: failure("transient", `Claude Code's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
-    }
+    if (result?.is_error === true) return { ...base, outcome: this.errorOutcome(result, text, rejected.length > 0, rejectedReset, now, input.localClock) };
+    if (parsed) return { ...base, outcome: failure("transient", `Claude Code's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
     if (rejected.length) return { ...base, outcome: failure("usage_limit", "Claude Code's usage limit was reached.", now, "cli_error", rejectedReset) };
     const stderr = input.stderr ?? "";
     // As root, Claude Code refuses the bypass flag before any request (§3.12). CW4 refuses that launch first; if one
     // happens anyway, it is a setup the owner must change, like a missing executable, so it is `authentication`.
     if (/cannot be used with root\/sudo privileges/i.test(stderr))
       return { ...base, outcome: failure("authentication", stderr, now, "cli_error") };
-    const side = sideFailure([], stderr, now);
+    const side = sideFailure([], stderr, now, input.localClock);
     if (side) return { ...base, outcome: side };
-    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
     return { ...base, outcome: failure("transient", noResultMessage("Claude Code", input.exitCode), now, "no_result") };
   }
 
-  private errorOutcome(result: Record<string, unknown>, text: string, rejected: boolean, reset: StatedReset | undefined, now: number): CliRunOutcome {
+  private errorOutcome(result: Record<string, unknown>, text: string, rejected: boolean, reset: StatedReset | undefined, now: number, clock?: LocalClock): CliRunOutcome {
     const status = typeof result.api_error_status === "number" ? result.api_error_status : undefined;
     const type = typeof result.api_error_type === "string" ? result.api_error_type : "";
     const textKind = classifyCliFailureText(text);
@@ -858,7 +898,7 @@ class ClaudeCodeStreamReader extends JsonLineReader {
     else if ((status !== undefined && status >= 500) || type === "overloaded_error" || type === "api_error" || this.assistantError === "server_error") kind = "provider_unavailable";
     else kind = textKind;
     const detail = text || [status, type].filter(Boolean).join(" ") || "Claude Code reported an error.";
-    return failure(kind, detail, now, "cli_error", kind === "usage_limit" ? reset : undefined);
+    return failure(kind, detail, now, "cli_error", kind === "usage_limit" ? reset : undefined, clock);
   }
 }
 
@@ -902,23 +942,23 @@ class AgyStreamReader extends JsonLineReader {
     const usage = result ? agyUsage(result.usage) : undefined;
     const base = { ...(this.conversation ? { sessionId: this.conversation } : {}), turnEnded: this.turnEnded, ...(usage ? { usage } : {}) };
     const stderr = input.stderr ?? "";
-    if (result && result.status === "SUCCESS") {
-      const parsed = result.structured_output !== undefined && result.structured_output !== null
+    const parsed = result && result.status === "SUCCESS"
+      ? result.structured_output !== undefined && result.structured_output !== null
         ? parseCliWorkerResult(result.structured_output)
-        : parseCliWorkerResultText(typeof result.response === "string" ? result.response : "");
-      if (parsed.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
-      return { ...base, outcome: failure("transient", `agy's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
-    }
+        : parseCliWorkerResultText(typeof result.response === "string" ? result.response : "")
+      : undefined;
+    if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
+    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
+    if (parsed) return { ...base, outcome: failure("transient", `agy's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
     if (result) {
       const text = keep(typeof result.error === "string" && result.error.trim() ? result.error : stderr || "agy reported an error.");
       let kind = classifyCliFailureText(text);
       // Exit 3 is agy's model or agent error; with a stated reset it is the quota failure the owner's logs show.
-      if (kind === "transient" && input.exitCode === 3 && statedResetFromText(text, now)) kind = "usage_limit";
-      return { ...base, outcome: failure(kind, text, now, "cli_error") };
+      if (kind === "transient" && input.exitCode === 3 && statedResetFromText(text, now, input.localClock)) kind = "usage_limit";
+      return { ...base, outcome: failure(kind, text, now, "cli_error", undefined, input.localClock) };
     }
-    const side = sideFailure([], stderr, now, input.exitCode === 3);
+    const side = sideFailure([], stderr, now, input.localClock, input.exitCode === 3);
     if (side) return { ...base, outcome: side };
-    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
     return { ...base, outcome: failure("transient", noResultMessage("agy", input.exitCode), now, "no_result") };
   }
 }
@@ -937,21 +977,22 @@ function agyUsage(value: unknown): CliUsage | undefined {
 }
 
 /**
- * A failure that side messages (Codex's `error` events, stderr) name, when the decisive message named none. The
- * model rule is left out: a Codex warning that a model's metadata is unknown is not a failure by itself.
+ * A failure that side messages (Codex's non-retry `error` events, stderr) name, read only when the CLI delivered no
+ * result and no decisive failure. The model rule is left out: a Codex warning that a model's metadata is unknown is
+ * not a failure by itself.
  */
-function sideFailure(messages: readonly string[], stderr: string | undefined, now: number, agyExit3 = false): CliRunOutcome | undefined {
+function sideFailure(messages: readonly string[], stderr: string | undefined, now: number, clock: LocalClock | undefined, agyExit3 = false): CliRunOutcome | undefined {
   for (const message of [...messages, stderr ?? ""]) {
     const text = keep(message);
     let kind = classifyCliFailureText(text, { includeModel: false });
-    if (kind === "transient" && agyExit3 && statedResetFromText(text, now)) kind = "usage_limit";
-    if (kind !== "transient") return failure(kind, text, now, "cli_error");
+    if (kind === "transient" && agyExit3 && statedResetFromText(text, now, clock)) kind = "usage_limit";
+    if (kind !== "transient") return failure(kind, text, now, "cli_error", undefined, clock);
   }
   return undefined;
 }
 
-function failure(kind: CliFailureKind, text: string, now: number, reason: "cli_error" | "no_result" | "unreadable_result", reset?: StatedReset): CliRunOutcome {
-  return { type: "failure", failure: cliProviderFailure(kind, text, now, reset), reason };
+function failure(kind: CliFailureKind, text: string, now: number, reason: "cli_error" | "no_result" | "unreadable_result", reset?: StatedReset, clock?: LocalClock): CliRunOutcome {
+  return { type: "failure", failure: cliProviderFailure(kind, text, now, reset, clock), reason };
 }
 
 function noResultMessage(name: string, exitCode: number | null): string {

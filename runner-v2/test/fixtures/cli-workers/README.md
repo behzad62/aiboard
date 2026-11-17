@@ -70,13 +70,14 @@ the owner's log its shape comes from and says which words are invented. The free
 |---|---|---|
 | `codex-cli/usage-limit.synthetic.*` | the owner's logs ("You've hit your usage limit", exit 1); the event shape of `model-unavailable.windows`; the 0-byte `-o` file of every failed CW0 run | the event layout around the logged prose |
 | `codex-cli/usage-limit-stated-reset.synthetic.*` | the above | the appended "try again in 3 hours 12 minutes" |
-| `codex-cli/rate-limit.synthetic.*`, `codex-cli/server-error.synthetic.*` | `logged-out.linux` (reconnect notices, then `turn.failed`) | 429 and 503 in place of 401 |
+| `codex-cli/rate-limit.synthetic.*` | `logged-out.linux` (reconnect notices, then `turn.failed`) | 429 in place of 401, and the whole `turn.failed` wording "exceeded retry limit, last status: 429 Too Many Requests…" |
+| `codex-cli/server-error.synthetic.*` | `logged-out.linux`'s `turn.failed` message | 503 Service Unavailable and "upstream connect error" in place of 401 |
 | `claude-code/usage-limit.synthetic.*` | `free/logged-out-streamjson.linux` (init, an assistant event with `error`, an `is_error` result) and the `rate_limit_event` of `background-streamjson.windows` | `status: "rejected"`, the message text |
 | `claude-code/usage-limit-result-only.synthetic.*` | `logged-out.linux` (json mode) | the older "usage limit reached\|<unix seconds>" text |
 | `claude-code/rate-limit.synthetic.*`, `claude-code/overloaded.synthetic.*` | `model-unavailable.windows` (`api_error_status`, `api_error_type`) | 429 `rate_limit_error`, 529 `overloaded_error` |
-| `agy/usage-limit.synthetic.*`, `agy/usage-limit-weekly.synthetic.*` | the owner's logs (exit 3, "Resets in 4h53m36s", a weekly cap of 162h13m35s, `retryable: true`); the stream shape of `model-unavailable.windows` | the sentence before "Resets in" |
-| `agy/rate-limit.synthetic.*`, `agy/server-error.synthetic.*` | as agy's usage limit | the 429 and 503 messages |
-| `agy/logged-out.synthetic.*`, `agy/free/models-logged-out.synthetic.stderr.txt` | `model-unavailable.windows` (refused before any model call) | the login wording: agy was only seen logged in |
+| `agy/usage-limit.synthetic.*`, `agy/usage-limit-weekly.synthetic.*` | the owner's logs (exit 3, "Resets in 4h53m36s", a weekly cap of 162h13m35s, `retryable: true`); the stream shape of `model-unavailable.windows` | the sentence before "Resets in", and where `retryable` sits in the result |
+| `agy/rate-limit.synthetic.*`, `agy/server-error.synthetic.*` | as agy's usage limit | the 429 and 503 messages, and their `"retryable": true` |
+| `agy/logged-out.synthetic.*`, `agy/free/models-logged-out.synthetic.stderr.txt` | `model-unavailable.windows` (refused before any model call) | the login wording (agy was only seen logged in), and the result's `"retryable": false` |
 | `agy/free/quota-exhausted.synthetic.json` | `free/quota.json` | one bucket at `remaining_fraction` 0 |
 
 The synthetic ids are recognisable: `00000000-0000-…-0000000c0de1` (Codex), `…0000000c1a0d` (Claude Code),

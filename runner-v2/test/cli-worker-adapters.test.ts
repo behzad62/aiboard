@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   CLAUDE_CODE_EFFORTS,
+  CLI_STREAM_LINE_MAX_CHARS,
   CLI_WORKER_ADAPTERS,
   WINDOWS_BATCH_SHIM_UNSAFE_ARGUMENT,
   agyQuotaFailure,
@@ -33,16 +34,19 @@ import {
   type CliRunInput,
   type CliRunReading,
 } from "../src/cli-worker-adapters.js";
-import { CLI_WORKER_PROVIDER_IDS, isCliArgumentValue, type CliWorkerProviderId } from "../src/cli-worker-config.js";
-import { classifyCliFailureText, statedResetFromText, type CliFailureKind } from "../src/cli-worker-failures.js";
+import { CLI_WORKER_PROVIDER_IDS, isCliArgumentValue, scrubCliMessage, type CliWorkerProviderId } from "../src/cli-worker-config.js";
+import { classifyCliFailureText, fixedOffsetLocalClock, statedResetFromText, type CliFailureKind, type LocalClock } from "../src/cli-worker-failures.js";
 import { CLI_WORKER_RESULT_SCHEMA, cliWorkerResultSchemaJson, parseCliWorkerResult, parseCliWorkerResultText } from "../src/cli-worker-result.js";
 import { MODEL_CATALOG_SNAPSHOT } from "../src/generated/model-catalog.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
-import { CLI_FIXTURES, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, cliFixture, readCliFixture, writeFakeCliScenario } from "./support/fake-cli.js";
+import { CLI_FIXTURES, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, cliFixture, readCliFixture, writeFakeCliScenario, type FakeCliRecord } from "./support/fake-cli.js";
 
 /** Fixture readers accept LF or CRLF: every run below is also read with its line endings turned into CRLF. */
 const crlf = (text: string) => text.replace(/\r?\n/g, "\r\n");
-const fixture = (relative: string) => existsSync(cliFixture(relative)) ? readCliFixture(relative) : "";
+/** A fixture that must exist: a missing one fails the test instead of reading as empty output. */
+const fixture = (relative: string) => readCliFixture(relative);
+/** A part that a run may not have (stderr, Codex's -o file). */
+const optionalFixture = (relative: string) => existsSync(cliFixture(relative)) ? readCliFixture(relative) : "";
 /** The synthetic fixtures' resets are Unix 4102444800 (2100-01-01); "now" one hour before reads them as stated. */
 const HOUR_BEFORE_2100 = (4102444800 - 3600) * 1000;
 const NOW = Date.parse("2026-11-17T12:00:00.000Z");
@@ -56,8 +60,10 @@ function read(cli: CliWorkerProviderId, input: CliRunInput, lineEndings: "lf" | 
 interface RunCase {
   name: string;
   cli: CliWorkerProviderId;
-  /** `<cli>/<case>.<os|synthetic>`; the parts are read from the fixture folder. */
-  base: string;
+  /** `<cli>/<case>.<os|synthetic>`; the parts are read from the fixture folder, and its stdout part must exist. */
+  base?: string;
+  /** A run written out here, for a probe no fixture holds (what a CLI printed while the Runner stopped it). */
+  inline?: { stdout: string; stderr?: string; outputFile?: string };
   exitCode: number | null;
   stdoutPart?: "stdout.jsonl" | "stdout.json";
   stoppedBy?: "deadline" | "cancelled";
@@ -69,13 +75,30 @@ interface RunCase {
   sessionId?: string;
 }
 
+const CODEX_THREAD = '{"type":"thread.started","thread_id":"00000000-0000-7000-8000-0000000c0de2"}';
+const RECONNECT_401 = '{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)"}';
+/** A recorded Codex stream with one notice after its thread.started line. */
+function withCodexNotice(relative: string, notice: string): string {
+  const lines = readCliFixture(relative).split("\n");
+  return [lines[0], notice, ...lines.slice(1)].join("\n");
+}
+
 function runInput(entry: RunCase): CliRunInput {
+  const common = {
+    exitCode: entry.exitCode,
+    ...(entry.stoppedBy ? { stoppedBy: entry.stoppedBy } : {}),
+    now: entry.now ?? NOW,
+  };
+  if (entry.inline) {
+    return { stdout: entry.inline.stdout, stderr: entry.inline.stderr ?? "", ...(entry.inline.outputFile !== undefined ? { outputFile: entry.inline.outputFile } : {}), ...common };
+  }
+  assert.ok(entry.base, `${entry.name} names no fixture`);
   const part = entry.stdoutPart ?? (existsSync(cliFixture(`${entry.base}.stdout.jsonl`)) ? "stdout.jsonl" : "stdout.json");
   const outputFile = entry.cli === "codex-cli" && existsSync(cliFixture(`${entry.base}.last-message.json`))
     ? readFileSync(cliFixture(`${entry.base}.last-message.json`)) : undefined;
   return {
     stdout: fixture(`${entry.base}.${part}`),
-    stderr: fixture(`${entry.base}.stderr.txt`),
+    stderr: optionalFixture(`${entry.base}.stderr.txt`),
     exitCode: entry.exitCode,
     ...(outputFile !== undefined ? { outputFile } : {}),
     ...(entry.stoppedBy ? { stoppedBy: entry.stoppedBy } : {}),
@@ -147,6 +170,29 @@ const RUNS: RunCase[] = [
   { name: "Codex killed at the deadline", cli: "codex-cli", base: "codex-cli/killed.linux", exitCode: null, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" } },
   { name: "Claude Code hang stopped at the deadline (json mode prints nothing)", cli: "claude-code", base: "claude-code/background-hang.windows", exitCode: null, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" } },
   { name: "agy cancelled", cli: "agy", base: "agy/killed.windows", exitCode: null, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" } },
+  // The Runner's own stop wins over anything the CLI printed while being stopped: never a provider failure.
+  { name: "Codex cancelled after a recovered 503 reconnect", cli: "codex-cli", exitCode: null, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" },
+    inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n{"type":"error","message":"Reconnecting... 1/5 (unexpected status 503 Service Unavailable, url: https://api.openai.com/v1/responses)"}\n`, outputFile: "" } },
+  { name: "Codex cancelled: Turn interrupted", cli: "codex-cli", exitCode: 1, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" },
+    inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n{"type":"turn.failed","error":{"message":"Turn interrupted"}}\n`, outputFile: "" } },
+  { name: "Codex at the deadline with a usage-limit turn.failed", cli: "codex-cli", exitCode: 1, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" },
+    inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}\n`, outputFile: "" } },
+  { name: "Claude Code at the deadline: Request was aborted.", cli: "claude-code", exitCode: null, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" },
+    inline: { stdout: '{"type":"result","is_error":true,"result":"Request was aborted."}\n' } },
+  { name: "Claude Code cancelled with a rejected rate_limit_event", cli: "claude-code", base: "claude-code/usage-limit.synthetic", exitCode: null, stoppedBy: "cancelled", now: HOUR_BEFORE_2100, expect: { type: "stopped", reason: "cancelled" } },
+  { name: "agy cancelled with a 429 on stderr", cli: "agy", exitCode: null, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" },
+    inline: { stdout: "", stderr: "error: model request failed: 429 Too Many Requests\n" } },
+  { name: "agy cancelled: context canceled", cli: "agy", exitCode: 1, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" },
+    inline: { stdout: '{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"context canceled"}}\n' } },
+  // A result the CLI delivered before the stop still counts (Claude Code's background run above does the same).
+  { name: "agy result delivered, then cancelled", cli: "agy", base: "agy/success.windows", exitCode: null, stoppedBy: "cancelled", expect: { type: "result", outcome: "done" } },
+  // A recovered reconnect says nothing about the run: never a 24-hour authentication cooldown.
+  { name: "Codex recovered 401 reconnect, then a result", cli: "codex-cli", exitCode: 0, expect: { type: "result", outcome: "done" },
+    inline: { stdout: withCodexNotice("codex-cli/success.windows.stdout.jsonl", RECONNECT_401), outputFile: optionalFixture("codex-cli/success.windows.last-message.json") } },
+  { name: "Codex recovered 401 reconnect, then an unrelated turn.failed", cli: "codex-cli", exitCode: 1, expect: { type: "failure", kind: "transient", reason: "cli_error", message: /stream disconnected/ },
+    inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n${RECONNECT_401}\n{"type":"turn.failed","error":{"message":"stream disconnected before completion: transport error"}}\n`, outputFile: "" } },
+  { name: "Codex recovered 401 reconnect, then killed without a stop recorded", cli: "codex-cli", exitCode: null, expect: { type: "failure", kind: "transient", reason: "no_result" },
+    inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n${RECONNECT_401}\n`, outputFile: "" } },
 ];
 
 for (const entry of RUNS) {
@@ -172,7 +218,16 @@ for (const entry of RUNS) {
   });
 }
 
-test("every recorded and synthetic run fixture is read by some case", () => {
+test("every case reads a fixture that exists, and every recorded and synthetic run fixture is read by some case", () => {
+  // Case → fixture: a case names a fixture or writes its run inline, never both, and its stdout part exists, so no
+  // case passes on empty output by a misspelt name.
+  for (const entry of RUNS) {
+    assert.equal(Boolean(entry.base) !== Boolean(entry.inline), true, `${entry.name}: a fixture or an inline run`);
+    if (!entry.base) continue;
+    const parts = entry.stdoutPart ? [entry.stdoutPart] : ["stdout.jsonl", "stdout.json"];
+    assert.equal(parts.filter((part) => existsSync(cliFixture(`${entry.base}.${part}`))).length, 1, `${entry.name}: ${entry.base} has no stdout fixture`);
+  }
+  // Fixture → case.
   const covered = new Set(RUNS.map((entry) => entry.base));
   const bases = new Set<string>();
   for (const cli of CLI_WORKER_PROVIDER_IDS) {
@@ -191,6 +246,53 @@ test("every recorded and synthetic run fixture is read by some case", () => {
     if (base === "claude-code/background-hang.linux") assert.equal(reading.outcome.type, "failure");
     else assert.equal(reading.outcome.type, "result", base);
   }
+});
+
+test("a status code counts only in HTTP context: crash output with 401, 403 or 429 in it is transient", () => {
+  for (const text of [
+    "    at Object.<anonymous> (C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js:401:17)",
+    "goroutine 403 [running]:\nmain.main()\n\t/src/main.go:12 +0x1d",
+    "thread 'main' panicked at src/x.rs:401:9:\ncalled `Option::unwrap()` on a `None` value",
+    "Error: ENOENT at line 429 of config.toml",
+    "TypeError: cannot read properties of undefined (reading 'code') at parse (index.js:503:12)",
+  ]) {
+    assert.equal(classifyCliFailureText(text), "transient", text);
+    const reading = read("agy", { stdout: "", stderr: text, exitCode: 1, now: NOW });
+    assert.deepEqual(reading.outcome.type === "failure" && [reading.outcome.failure.kind, reading.outcome.reason], ["transient", "no_result"], text);
+  }
+  for (const [text, kind] of [
+    ["unexpected status 401 Unauthorized", "authentication"], ["HTTP 403", "authentication"], ["status code 403", "authentication"],
+    ["403 Forbidden", "authentication"], ["HTTP/1.1 429", "rate_limit"], ["API Error: 429 slow down", "rate_limit"],
+    ["last status: 429 Too Many Requests", "rate_limit"], ["HTTP 502 from upstream", "provider_unavailable"],
+  ] as const) assert.equal(classifyCliFailureText(text), kind, text);
+});
+
+test("organization ids never reach a failure message", () => {
+  const anthropic = "API Error: 429 This request would exceed the rate limit for your organization (813ed5d4-1a2b-4c3d-8e9f-0123456789ab) of 40,000 input tokens per minute.";
+  const reading = read("claude-code", { stdout: `${JSON.stringify({ type: "result", is_error: true, result: anthropic, api_error_status: 429 })}\n`, exitCode: 1, now: NOW });
+  assert.equal(reading.outcome.type === "failure" && reading.outcome.failure.kind, "rate_limit");
+  const message = reading.outcome.type === "failure" ? reading.outcome.failure.message : "";
+  assert.ok(!message.includes("813ed5d4"), message);
+  assert.match(message, /organization \(\[redacted\]\)/);
+  for (const text of ["Rate limit reached for org-AbCdEf0123456789xyz on tokens per min.", "organization_id: 813ed5d4-1a2b-4c3d-8e9f-0123456789ab", "org id 813ed5d4-1a2b-4c3d-8e9f-0123456789ab"]) {
+    const scrubbed = scrubCliMessage(text);
+    assert.ok(!/org-AbCdEf|813ed5d4/.test(scrubbed), scrubbed);
+  }
+  // A session id that follows no organization word stays: it is the resume key, not an account field.
+  assert.ok(scrubCliMessage("session 8aadb5b0-b06a-4394-9b2f-f42614de8239 ended").includes("8aadb5b0-b06a-4394-9b2f-f42614de8239"));
+});
+
+test("a line over the cap is dropped unread, whether it arrives whole or in pieces", () => {
+  const huge = `{"type":"result","is_error":false,"structured_output":{"outcome":"done","summary":"${"x".repeat(CLI_STREAM_LINE_MAX_CHARS)}","checks":[]}}`;
+  const whole = CLI_WORKER_ADAPTERS["claude-code"].createStreamReader();
+  whole.push(`${huge}\n`);
+  assert.equal(whole.turnEnded, false);
+  const pieces = CLI_WORKER_ADAPTERS["claude-code"].createStreamReader();
+  for (let index = 0; index < huge.length; index += 1 << 20) pieces.push(huge.slice(index, index + (1 << 20)));
+  pieces.push('\n{"type":"result","is_error":true,"result":"after"}\n');
+  assert.equal(pieces.turnEnded, true, "the next line is read normally");
+  const after = pieces.read({ exitCode: 1, now: NOW });
+  assert.equal(after.outcome.type === "failure" && after.outcome.failure.message, "after");
 });
 
 test("an unknown failure message is transient, never a success", () => {
@@ -241,6 +343,10 @@ test("the Codex -o file counts only when non-empty and parsable", () => {
   }
   // A non-zero exit with a parsable file is not a result.
   assert.equal(outcome(good, 1).type, "failure");
+  // Nor is a parsable file whose run never completed its turn: a file an earlier attempt left behind.
+  const unfinished = stdout.split("\n").filter((line) => !line.includes('"turn.completed"')).join("\n");
+  const stale = read("codex-cli", { stdout: unfinished, exitCode: 0, outputFile: good, now: NOW }).outcome;
+  assert.deepEqual(stale.type === "failure" && [stale.failure.kind, stale.reason], ["transient", "no_result"]);
 });
 
 test("usage is read per CLI, and totalInputTokens counts cached input the same way", () => {
@@ -298,20 +404,29 @@ test("a stated reset: durations, timestamps, unix seconds and clock times; nothi
   assert.equal(at("Limit reached; resets at 2026-11-17T15:30:00Z"), 3.5 * 3_600_000);
   assert.equal(at("Claude AI usage limit reached|1763395200"), undefined, "a stated time in the past sets nothing");
   assert.equal(at("Claude AI usage limit reached|4102444800", HOUR_BEFORE_2100), 3_600_000);
-  // A clock time is the next such local time within a day: the CLI runs on this machine.
-  const local = new Date(NOW);
-  const expected = (hour: number, minute: number) => {
-    let time = new Date(local.getFullYear(), local.getMonth(), local.getDate(), hour, minute).getTime();
-    if (time <= NOW) time = new Date(local.getFullYear(), local.getMonth(), local.getDate() + 1, hour, minute).getTime();
-    return time - NOW;
-  };
-  assert.equal(at("You've hit your usage limit. Try again at 3:02 PM."), expected(15, 2));
-  assert.equal(at("try again at 9 am"), expected(9, 0));
-  assert.equal(at("or try again at Nov 20th, 2026 3:02 PM."), new Date(2026, 10, 20, 15, 2).getTime() - NOW);
-  // Nothing stated, in the past, too far away, or in a zone that is not this machine's: no reset.
+  // A clock time is the next such time in the machine's zone, within a day. NOW is 12:00 UTC on 17 November 2026:
+  // 07:00 in UTC-05:00 and 15:30 in UTC+03:30, so the same words give different, literal resets in each zone, and a
+  // reading in UTC (Date.UTC) fails both.
+  const west = fixedOffsetLocalClock(-300), east = fixedOffsetLocalClock(210);
+  const inZone = (text: string, clock: LocalClock) => statedResetFromText(text, NOW, clock)?.retryAfterMs;
+  const hm = (hours: number, minutes: number) => (hours * 60 + minutes) * 60_000;
+  assert.equal(inZone("You've hit your usage limit. Try again at 3:02 PM.", west), hm(8, 2), "15:02 today in UTC-5");
+  assert.equal(inZone("You've hit your usage limit. Try again at 3:02 PM.", east), hm(23, 32), "15:02 has passed in UTC+3:30: tomorrow");
+  assert.equal(inZone("try again at 9 am", west), hm(2, 0));
+  assert.equal(inZone("try again at 9 am", east), hm(17, 30));
+  assert.equal(inZone("or try again at Nov 20th, 2026 3:02 PM.", west), hm(80, 2));
+  assert.equal(inZone("or try again at Nov 20th, 2026 3:02 PM.", east), hm(71, 32));
+  // The run readers pass their clock through.
+  const codex = read("codex-cli", { stdout: '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. Try again at 3:02 PM."}}\n', exitCode: 1, outputFile: "", now: NOW, localClock: west });
+  assert.deepEqual(codex.outcome.type === "failure" && [codex.outcome.failure.kind, codex.outcome.failure.retryAfterMs], ["usage_limit", hm(8, 2)]);
+  // Nothing stated, in the past, too far away, in a zone that is not this machine's, or a number that is not a
+  // reset: no reset.
   for (const text of ["You've hit your usage limit.", "Please try again later.", "resets 7pm (Europe/London)",
     "Claude usage limit reached. Your limit will reset at 7pm (Europe/London).", "resets at 2020-01-01T00:00:00Z", "try again in 40 days",
-    "5-hour limit reached", "limit (5h) reached", '{"retryable":true}']) assert.equal(at(text), undefined, text);
+    "5-hour limit reached", "limit (5h) reached", '{"retryable":true}', "retry budget exhausted after 4h", "retry limit 3 in 5m window",
+    "the cap resets weekly; used 4h of it"]) assert.equal(at(text), undefined, text);
+  assert.equal(at("will fully refresh in 2h30m"), hm(2, 30));
+  assert.equal(at("Try again after 90 seconds"), 90_000);
 });
 
 test("agy's retryable is never read", () => {
@@ -341,6 +456,10 @@ test("agy /quota: groups and buckets only; an empty bucket for the chosen model 
   const failure = agyQuotaFailure(exhausted, now, "Claude Opus 5.5 (Low)");
   assert.deepEqual(failure && [failure.kind, failure.retryAfterMs], ["usage_limit", ((4 * 60 + 53) * 60 + 36) * 1000]);
   assert.equal(agyQuotaFailure(exhausted, now, "Gemini 3.8 Flash (High)"), undefined);
+  // An exact name, not a prefix, and a display name, not an id: these match no group, and no group alone is empty.
+  assert.equal(agyQuotaFailure(exhausted, now, "Claude Opus 5"), undefined);
+  assert.equal(agyQuotaFailure(exhausted, now, "claude-opus-5-5-low"), undefined);
+  assert.equal(agyQuotaFailure(exhausted, now, "claude opus 5.5")?.kind, "usage_limit");
   // The CLI default (no model): only when every group has an empty bucket.
   assert.equal(agyQuotaFailure(exhausted, now), undefined);
   assert.equal(parseAgyQuota("not json", now), undefined);
@@ -587,9 +706,18 @@ test("the result parser maps null to absent and bounds every field", () => {
   for (const bad of [
     {}, { outcome: "finished", summary: "s", checks: [] }, { outcome: "done", summary: "", checks: [] }, { outcome: "done", summary: "s" },
     { outcome: "needs_decision", summary: "s", question: null, checks: [] }, { outcome: "cannot_do", summary: "s", replanReason: " ", checks: [] },
-    { outcome: "done", summary: "s", checks: [{ label: "l", executable: "", args: [] }] }, { outcome: "done", summary: "s", checks: [{ label: "l", executable: "node", args: "--test" }] },
-    { outcome: "done", summary: "s", checks: [], concerns: [1] },
+    { outcome: "done", summary: "s", checks: "node --test" }, { outcome: "done", summary: "s", checks: [], concerns: [1] },
   ]) assert.equal(parseCliWorkerResult(bad).ok, false, JSON.stringify(bad));
+  // One check over a bound, or malformed, is dropped with a concern; the rest of the result stands.
+  const good = { label: "unit", executable: "node", args: ["--test"], cwd: null, outputs: null, criterionIds: ["AC-1"] };
+  const overBound = [
+    { ...good, outputs: [""] }, { ...good, args: Array.from({ length: 65 }, () => "a") },
+    { ...good, criterionIds: Array.from({ length: 33 }, (_, index) => `AC-${index}`) }, { ...good, executable: "" }, { ...good, args: "--test" },
+  ];
+  const kept = parseCliWorkerResult({ outcome: "done", summary: "s", question: null, replanReason: null, checks: [good, ...overBound], notRun: [], concerns: [] });
+  assert.ok(kept.ok);
+  assert.deepEqual(kept.result.checks, [{ label: "unit", executable: "node", args: ["--test"], criterionIds: ["AC-1"] }]);
+  assert.deepEqual(kept.result.concerns, [2, 3, 4, 5, 6].map((index) => `Check ${index} the CLI reported was dropped: it is malformed or over AIBoard's limits.`));
   assert.equal(parseCliWorkerResultText("").ok, false);
   assert.equal(parseCliWorkerResultText("\uFEFF{\"outcome\":\"done\",\"summary\":\"s\",\"checks\":[]}\r\n").ok, true);
 });
@@ -631,6 +759,11 @@ test("lookup: the home's path wins; on Windows only .exe and .cmd are launched",
   assert.deepEqual(await resolveCliExecutable({ providerId: "agy", lookup: lookupOf({ status: "found", path: "/usr/bin/agy" }), cwd: "/w", platform: "linux" }),
     { status: "found", path: "/usr/bin/agy", source: "path", form: "native" });
   assert.deepEqual(await resolveCliExecutable({ providerId: "agy", lookup: lookupOf({ status: "missing" }), cwd: "/w", platform: "linux" }), { status: "missing", source: "path" });
+  // VF2's lookup searches its own folder before PATH on Windows: a CLI found there (a claude.cmd committed at a
+  // repository's root, if a caller passed the worktree) is refused, never launched with the bypass flags.
+  const shadow = await resolveCliExecutable({ providerId: "claude-code", lookup: lookupOf({ status: "found", path: "C:\\Repo\\claude.cmd" }), cwd: "c:\\repo\\", platform: "win32" });
+  assert.equal(shadow.status, "refused");
+  assert.equal((await resolveCliExecutable({ providerId: "agy", lookup: lookupOf({ status: "found", path: "/w/agy" }), cwd: "/w", platform: "linux" })).status, "refused");
   assert.deepEqual(await resolveCliExecutable({ providerId: "agy", lookup: lookupOf({ status: "unknown", reason: "no PATH" }), cwd: "/w", platform: "linux" }), { status: "unknown", source: "path", reason: "no PATH" });
 
   const never: CheckToolLookup = async () => { throw new Error("the home's path is not looked up on PATH"); };
@@ -704,4 +837,37 @@ test("the fake CLIs replay a fixture from the CLI's argv and stdin", (t) => {
   assert.deepEqual(parseClaudeAuthStatus({ exitCode: login.status, stdout: login.stdout, stderr: login.stderr }), { status: "logged_out" });
   const wrong = runFake({ cli: "claude-code", expectArgs: ["-p"], stdout: cliFixture("claude-code/success.windows.stdout.json") }, ["-p", "--verbose"], "x", directory);
   assert.equal(wrong.status, 64);
+});
+
+test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the grandchild's pid, and worktree actions", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-fake-cli-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+
+  // Unexpected arguments exit 64 while stdin is still open: a test never hangs on it.
+  const scenarioPath = writeFakeCliScenario(directory, { cli: "claude-code", expectArgs: ["-p"], stdout: cliFixture("claude-code/success.windows.stdout.json") }, "open-stdin.json");
+  const child = spawn(process.execPath, [FAKE_CLI_SCRIPT, "-p", "--verbose"], { cwd: directory, env: { ...process.env, [FAKE_CLI_SCENARIO_ENV]: scenarioPath }, stdio: ["pipe", "ignore", "pipe"] });
+  const status = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+  child.stdin.destroy();
+  assert.equal(status, 64);
+
+  // A Codex run without -o writes no file named after its first argument.
+  const before = new Set(readdirSync(directory));
+  const noOutput = runFake({ cli: "codex-cli", stdout: cliFixture("codex-cli/success.windows.stdout.jsonl") }, ["exec", "--json", "-"], "x\n", directory);
+  assert.equal(noOutput.status, 0, noOutput.stderr);
+  assert.deepEqual(readdirSync(directory).filter((name) => !before.has(name) && name !== "fake-cli-scenario.json"), []);
+
+  // The grandchild's pid is recorded, so a later test can prove it stopped; actions write and commit in the cwd.
+  const repo = join(directory, "repo");
+  mkdirSync(repo);
+  for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "base"]]) {
+    assert.equal(spawnSync("git", args, { cwd: repo, encoding: "utf8" }).status, 0);
+  }
+  const acted = runFake({ cli: "agy", stdout: cliFixture("agy/success.windows.stdout.jsonl"), grandchildMs: 200, record: join(directory, "agy-run.json"),
+    actions: [{ write: "docs/project/plan.md", content: "edited by the CLI\n" }, { commit: "cli commit" }] },
+  buildAgyArgs({ mode: "worker", schemaPath: join(directory, "schema.json") }), buildCliWorkerStdin("agy", "Add mul."), repo);
+  assert.equal(acted.status, 0, acted.stderr);
+  const record = JSON.parse(readFileSync(join(directory, "agy-run.json"), "utf8")) as FakeCliRecord;
+  assert.ok(Number.isSafeInteger(record.grandchildPid) && record.grandchildPid! > 0);
+  assert.equal(readFileSync(join(repo, "docs", "project", "plan.md"), "utf8"), "edited by the CLI\n");
+  assert.equal(spawnSync("git", ["log", "-1", "--format=%s"], { cwd: repo, encoding: "utf8" }).stdout.trim(), "cli commit");
 });

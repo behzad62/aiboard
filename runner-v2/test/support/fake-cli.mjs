@@ -15,10 +15,20 @@
 //   "lineDelayMs": 0,                               // between stdout lines
 //   "holdMs": 0,                                    // stay up after the output, as Claude Code does for a background task
 //   "grandchildMs": 0,                              // start a child that lives this long (same process group, not detached)
-//   "record": "run.json"                            // written: { argv, stdin, cwd } before any output
+//   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" }],  // in the cwd, before output
+//   "record": "run.json"                            // written: { argv, stdin, cwd, grandchildPid? } before any output
 // }
-import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+//
+// Launching it: tests run [process.execPath, FAKE_CLI_SCRIPT, ...argv] (fake-cli.ts). That is the seam on Windows too:
+// the CLI lookup accepts only an .exe or a .cmd, and a .cmd can never carry Claude Code's inline schema (both Windows
+// launchers refuse a quote in a .cmd argument), so a test injects the node command where the resolved CLI path would
+// go instead of hiding the fake behind a .cmd shim.
+//
+// The run's order: argv is checked against expectArgs before stdin is read (a mismatch exits 64 at once, never waiting
+// on an open stdin); then stdin is read to EOF, Codex's -o file created empty, the grandchild started, the actions run,
+// the record written, and the output replayed.
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 const scenarioPath = process.env.AIBOARD_FAKE_CLI_SCENARIO;
@@ -43,21 +53,24 @@ if (response) {
 }
 
 async function run() {
-  const stdin = await readStdin();
-  if (scenario.record) writeFileSync(at(scenario.record), JSON.stringify({ argv, stdin, cwd: process.cwd() }, null, 2));
   if (scenario.expectArgs && !sameArgs(scenario.expectArgs, argv)) {
     process.stderr.write(`fake-cli: unexpected arguments ${JSON.stringify(argv)}\n`);
-    process.exitCode = 64;
-    return;
+    process.exit(64);
   }
-  if (scenario.cli === "agy" && !agyInputAccepted(stdin)) return;
-  const outputPath = scenario.cli === "codex-cli" ? argv[argv.indexOf("-o") + 1] : undefined;
+  const stdin = await readStdin();
+  const outputFlag = scenario.cli === "codex-cli" ? argv.indexOf("-o") : -1;
+  const outputPath = outputFlag >= 0 && argv[outputFlag + 1] ? argv[outputFlag + 1] : undefined;
   // Codex creates its -o file at once; it is still 0 bytes when the run fails or is killed (CW0).
   if (outputPath) writeFileSync(outputPath, "");
   let grandchild;
   if (scenario.grandchildMs > 0) {
     grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)})`], { stdio: "ignore" });
   }
+  for (const action of scenario.actions ?? []) act(action);
+  if (scenario.record) {
+    writeFileSync(at(scenario.record), JSON.stringify({ argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}) }, null, 2));
+  }
+  if (scenario.cli === "agy" && !agyInputAccepted(stdin)) return;
   const stdout = read(scenario.stdout).toString("utf8");
   for (const line of stdout.split(/(?<=\n)/)) {
     if (!line) continue;
@@ -69,6 +82,25 @@ async function run() {
   if (scenario.holdMs > 0) await sleep(scenario.holdMs);
   grandchild?.unref();
   process.exitCode = scenario.exitCode ?? 0;
+}
+
+// What a CLI may do in its worktree at Full access: write a file (docs/project/** included) or commit.
+function act(action) {
+  if (typeof action.write === "string") {
+    const target = resolve(process.cwd(), action.write);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, action.content ?? "");
+    return;
+  }
+  if (typeof action.commit === "string") {
+    const identity = ["-c", "user.name=Fake CLI", "-c", "user.email=fake-cli@example.invalid", "-c", "commit.gpgsign=false"];
+    for (const args of [["add", "-A"], [...identity, "commit", "-q", "-m", action.commit]]) {
+      const result = spawnSync("git", args, { cwd: process.cwd(), encoding: "utf8" });
+      if (result.status !== 0) throw new Error(`fake-cli: git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return;
+  }
+  throw new Error(`fake-cli: unknown action ${JSON.stringify(action)}`);
 }
 
 function sameArgs(expected, actual) {
