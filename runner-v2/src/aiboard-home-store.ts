@@ -23,14 +23,16 @@ import {
   CLI_WORKER_PROVIDER_IDS,
   isCliArgumentValue,
   isCliAttemptMinutes,
+  isCliVersion,
   isCliWorkerProviderId,
+  isIsoTimestamp,
+  scrubCliMessage,
   type CliWorkerProviderId,
   type HomeCliWorkersV1,
 } from "./cli-worker-config.js";
 import { openEncryptedJson } from "./encrypted-provider-config-store.js";
 import { migrateHomeConfigModelIds, snapshotProvider } from "./home-model-policy.js";
 import { acquireLockFile } from "./launcher-instance.js";
-import { redactSensitiveText } from "./sensitive-redaction.js";
 import { FileStorageKeyProvider } from "./storage-key.js";
 
 /**
@@ -934,14 +936,12 @@ function toolRuntimeValue(value: unknown, label: string): Record<string, unknown
 
 // ------------------------------------------------------------------ CLI workers (§3.3 of the CLI workers plan)
 
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARACTERS_BUT_LINES = /[\u0000-\u0008\u000b-\u001f\u007f]/;
 const CLI_ARGUMENT_RULE = "1 to 128 of A-Z a-z 0-9 . _ : / - (not starting with -)";
 
 function timestamp(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 64 || !Number.isFinite(Date.parse(value))) throw invalid(`${label} must be a timestamp.`);
+  if (!isIsoTimestamp(value)) throw invalid(`${label} must be an ISO time such as 2026-11-17T00:00:00.000Z.`);
   return value;
 }
 
@@ -975,8 +975,10 @@ function cliModels(value: unknown, label: string): Array<{ id: string | null; re
       id: cliModelId(entry.id, `${at}.id`),
       ...(entry.reasoningEffort !== undefined ? { reasoningEffort: cliEffort(entry.reasoningEffort, `${at}.reasoningEffort`) } : {}),
     };
-    const key = JSON.stringify([model.id, model.reasoningEffort ?? null]);
-    if (seen.has(key)) throw invalid(`${at} repeats a model and effort already in the list.`);
+    // One entry per model: the runtime id is <providerId>:<model or "default">, so a second effort of
+    // the same model would name the same runtime and one of them would be silently lost.
+    const key = model.id ?? ""; // ids are never empty, so "" is the CLI default
+    if (seen.has(key)) throw invalid(`${at} repeats a model already in the list; a model takes one effort.`);
     seen.add(key);
     return model;
   });
@@ -984,9 +986,7 @@ function cliModels(value: unknown, label: string): Array<{ id: string | null; re
 
 function cliLastTest(value: unknown, label: string): Record<string, unknown> {
   const entry = exactKeys(value, ["at", "cliVersion", "modelId", "outcome", "resetsAt", "message"], ["at", "cliVersion", "modelId", "outcome"], label);
-  if (typeof entry.cliVersion !== "string" || entry.cliVersion.length > 64 || CONTROL_CHARACTERS.test(entry.cliVersion)) {
-    throw invalid(`${label}.cliVersion must be a short single-line string.`);
-  }
+  if (!isCliVersion(entry.cliVersion)) throw invalid(`${label}.cliVersion must be a version such as 0.167.1.`);
   if (!(CLI_TEST_OUTCOMES as readonly unknown[]).includes(entry.outcome)) throw invalid(`${label}.outcome must be one of ${CLI_TEST_OUTCOMES.join(", ")}.`);
   const result: Record<string, unknown> = {
     at: timestamp(entry.at, `${label}.at`),
@@ -996,11 +996,12 @@ function cliLastTest(value: unknown, label: string): Record<string, unknown> {
   };
   if (entry.resetsAt !== undefined) result.resetsAt = timestamp(entry.resetsAt, `${label}.resetsAt`);
   if (entry.message !== undefined) {
-    if (typeof entry.message !== "string" || entry.message.length > CLI_TEST_MESSAGE_MAX || CONTROL_CHARACTERS_BUT_LINES.test(entry.message)) {
+    const message = typeof entry.message === "string" ? entry.message.replace(/\r\n?/g, "\n") : undefined;
+    if (message === undefined || message.length > CLI_TEST_MESSAGE_MAX || CONTROL_CHARACTERS_BUT_LINES.test(message)) {
       throw invalid(`${label}.message must be text of at most ${CLI_TEST_MESSAGE_MAX} characters.`);
     }
-    // Saved redacted whatever the writer sent: a CLI's message can quote a token.
-    result.message = redactSensitiveText(entry.message, CLI_TEST_MESSAGE_MAX);
+    // Saved scrubbed whatever the writer sent: a CLI's message can quote a token or the account's e-mail.
+    result.message = scrubCliMessage(message);
   }
   return result;
 }
@@ -1126,8 +1127,10 @@ function applyConfigOp(config: AiboardHomeConfigV1, section: Section, op: HomeOp
       const fields = validatedFields(op.value, CLI_WORKER_FIELD_VALIDATORS, label);
       // set: the named fields over the defaults; merge: over the entry as saved. Fields a newer writer added stay.
       const base = { enabled: false, models: [] as unknown[], ...(op.op === "merge" && existing ? pickFields(existing, CLI_WORKER_HOME_FIELDS) : {}) };
-      const next: Record<string, unknown> = { ...unknownFields(existing, CLI_WORKER_HOME_FIELDS), ...base, ...fields };
-      for (const key of CLI_WORKER_HOME_FIELDS) if (next[key] === null) delete next[key];
+      const known: Record<string, unknown> = { ...base, ...fields };
+      for (const key of CLI_WORKER_HOME_FIELDS) if (known[key] === null) delete known[key];
+      // The merged entry is checked whole, so a field saved by hand outside the rules never rides along.
+      const next: Record<string, unknown> = { ...unknownFields(existing, CLI_WORKER_HOME_FIELDS), ...validatedFields(known, CLI_WORKER_FIELD_VALIDATORS, label) };
       (workers as Record<string, unknown>)[section.id] = next;
       config.cliWorkers = workers;
       return;

@@ -2069,6 +2069,8 @@ function redactProviderConfig(config: RunnerProviderConfig) {
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     ...(config.protocol ? { protocol: config.protocol } : {}),
     ...(config.secretSource ? { secretSource: config.secretSource } : {}),
+    // Not a secret: a CLI worker's effort, held to the CLI argument charset.
+    ...(config.cli ? { cli: { ...config.cli } } : {}),
     configured: true,
   };
 }

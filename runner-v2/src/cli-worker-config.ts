@@ -5,8 +5,10 @@
  * files: AIBoard never stores, reads or forwards a CLI credential (OD-35), so neither the runtime config
  * nor the home's `cliWorkers` section has any field that could hold one.
  *
- * This module holds only the names, bounds and the argument charset; it reads and writes nothing.
+ * This module holds only the names, bounds, charsets and the message scrub; it reads and writes nothing.
  */
+
+import { redactSensitiveText } from "./sensitive-redaction.js";
 
 /** The CLIs a Build can use as workers. Health is per provider id, so one login cools every worker of it. */
 export const CLI_WORKER_PROVIDER_IDS = ["codex-cli", "claude-code", "agy"] as const;
@@ -46,6 +48,40 @@ export type CliTestOutcome = typeof CLI_TEST_OUTCOMES[number];
 
 /** At most this many characters of a test's (redacted) message are kept. */
 export const CLI_TEST_MESSAGE_MAX = 300;
+
+/** A CLI's version as the free checks record it: `0.167.1`, `2.1.325`, `1.5.6-beta.2`. */
+const CLI_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/;
+
+export function isCliVersion(value: unknown): value is string {
+  return typeof value === "string" && CLI_VERSION.test(value);
+}
+
+/** A time in exactly the form `Date.prototype.toISOString` writes, so prose can never pass as one. */
+export function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
+}
+
+/** Token shapes a CLI's error text can quote (as submission-guard.ts's), and e-mail addresses (account fields, §3.3). */
+const MESSAGE_SCRUBS: readonly RegExp[] = [
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g,
+  /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
+  /\bsk-(?:ant-|proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b/g,
+  /\bAIza[0-9A-Za-z_-]{30,}/g,
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
+];
+
+/**
+ * A test message as the home keeps it: line endings as `\n`, known token shapes and e-mail addresses
+ * replaced, then the Runner's general redaction, cut to CLI_TEST_MESSAGE_MAX characters.
+ */
+export function scrubCliMessage(value: string): string {
+  let text = value.replace(/\r\n?/g, "\n");
+  for (const pattern of MESSAGE_SCRUBS) text = text.replace(pattern, "[redacted]");
+  return redactSensitiveText(text, CLI_TEST_MESSAGE_MAX);
+}
 /** At most this many model choices per CLI. */
 export const CLI_WORKER_MODELS_MAX = 64;
 

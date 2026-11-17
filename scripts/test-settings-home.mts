@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { applyHomeBatch, readAiboardHome } from "../runner-v2/src/aiboard-home-store";
+import { applyHomeBatch, CLI_WORKER_HOME_FIELDS, readAiboardHome } from "../runner-v2/src/aiboard-home-store";
+import { CLI_WORKER_PROVIDER_IDS as RUNNER_CLI_WORKER_PROVIDER_IDS } from "../runner-v2/src/cli-worker-config";
 import type { AiboardHomeLocation } from "../runner-v2/src/aiboard-home-paths";
 
 import {
@@ -32,6 +33,9 @@ import type { StorageAdapter } from "../lib/client/storage-adapter";
 import {
   HomeSaveError,
   __resetHomeClientForTests,
+  applyOpsToView,
+  CLI_WORKER_ENTRY_FIELDS,
+  CLI_WORKER_PROVIDER_IDS,
   cliWorkerOps,
   getHomeState,
   homeSupportsCliWorkers,
@@ -438,6 +442,17 @@ try {
 
   // ------------------------------------------------------------ CLI workers (CLI workers plan §3.3, CW1)
   {
+    // The page's copies of the Runner's lists (web code never imports runner-v2/src).
+    assert.deepEqual([...CLI_WORKER_PROVIDER_IDS], [...RUNNER_CLI_WORKER_PROVIDER_IDS], "the page and the Runner name the same CLIs");
+    assert.deepEqual([...CLI_WORKER_ENTRY_FIELDS].sort(), [...CLI_WORKER_HOME_FIELDS].sort(), "the page and the Runner keep the same entry fields");
+    // The view shown before the Runner answers matches the Runner: set keeps a newer writer's field, null removes.
+    const before = { home: "h", revision: 1, credentials: null, config: { contractVersion: "aiboard.home.v1", revision: 1, pathRevisions: {}, updatedAt: NOW, providers: {}, openAIConnectionMode: "api" as const, customModels: [], settings: {},
+      cliWorkers: { agy: { enabled: true, models: [{ id: null }], maxMinutesPerAttempt: 30, futureField: "kept" } } } };
+    const afterSet = applyOpsToView(before, [{ path: "cliWorkers.agy", op: "set", value: { enabled: false } }]);
+    assert.deepEqual(afterSet.config.cliWorkers?.agy, { futureField: "kept", enabled: false, models: [] });
+    const afterMerge = applyOpsToView(before, [{ path: "cliWorkers.agy", op: "merge", value: { maxMinutesPerAttempt: null } }]);
+    assert.deepEqual(afterMerge.config.cliWorkers?.agy, { enabled: true, models: [{ id: null }], futureField: "kept" });
+
     freshPage();
     const runner = installHomeRunner();
     try {
@@ -528,7 +543,8 @@ try {
     assert.equal(scan(join(root, "lib/client/x.ts"), 'import { applyHomeMirror } from "./store";').length, 1);
     assert.equal(scan(join(root, "lib/client/home-client.ts"), 'import { applyHomeMirror } from "./store";').length, 0);
     for (const file of files) offenders.push(...scan(file, readFileSync(file, "utf8")));
-    // The cliWorkers section (CW1) has one writer too: home-client.ts builds its op paths.
+    // The cliWorkers section (CW1) has one writer too: home-client.ts builds its op paths. A heuristic,
+    // not a proof: it finds a quoted or template path literal, not a path assembled another way.
     const CLI_PATH = /["'`]cliWorkers\./;
     assert.ok(CLI_PATH.test('{ path: "cliWorkers.agy", op: "set" }') && CLI_PATH.test("path: `cliWorkers.${id}`"), "the scan catches a string and a template path");
     const cliPathWriters = files

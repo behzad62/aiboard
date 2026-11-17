@@ -432,6 +432,8 @@ test("a pushed cli config is stored as pushed; one with a secret, base URL, toke
     const stored = await fx.call("/v2/provider-configs", { method: "PUT", body: { configs: [CLI_CONFIG] } });
     assert.equal(stored.status, 200);
     assert.deepEqual(fx.configs.current, [CLI_CONFIG], "stored exactly as pushed: never resolved from the home, never given a key");
+    const listed = await fx.call("/v2/provider-configs");
+    assert.deepEqual((listed.body as unknown as Array<Record<string, unknown>>)[0]?.cli, { reasoningEffort: "high" }, "the list returns the CLI effort: it is not a secret");
 
     // A later push that names the home keeps the cli config: it takes no key from the home, so it is never re-resolved or dropped.
     await seedOpenAi(fx);

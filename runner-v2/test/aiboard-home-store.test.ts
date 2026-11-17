@@ -746,14 +746,16 @@ test("cliWorkers entries round-trip with set, merge and remove; null removes an 
   } finally { cleanup(fx); }
 });
 
-test("a writer that predates cliWorkers keeps it verbatim, and fields a newer writer added to an entry survive", async () => {
+test("writes to other sections keep cliWorkers verbatim, and fields a newer writer added to an entry survive", async () => {
   const fx = fixture();
   try {
     await write(fx, [{ path: "providers.openai", op: "set", value: provider() }], 0);
     const config = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
     config.cliWorkers = { "codex-cli": { ...cliEntry(), futureField: { nested: [1] } }, opencode: { enabled: true, futureOnly: "kept" } };
     writeFileSync(fx.location.configPath, JSON.stringify(config), { mode: 0o600 });
-    // Writes that touch other sections, as a writer from before CW1 makes them.
+    // Writes that touch other sections. This runs this Runner's code, not an older one: the claim that a
+    // writer from before CW1 keeps the section rests on its parseConfig and applyHomeBatch, which clone
+    // the whole config.json and never drop an unknown top-level field (the DX1 exec test above pins that).
     await write(fx, [{ path: "providers.openai", op: "merge", value: { enabled: false } }, { path: "settings.defaultMode", op: "set", value: "panel" }]);
     let after = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
     assert.deepEqual(after.cliWorkers, config.cliWorkers, "the section is kept as written, an entry this Runner does not know included");
@@ -793,6 +795,9 @@ test("cliWorkers refuses unknown CLIs, unknown fields, any secret, and values ou
       ["cliWorkers.agy", { models: [{ id: "gpt-test", extra: 1 }] }],
       ["cliWorkers.agy", { models: [{ reasoningEffort: "high" }] }],
       ["cliWorkers.agy", { models: [{ id: null }, { id: null }] }],
+      ["cliWorkers.agy", { models: [{ id: null, reasoningEffort: "high" }, { id: null, reasoningEffort: "low" }] }],
+      ["cliWorkers.agy", { models: [{ id: "gpt-test", reasoningEffort: "high" }, { id: "gpt-test", reasoningEffort: "low" }] }],
+      ["cliWorkers.agy", { models: [{ id: "gpt-test" }, { id: "gpt-test", reasoningEffort: "low" }] }],
       ["cliWorkers.agy", { models: Array.from({ length: 65 }, (_, index) => ({ id: `m${index}` })) }],
       ["cliWorkers.agy", { maxMinutesPerAttempt: 4 }],
       ["cliWorkers.agy", { maxMinutesPerAttempt: 241 }],
@@ -801,6 +806,13 @@ test("cliWorkers refuses unknown CLIs, unknown fields, any secret, and values ou
       ["cliWorkers.agy", { executablePath: "codex.exe" }],
       ["cliWorkers.agy", { executablePath: "/usr/bin/codex\n--flag" }],
       ["cliWorkers.agy", { consentedAt: "yesterday" }],
+      ["cliWorkers.agy", { consentedAt: "hello 2020" }],
+      ["cliWorkers.agy", { consentedAt: "2026-11-14 (sk-AbCdEfGhIjKlMnOpQrStUvWx)" }],
+      ["cliWorkers.agy", { consentedAt: "2026-11-17T00:00:00Z" }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, at: "hello 2020" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, resetsAt: "in 5 hours" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, cliVersion: "2.1.325 (Claude Code)" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, cliVersion: "user@example.test" } }],
       ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, outcome: "great" } }],
       ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, account: "user@example.test" } }],
       ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, modelId: "bad model" } }],
@@ -827,12 +839,44 @@ test("a CLI test message is saved redacted, and two clients editing different CL
     assert.ok(!saved.includes("stub-bearer-token-0123456789abcdef") && !saved.includes("stub-api-key-0123456789"), "the message is redacted before it is saved");
     const home = await readAiboardHome(fx.location);
     assert.match(String(home.config.cliWorkers?.["claude-code"]?.lastTest?.message), /^Error: /);
+    // Key shapes and the account's e-mail are scrubbed too, and CRLF is saved as LF instead of refusing the batch.
+    const canaries = ["sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCd", "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123", "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", "owner.name@example-mail.test"];
+    for (const canary of canaries) {
+      const revision = (await readAiboardHome(fx.location, { credentials: false })).revision;
+      await write(fx, [{ path: "cliWorkers.claude-code", op: "merge", value: { lastTest: { ...cliEntry().lastTest, message: `Refused:\r\n${canary}` } } }], revision);
+      const text = readFileSync(fx.location.configPath, "utf8");
+      assert.ok(!text.includes(canary), canary);
+      assert.match(String((await readAiboardHome(fx.location)).config.cliWorkers?.["claude-code"]?.lastTest?.message), /^Refused:\n/);
+    }
 
-    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: true } }], 1);
-    await write(fx, [{ path: "cliWorkers.codex-cli", op: "set", value: { enabled: true } }], 1);
-    const conflict = await rejectsWith(write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { enabled: false } }], 1), "home_conflict");
+    const base = (await readAiboardHome(fx.location, { credentials: false })).revision;
+    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: true } }], base);
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "set", value: { enabled: true } }], base);
+    const conflict = await rejectsWith(write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { enabled: false } }], base), "home_conflict");
     assert.deepEqual((conflict.details as HomeConflictDetails).sections, { "cliWorkers.agy": { enabled: true, models: [] } });
     const after = await readAiboardHome(fx.location);
     assert.deepEqual(Object.keys(after.config.cliWorkers ?? {}).sort(), ["agy", "claude-code", "codex-cli"]);
+  } finally { cleanup(fx); }
+});
+
+test("set keeps a CLI entry's unknown fields, and a merge re-checks the fields it keeps", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: true, models: [{ id: "gpt-test" }], maxMinutesPerAttempt: 30 } }], 0);
+    const config = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
+    config.cliWorkers.agy.futureField = { kept: true };
+    writeFileSync(fx.location.configPath, JSON.stringify(config), { mode: 0o600 });
+    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: false } }]);
+    let home = await readAiboardHome(fx.location);
+    assert.deepEqual(home.config.cliWorkers?.agy, { futureField: { kept: true }, enabled: false, models: [] }, "set replaces the known fields and keeps a newer writer's");
+
+    // A known field saved by hand outside the rules is not carried along by a merge that does not name it.
+    const edited = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
+    edited.cliWorkers.agy.models = [{ id: "gpt; rm -rf /" }];
+    writeFileSync(fx.location.configPath, JSON.stringify(edited), { mode: 0o600 });
+    await rejectsWith(write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { enabled: true } }]), "home_invalid_op");
+    await write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { enabled: true, models: [{ id: "gpt-test" }] } }]);
+    home = await readAiboardHome(fx.location);
+    assert.deepEqual(home.config.cliWorkers?.agy?.models, [{ id: "gpt-test" }], "naming the field replaces the bad value");
   } finally { cleanup(fx); }
 });

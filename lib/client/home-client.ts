@@ -93,6 +93,9 @@ export interface HomeCliWorkerEntry {
   [unknown: string]: unknown;
 }
 
+/** The fields of a CLI entry the home keeps (the Runner's CLI_WORKER_HOME_FIELDS; scripts/test-settings-home.mts pins them equal). */
+export const CLI_WORKER_ENTRY_FIELDS = ["enabled", "executablePath", "models", "maxMinutesPerAttempt", "consentedAt", "lastTest"] as const;
+
 /** The fields a CLI entry op may name; `null` removes an optional one. */
 export type HomeCliWorkerPatch = {
   enabled?: boolean;
@@ -433,9 +436,13 @@ export function applyOpsToView(view: HomeView, ops: readonly HomeOp[]): HomeView
       const workers: Partial<Record<CliWorkerProviderId, HomeCliWorkerEntry>> = { ...(config.cliWorkers ?? {}) };
       if (op.op === "remove" || op.value === null) delete workers[id];
       else {
-        const base = op.op === "merge" && workers[id] ? workers[id] : { enabled: false, models: [] };
+        // As the Runner: set replaces the known fields, merge keeps them; fields a newer writer added stay either way.
+        const existing = (workers[id] ?? {}) as Record<string, unknown>;
+        const known = CLI_WORKER_ENTRY_FIELDS as readonly string[];
+        const unknownKept = Object.fromEntries(Object.entries(existing).filter(([key]) => !known.includes(key)));
+        const base = op.op === "merge" ? { enabled: false, models: [], ...existing } : { ...unknownKept, enabled: false, models: [] };
         const entry = { ...base, ...(op.value as Record<string, unknown>) } as Record<string, unknown>;
-        for (const [key, value] of Object.entries(entry)) if (value === null) delete entry[key];
+        for (const [key, value] of Object.entries(entry)) if (value === null && known.includes(key)) delete entry[key];
         workers[id] = entry as HomeCliWorkerEntry;
       }
       config.cliWorkers = workers;
