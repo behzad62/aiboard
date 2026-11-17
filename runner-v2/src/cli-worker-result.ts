@@ -157,7 +157,9 @@ export function parseCliWorkerResult(value: unknown): CliWorkerResultParse {
   if (notRun === false) return { ok: false, reason: "The result's notRun is malformed." };
   const reported = optionalList(value.concerns, (entry) => typeof entry === "string" ? cut(entry, CLI_RESULT_LIMITS.concern) : undefined);
   if (reported === false) return { ok: false, reason: "The result's concerns are malformed." };
-  const allConcerns = [...(reported ?? []).slice(0, CLI_RESULT_LIMITS.concerns), ...concerns];
+  // At most CLI_RESULT_LIMITS.concerns in all; the parser's own notes about dropped checks (at most 14) keep their room.
+  const own = concerns.slice(0, CLI_RESULT_LIMITS.concerns);
+  const allConcerns = [...(reported ?? []).slice(0, CLI_RESULT_LIMITS.concerns - own.length), ...own];
   return {
     ok: true,
     result: {

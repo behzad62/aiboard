@@ -72,9 +72,11 @@ const MESSAGE_SCRUBS: readonly RegExp[] = [
   /\bAIza[0-9A-Za-z_-]{30,}/g,
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
   // Organization ids (§3.3: organization fields never reach events or the home): OpenAI's `org-…`, and a UUID that
-  // follows an organization word, as in Anthropic's "rate limit for your organization (813ed5d4-…)".
+  // follows an organization word, as in Anthropic's "rate limit for your organization (813ed5d4-…)", "organization
+  // ids: …", `"organizationUuid":"…"`, `orgId` or "organization 'Acme' (…)": the word, an optional id/uuid suffix,
+  // and an optional quoted name between it and the UUID.
   /\borg-[A-Za-z0-9]{8,}\b/g,
-  /(?<=\b(?:org|organi[sz]ation)(?:[ _-]?id)?\W{1,20})[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+  /(?<=\b(?:org|organi[sz]ation)s?(?:[ _-]?(?:ids?|uuids?))?\W{0,20}(?:(?:'[^'\n]{1,80}'|"[^"\n]{1,80}")\W{1,5})?)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
 ];
 
 /**

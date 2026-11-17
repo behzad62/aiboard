@@ -14,7 +14,8 @@
 //   "exitCode": 0,
 //   "lineDelayMs": 0,                               // between stdout lines
 //   "holdMs": 0,                                    // stay up after the output, as Claude Code does for a background task
-//   "grandchildMs": 0,                              // start a child that lives this long (same process group, not detached)
+//   "grandchildMs": 0,                              // start a child that lives this long
+//   "grandchildDetached": false,                    // see below: true for a "grandchild proven stopped" test
 //   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" }],  // in the cwd, before output
 //   "record": "run.json"                            // written: { argv, stdin, cwd, grandchildPid? } before any output
 // }
@@ -24,9 +25,16 @@
 // launchers refuse a quote in a .cmd argument), so a test injects the node command where the resolved CLI path would
 // go instead of hiding the fake behind a .cmd shim.
 //
+// The grandchild, for CW5: by default it is an ordinary child. On Windows libuv puts every child it spawns without
+// `detached` in a kill-on-close job of its own, so that grandchild dies with the fake and a "grandchild proven
+// stopped" test proves nothing there. With "grandchildDetached": true it is spawned detached: outside libuv's job (and,
+// on POSIX, in a new session), so it outlives the fake unless the Runner stops it. Under the Runner's Windows Job, which
+// allows no breakaway, it is still inside that Job; on POSIX it has left the process group, as a CLI's setsid commands
+// do (CW0), so a POSIX test of it shows what the Runner cannot prove stopped.
+//
 // The run's order: argv is checked against expectArgs before stdin is read (a mismatch exits 64 at once, never waiting
-// on an open stdin); then stdin is read to EOF, Codex's -o file created empty, the grandchild started, the actions run,
-// the record written, and the output replayed.
+// on an open stdin); then stdin is read to EOF and, for agy, refused as agy would before anything else; then Codex's
+// -o file is created empty, the grandchild started, the actions run, the record written, and the output replayed.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -58,19 +66,24 @@ async function run() {
     process.exit(64);
   }
   const stdin = await readStdin();
+  // agy refuses a bad stream message before it does anything else (CW0): no file, no child, no action.
+  if (scenario.cli === "agy" && !agyInputAccepted(stdin)) {
+    if (scenario.record) writeFileSync(at(scenario.record), JSON.stringify({ argv, stdin, cwd: process.cwd() }, null, 2));
+    return;
+  }
   const outputFlag = scenario.cli === "codex-cli" ? argv.indexOf("-o") : -1;
   const outputPath = outputFlag >= 0 && argv[outputFlag + 1] ? argv[outputFlag + 1] : undefined;
   // Codex creates its -o file at once; it is still 0 bytes when the run fails or is killed (CW0).
   if (outputPath) writeFileSync(outputPath, "");
   let grandchild;
   if (scenario.grandchildMs > 0) {
-    grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)})`], { stdio: "ignore" });
+    grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)})`],
+      { stdio: "ignore", detached: scenario.grandchildDetached === true });
   }
   for (const action of scenario.actions ?? []) act(action);
   if (scenario.record) {
     writeFileSync(at(scenario.record), JSON.stringify({ argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}) }, null, 2));
   }
-  if (scenario.cli === "agy" && !agyInputAccepted(stdin)) return;
   const stdout = read(scenario.stdout).toString("utf8");
   for (const line of stdout.split(/(?<=\n)/)) {
     if (!line) continue;

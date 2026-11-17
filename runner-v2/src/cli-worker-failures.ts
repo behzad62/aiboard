@@ -31,17 +31,19 @@ export interface StatedReset {
 
 /**
  * What must stand right before a status code for it to count: "status 401", "status code 403", "HTTP 403",
- * "HTTP/1.1 429", "API Error: 429". A bare number is never one: a stack frame "cli.js:401:17", "goroutine 403" or a
- * panic at "src/x.rs:429:9" in crash output is not an HTTP status.
+ * "HTTP/1.1 429", "API Error: 429", `"statusCode":429`, "request failed: 429", "received 429", "got 503". A bare
+ * number is never one: a stack frame "cli.js:401:17", "goroutine 403" or a panic at "src/x.rs:429:9" in crash output
+ * is not an HTTP status.
  */
-const HTTP_STATUS = String.raw`\b(?:status(?: code)?|http(?:\/\d(?:\.\d)?)?|error|code)\W{0,3}`;
+const HTTP_STATUS = String.raw`\b(?:status(?:[ _]?code)?|http(?:\/\d(?:\.\d)?)?|error|code|failed|returned|received|got)\W{0,3}`;
 
 const AUTHENTICATION: readonly RegExp[] = [
   /\bnot (?:logged|signed) in\b/i,
   /please run \/login/i,
   /\b(?:log|sign) ?in (?:again|required|expired)\b/i,
   /\bunauthori[sz]ed\b/i,
-  new RegExp(String.raw`${HTTP_STATUS}40[13]\b|\b403 forbidden\b`, "i"),
+  new RegExp(String.raw`${HTTP_STATUS}40[13]\b`, "i"),
+  /\bforbidden\b/i,
   /\bauthentication(?:[ _-](?:failed|error|required))\b/i,
   /\binvalid (?:api key|credentials|token|session)\b/i,
   /\b(?:token|session|login|credentials?) (?:has |have )?expired\b/i,

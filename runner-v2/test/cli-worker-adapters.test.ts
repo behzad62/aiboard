@@ -36,7 +36,7 @@ import {
 } from "../src/cli-worker-adapters.js";
 import { CLI_WORKER_PROVIDER_IDS, isCliArgumentValue, scrubCliMessage, type CliWorkerProviderId } from "../src/cli-worker-config.js";
 import { classifyCliFailureText, fixedOffsetLocalClock, statedResetFromText, type CliFailureKind, type LocalClock } from "../src/cli-worker-failures.js";
-import { CLI_WORKER_RESULT_SCHEMA, cliWorkerResultSchemaJson, parseCliWorkerResult, parseCliWorkerResultText } from "../src/cli-worker-result.js";
+import { CLI_RESULT_LIMITS, CLI_WORKER_RESULT_SCHEMA, cliWorkerResultSchemaJson, parseCliWorkerResult, parseCliWorkerResultText } from "../src/cli-worker-result.js";
 import { MODEL_CATALOG_SNAPSHOT } from "../src/generated/model-catalog.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
 import { CLI_FIXTURES, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, cliFixture, readCliFixture, writeFakeCliScenario, type FakeCliRecord } from "./support/fake-cli.js";
@@ -175,7 +175,9 @@ const RUNS: RunCase[] = [
     inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n{"type":"error","message":"Reconnecting... 1/5 (unexpected status 503 Service Unavailable, url: https://api.openai.com/v1/responses)"}\n`, outputFile: "" } },
   { name: "Codex cancelled: Turn interrupted", cli: "codex-cli", exitCode: 1, stoppedBy: "cancelled", expect: { type: "stopped", reason: "cancelled" },
     inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.started"}\n{"type":"turn.failed","error":{"message":"Turn interrupted"}}\n`, outputFile: "" } },
-  { name: "Codex at the deadline with a usage-limit turn.failed", cli: "codex-cli", exitCode: 1, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" },
+  // stoppedBy's contract: set only when the turn had not ended as the signal went out, so this turn.failed came while
+  // Codex was being stopped. A turn that ended first is read by itself (the contract test below).
+  { name: "Codex at the deadline, turn.failed printed while being stopped", cli: "codex-cli", exitCode: 1, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" },
     inline: { stdout: `${CODEX_THREAD}\n{"type":"turn.failed","error":{"message":"You've hit your usage limit."}}\n`, outputFile: "" } },
   { name: "Claude Code at the deadline: Request was aborted.", cli: "claude-code", exitCode: null, stoppedBy: "deadline", expect: { type: "stopped", reason: "deadline" },
     inline: { stdout: '{"type":"result","is_error":true,"result":"Request was aborted."}\n' } },
@@ -230,13 +232,15 @@ test("every case reads a fixture that exists, and every recorded and synthetic r
   // Fixture → case.
   const covered = new Set(RUNS.map((entry) => entry.base));
   const bases = new Set<string>();
-  for (const cli of CLI_WORKER_PROVIDER_IDS) {
-    for (const name of readdirSync(join(CLI_FIXTURES, cli))) {
+  for (const folder of CLI_WORKER_PROVIDER_IDS.flatMap((cli) => [cli, `${cli}/free`])) {
+    if (!existsSync(join(CLI_FIXTURES, folder))) continue;
+    for (const name of readdirSync(join(CLI_FIXTURES, folder))) {
       const match = /^(.+)\.(?:stdout\.jsonl?)$/.exec(name);
-      if (match) bases.add(`${cli}/${match[1]}`);
+      if (match) bases.add(`${folder}/${match[1]}`);
     }
   }
-  const unread = [...bases].filter((base) => !covered.has(base) && !RUNS.some((entry) => entry.base === base));
+  assert.ok(bases.has("claude-code/free/logged-out-streamjson.linux"), "the free/ folders are scanned");
+  const unread = [...bases].filter((base) => !covered.has(base));
   // background-escaped-run2 and background.linux repeat background-escaped's result shape; background-hang.linux and
   // success-before-signal.linux are read below.
   assert.deepEqual(unread.sort(), ["claude-code/background-hang.linux", "claude-code/success-before-signal.linux", "codex-cli/background-escaped-run2.windows", "codex-cli/background.linux"]);
@@ -246,6 +250,35 @@ test("every case reads a fixture that exists, and every recorded and synthetic r
     if (base === "claude-code/background-hang.linux") assert.equal(reading.outcome.type, "failure");
     else assert.equal(reading.outcome.type, "result", base);
   }
+});
+
+test("stoppedBy's contract: a failure the CLI delivered before the Runner's stop is read by itself", () => {
+  const limit = fixture("claude-code/usage-limit.synthetic.stdout.jsonl");
+  const resultAt = limit.indexOf('{"duration_api_ms"');
+  // Claude Code delivers its is_error usage-limit result; a background task keeps it up; then the deadline fires.
+  const ended = CLI_WORKER_ADAPTERS["claude-code"].createStreamReader();
+  ended.push(limit);
+  assert.equal(ended.turnEnded, true);
+  assert.equal(ended.noteRunnerStop("deadline"), false, "the turn had ended: the stop is not recorded");
+  const delivered = ended.read({ exitCode: null, now: HOUR_BEFORE_2100 });
+  assert.deepEqual(delivered.outcome.type === "failure" && [delivered.outcome.failure.kind, delivered.outcome.failure.retryAfterMs], ["usage_limit", 3_600_000]);
+  // The same bytes when the deadline went out mid-turn: the stop is recorded, and what followed reads as stopped.
+  const midTurn = CLI_WORKER_ADAPTERS["claude-code"].createStreamReader();
+  midTurn.push(limit.slice(0, resultAt));
+  assert.equal(midTurn.noteRunnerStop("deadline"), true);
+  midTurn.push(limit.slice(resultAt));
+  assert.deepEqual(midTurn.read({ exitCode: null, now: HOUR_BEFORE_2100 }).outcome, { type: "stopped", reason: "deadline" });
+  // A noted stop wins over the caller's field; a stop noted twice keeps the first reason.
+  const agy = CLI_WORKER_ADAPTERS.agy.createStreamReader();
+  agy.noteRunnerStop("cancelled");
+  agy.noteRunnerStop("deadline");
+  agy.push('{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"context canceled"}}\n');
+  assert.deepEqual(agy.read({ exitCode: 1, now: NOW }).outcome, { type: "stopped", reason: "cancelled" });
+  // A Codex turn that failed before the stop is the same: the caller following the contract passes no stoppedBy.
+  const codex = CLI_WORKER_ADAPTERS["codex-cli"].createStreamReader();
+  codex.push('{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit."}}\n');
+  assert.equal(codex.noteRunnerStop("deadline"), false);
+  assert.equal(codex.read({ exitCode: 1, outputFile: "", now: NOW }).outcome.type, "failure");
 });
 
 test("a status code counts only in HTTP context: crash output with 401, 403 or 429 in it is transient", () => {
@@ -264,6 +297,9 @@ test("a status code counts only in HTTP context: crash output with 401, 403 or 4
     ["unexpected status 401 Unauthorized", "authentication"], ["HTTP 403", "authentication"], ["status code 403", "authentication"],
     ["403 Forbidden", "authentication"], ["HTTP/1.1 429", "rate_limit"], ["API Error: 429 slow down", "rate_limit"],
     ["last status: 429 Too Many Requests", "rate_limit"], ["HTTP 502 from upstream", "provider_unavailable"],
+    ["Error: Forbidden", "authentication"], ["request forbidden by policy", "authentication"], ["received 429 from the API", "rate_limit"],
+    ["model request failed: 429", "rate_limit"], ['{"statusCode":429,"message":"slow down"}', "rate_limit"], ["upstream returned 401", "authentication"],
+    ["got 503 while streaming", "provider_unavailable"], ['{"status_code": 503}', "provider_unavailable"],
   ] as const) assert.equal(classifyCliFailureText(text), kind, text);
 });
 
@@ -274,7 +310,9 @@ test("organization ids never reach a failure message", () => {
   const message = reading.outcome.type === "failure" ? reading.outcome.failure.message : "";
   assert.ok(!message.includes("813ed5d4"), message);
   assert.match(message, /organization \(\[redacted\]\)/);
-  for (const text of ["Rate limit reached for org-AbCdEf0123456789xyz on tokens per min.", "organization_id: 813ed5d4-1a2b-4c3d-8e9f-0123456789ab", "org id 813ed5d4-1a2b-4c3d-8e9f-0123456789ab"]) {
+  for (const text of ["Rate limit reached for org-AbCdEf0123456789xyz on tokens per min.", "organization_id: 813ed5d4-1a2b-4c3d-8e9f-0123456789ab", "org id 813ed5d4-1a2b-4c3d-8e9f-0123456789ab",
+    "organization ids: 813ed5d4-1a2b-4c3d-8e9f-0123456789ab", '{"organizationUuid":"813ed5d4-1a2b-4c3d-8e9f-0123456789ab"}', '{"orgId":"813ed5d4-1a2b-4c3d-8e9f-0123456789ab"}',
+    "the organization 'Acme Labs' (813ed5d4-1a2b-4c3d-8e9f-0123456789ab) is over its limit", 'organization "Acme": 813ed5d4-1a2b-4c3d-8e9f-0123456789ab']) {
     const scrubbed = scrubCliMessage(text);
     assert.ok(!/org-AbCdEf|813ed5d4/.test(scrubbed), scrubbed);
   }
@@ -718,6 +756,14 @@ test("the result parser maps null to absent and bounds every field", () => {
   assert.ok(kept.ok);
   assert.deepEqual(kept.result.checks, [{ label: "unit", executable: "node", args: ["--test"], criterionIds: ["AC-1"] }]);
   assert.deepEqual(kept.result.concerns, [2, 3, 4, 5, 6].map((index) => `Check ${index} the CLI reported was dropped: it is malformed or over AIBoard's limits.`));
+  // Concerns stay within their limit in all, the parser's own notes kept: 32 reported plus 14 notes would be 46.
+  const crowded = parseCliWorkerResult({ outcome: "done", summary: "s", question: null, replanReason: null, notRun: [],
+    checks: [...Array.from({ length: 13 }, () => ({ ...good, args: "--test" })), ...Array.from({ length: 13 }, () => good)],
+    concerns: Array.from({ length: 32 }, (_, index) => `concern ${index}`) });
+  assert.ok(crowded.ok);
+  assert.equal(crowded.result.concerns!.length, CLI_RESULT_LIMITS.concerns);
+  assert.equal(crowded.result.checks.length, 12);
+  assert.deepEqual(crowded.result.concerns!.slice(-2), ["1 more checks were dropped.", "The CLI reported 13 checks; only the first 12 are kept."]);
   assert.equal(parseCliWorkerResultText("").ok, false);
   assert.equal(parseCliWorkerResultText("\uFEFF{\"outcome\":\"done\",\"summary\":\"s\",\"checks\":[]}\r\n").ok, true);
 });
@@ -792,10 +838,11 @@ test("facts for CW3 and CW4: the per-OS refusals of §3.11 and the root refusal 
   assert.equal(cliWorkerRootRefusal("agy"), undefined);
 });
 
-function runFake(scenario: Parameters<typeof writeFakeCliScenario>[1], args: string[], stdin: string, directory: string) {
+/** Runs the fake with its scenario written in `directory`, from `cwd` (the CLI's worktree; `directory` by default). */
+function runFake(scenario: Parameters<typeof writeFakeCliScenario>[1], args: string[], stdin: string, directory: string, cwd = directory) {
   const scenarioPath = writeFakeCliScenario(directory, scenario);
   return spawnSync(process.execPath, [FAKE_CLI_SCRIPT, ...args], {
-    input: stdin, cwd: directory, encoding: "utf8", env: { ...process.env, [FAKE_CLI_SCENARIO_ENV]: scenarioPath }, timeout: 30_000,
+    input: stdin, cwd, encoding: "utf8", env: { ...process.env, [FAKE_CLI_SCENARIO_ENV]: scenarioPath }, timeout: 30_000,
   });
 }
 
@@ -859,15 +906,43 @@ test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the gr
   // The grandchild's pid is recorded, so a later test can prove it stopped; actions write and commit in the cwd.
   const repo = join(directory, "repo");
   mkdirSync(repo);
-  for (const args of [["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "base"]]) {
-    assert.equal(spawnSync("git", args, { cwd: repo, encoding: "utf8" }).status, 0);
+  for (const args of [["init", "-q"], ["config", "commit.gpgsign", "false"], ["config", "user.name", "t"], ["config", "user.email", "t@example.invalid"],
+    ["commit", "-q", "--allow-empty", "-m", "base"]]) {
+    assert.equal(spawnSync("git", args, { cwd: repo, encoding: "utf8" }).status, 0, args.join(" "));
   }
-  const acted = runFake({ cli: "agy", stdout: cliFixture("agy/success.windows.stdout.jsonl"), grandchildMs: 200, record: join(directory, "agy-run.json"),
-    actions: [{ write: "docs/project/plan.md", content: "edited by the CLI\n" }, { commit: "cli commit" }] },
-  buildAgyArgs({ mode: "worker", schemaPath: join(directory, "schema.json") }), buildCliWorkerStdin("agy", "Add mul."), repo);
+  const agyArgs = buildAgyArgs({ mode: "worker", schemaPath: join(directory, "schema.json") });
+  const actions = [{ write: "docs/project/plan.md", content: "edited by the CLI\n" }, { commit: "cli commit" }];
+  // agy refuses a bad stream message before any action or child, as real agy does.
+  const refused = runFake({ cli: "agy", stdout: cliFixture("agy/success.windows.stdout.jsonl"), grandchildMs: 200, actions, record: join(directory, "refused-run.json") },
+    agyArgs, `${JSON.stringify({ type: "user", message: { content: "x" } })}\n`, directory, repo);
+  assert.equal(refused.status, 1);
+  assert.equal(existsSync(join(repo, "docs")), false);
+  assert.equal((JSON.parse(readFileSync(join(directory, "refused-run.json"), "utf8")) as FakeCliRecord).grandchildPid, undefined);
+  // The scenario file is written outside the repository, so the CLI's commit holds only what its actions changed.
+  const acted = runFake({ cli: "agy", stdout: cliFixture("agy/success.windows.stdout.jsonl"), grandchildMs: 200, record: join(directory, "agy-run.json"), actions },
+    agyArgs, buildCliWorkerStdin("agy", "Add mul."), directory, repo);
   assert.equal(acted.status, 0, acted.stderr);
   const record = JSON.parse(readFileSync(join(directory, "agy-run.json"), "utf8")) as FakeCliRecord;
   assert.ok(Number.isSafeInteger(record.grandchildPid) && record.grandchildPid! > 0);
+  assert.equal(record.cwd, repo);
   assert.equal(readFileSync(join(repo, "docs", "project", "plan.md"), "utf8"), "edited by the CLI\n");
   assert.equal(spawnSync("git", ["log", "-1", "--format=%s"], { cwd: repo, encoding: "utf8" }).stdout.trim(), "cli commit");
+  assert.deepEqual(spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim().split(/\r?\n/), ["docs/project/plan.md"]);
+});
+
+test("the fake CLI's detached grandchild outlives the fake, so a stop test can prove it stopped", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-fake-cli-"));
+  let pid: number | undefined;
+  t.after(() => {
+    if (pid) try { process.kill(pid); } catch { /* already gone */ }
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const run = runFake({ cli: "claude-code", stdout: cliFixture("claude-code/success.windows.stdout.json"), grandchildMs: 30_000, grandchildDetached: true, record: "detached-run.json" },
+    // Started outside the folder the test removes: on Windows a live process's working folder cannot be deleted.
+    ["-p"], "x", directory, tmpdir());
+  assert.equal(run.status, 0, run.stderr);
+  pid = (JSON.parse(readFileSync(join(directory, "detached-run.json"), "utf8")) as FakeCliRecord).grandchildPid;
+  assert.ok(pid && pid > 0);
+  // Signal 0 only asks whether the process exists: the fake has exited and its detached grandchild is still there.
+  assert.doesNotThrow(() => process.kill(pid!, 0));
 });

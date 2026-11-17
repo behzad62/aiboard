@@ -122,8 +122,10 @@ export interface CliExecutableLookupInput {
   /**
    * The folder the lookup runs from. On Windows VF2's lookup searches it before PATH, so it must be a Runner-owned
    * folder (the Runner's state folder), never a worktree or project folder: a `claude.cmd` or `codex.exe` committed
-   * at a repository's root would otherwise shadow the real CLI and run with the bypass flags. A CLI found in this
-   * folder itself is refused, whatever folder the caller passed.
+   * at a repository's root would otherwise shadow the real CLI and run with the bypass flags. Passing the state folder
+   * is the protection. As a backstop, a CLI found in this folder itself is refused; that catches the Windows
+   * first-folder search, not a relative PATH entry (`.` or `bin`), which resolves under this folder's subfolders on
+   * POSIX and Windows alike and which only a Runner-owned folder keeps harmless.
    */
   cwd: string;
   platform?: NodeJS.Platform;
@@ -608,9 +610,15 @@ export interface CliRunInput {
   /** Codex's `-o` file as read after exit; null or undefined when it could not be read. */
   outputFile?: string | Uint8Array | null;
   /**
-   * The Runner stopped the CLI: its attempt deadline, or the Build was cancelled. Then any reading other than a
-   * result is `stopped`, never a provider failure (§3.8): what the CLI printed while it was being stopped ("Request
+   * The Runner stopped the CLI mid-turn: its attempt deadline, or the Build was cancelled. Then any reading other than
+   * a result is `stopped`, never a provider failure (§3.8): what the CLI printed while it was being stopped ("Request
    * was aborted.", "Turn interrupted", a reconnect notice) says nothing about its provider.
+   *
+   * The contract: the caller sets it only when the reader's `turnEnded` was false at the moment the deadline or
+   * cancel signal was sent. A turn that had already ended carries the CLI's own outcome: a failure it delivered
+   * before the stop (Claude Code's `is_error` usage-limit result while a background task kept the process up) is read
+   * by itself, so its cooldown is set. A caller with the live stream reader calls `noteRunnerStop` when it sends the
+   * signal instead; that records the stop only while the turn has not ended, and wins over this field.
    */
   stoppedBy?: "deadline" | "cancelled";
   /** The time stated resets are measured from. */
@@ -645,6 +653,11 @@ export interface CliStreamReader {
   readonly turnEnded: boolean;
   readonly sessionId: string | undefined;
   /**
+   * The Runner is sending its deadline or cancel signal now. Recorded only while the turn has not ended (returns
+   * false, recording nothing, once it has), so a failure the CLI delivered first is still read as that failure.
+   */
+  noteRunnerStop(reason: "deadline" | "cancelled"): boolean;
+  /**
    * Classifies the run once the CLI exited, delivered its result, or was stopped. In this order: a result the CLI
    * delivered; the Runner's own stop; the CLI's decisive failure (Codex `turn.failed`, Claude Code's `is_error`
    * result, agy's `ERROR` result), read by itself; then, with none of those, a failure stderr names; else no result.
@@ -663,8 +676,21 @@ abstract class JsonLineReader implements CliStreamReader {
   private pendingLength = 0;
   /** The unfinished line is over the cap: its pieces are discarded until its newline. */
   private dropping = false;
+  /** The Runner's stop, recorded by noteRunnerStop while the turn had not ended. */
+  private runnerStop: "deadline" | "cancelled" | undefined;
   abstract readonly turnEnded: boolean;
   abstract readonly sessionId: string | undefined;
+
+  noteRunnerStop(reason: "deadline" | "cancelled"): boolean {
+    if (this.turnEnded) return false;
+    this.runnerStop ??= reason;
+    return true;
+  }
+
+  /** The stop to read the run as: the one noted on the live reader, else the caller's (CliRunInput.stoppedBy). */
+  protected runnerStopFor(input: Omit<CliRunInput, "stdout">): "deadline" | "cancelled" | undefined {
+    return this.runnerStop ?? input.stoppedBy;
+  }
 
   push(chunk: string): void {
     let start = 0;
@@ -775,7 +801,8 @@ class CodexStreamReader extends JsonLineReader {
       ? input.outputFile : Buffer.from(input.outputFile).toString("utf8");
     const parsed = completedRun && fileText.trim() ? parseCliWorkerResultText(fileText) : undefined;
     if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
-    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
+    const stoppedBy = this.runnerStopFor(input);
+    if (stoppedBy) return { ...base, outcome: { type: "stopped", reason: stoppedBy } };
     if (this.failedMessage !== undefined)
       return { ...base, outcome: failure(classifyCliFailureText(this.failedMessage), this.failedMessage, now, "cli_error", undefined, input.localClock) };
     if (parsed) return { ...base, outcome: failure("transient", `Codex's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
@@ -867,7 +894,8 @@ class ClaudeCodeStreamReader extends JsonLineReader {
         ? parseCliWorkerResult(result.structured_output) : parseCliWorkerResultText(text)
       : undefined;
     if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
-    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
+    const stoppedBy = this.runnerStopFor(input);
+    if (stoppedBy) return { ...base, outcome: { type: "stopped", reason: stoppedBy } };
     const rejected = [...this.windows.values()].filter((window) => window.status === "rejected");
     const rejectedReset = rejected
       .map((window) => statedResetFromUnixSeconds(window.resetSeconds, now))
@@ -948,7 +976,8 @@ class AgyStreamReader extends JsonLineReader {
         : parseCliWorkerResultText(typeof result.response === "string" ? result.response : "")
       : undefined;
     if (parsed?.ok) return { ...base, outcome: { type: "result", result: parsed.result } };
-    if (input.stoppedBy) return { ...base, outcome: { type: "stopped", reason: input.stoppedBy } };
+    const stoppedBy = this.runnerStopFor(input);
+    if (stoppedBy) return { ...base, outcome: { type: "stopped", reason: stoppedBy } };
     if (parsed) return { ...base, outcome: failure("transient", `agy's result could not be read: ${parsed.reason}`, now, "unreadable_result") };
     if (result) {
       const text = keep(typeof result.error === "string" && result.error.trim() ? result.error : stderr || "agy reported an error.");

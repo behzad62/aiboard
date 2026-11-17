@@ -29,6 +29,8 @@ export interface FakeCliScenario {
   lineDelayMs?: number;
   holdMs?: number;
   grandchildMs?: number;
+  /** Spawn the grandchild detached; on Windows the only form that outlives the fake (fake-cli.mjs says why). */
+  grandchildDetached?: boolean;
   actions?: Array<{ write: string; content?: string } | { commit: string }>;
   record?: string;
 }
