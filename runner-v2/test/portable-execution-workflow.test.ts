@@ -44,6 +44,9 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-config.test.ts",
   // CW2: the CLI worker adapters on the CW0 fixtures, with a few fake-CLI node runs (no real CLI, about 1 s).
   "runner-v2/test/cli-worker-adapters.test.ts",
+  // CW4: the CLI crew rules, the .cmd rules and the cli_workers.checked event, in memory with a temporary scheduler
+  // store (no process, about 1 s).
+  "runner-v2/test/cli-worker-crew.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

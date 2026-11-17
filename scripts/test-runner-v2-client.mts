@@ -185,6 +185,15 @@ assert.deepEqual(
   ["openai:sol"],
   "a reviewer-only selection falls back to the Architect as the worker, never the reviewer"
 );
+// CW4: a CLI worker is configured and works, but is never a verifier.
+assert.deepEqual(
+  selectNativeBuildRuntimes(["claude-code:default", "deepseek:flash", "agy:gemini-3-pro"], "openai:sol"),
+  {
+    configuredRuntimeIds: ["openai:sol", "claude-code:default", "deepseek:flash", "agy:gemini-3-pro"],
+    workerRuntimeIds: ["claude-code:default", "deepseek:flash", "agy:gemini-3-pro"],
+    verifierRuntimeIds: ["openai:sol", "deepseek:flash"],
+  }
+);
 assert.deepEqual(resolveNativeProviderTransport("openai"), {
   transport: "openai-compatible",
   baseUrl: "https://api.openai.com/v1",

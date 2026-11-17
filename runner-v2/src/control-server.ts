@@ -57,6 +57,7 @@ import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./proces
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
+import { CliCrewRuleError } from "./cli-worker-crew.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { applyHomeBatch, keyHint, readAiboardHome, type AiboardHomeSnapshot, type HomeOp } from "./aiboard-home-store.js";
@@ -2195,6 +2196,8 @@ function toHttpError(error: unknown): HttpError {
   if (error instanceof PushedConfigError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof AiboardHomeError) return new HttpError(HOME_ERROR_STATUS[error.code] ?? 422, error.code, homeErrorMessage(error));
   if (error instanceof LocalAgentsUnavailableError) return new HttpError(error.status, error.code, error.message);
+  // CW4: a Build start or crew change refused by a CLI crew rule, with its code and reason.
+  if (error instanceof CliCrewRuleError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {
     if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);

@@ -3031,3 +3031,43 @@ test("MCP ownership census excludes only durably released Git records", () => {
     passed = true;
   } finally { if (passed) rmSync(root, { recursive: true }); }
 });
+
+test("CW4 a Build whose crew breaks a CLI rule is refused by prepareSpec before anything of it is written", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw4-prepare-"));
+  const state = join(root, "state");
+  mkdirSync(state);
+  const cli = (providerId: string): RunnerProviderConfig => ({
+    runtimeId: `${providerId}:default`, providerId, modelId: "default", transport: "cli", secret: "",
+    capabilities: ["*"], priority: 2, billingBasis: "account_not_metered",
+  });
+  const factory = new NativeBuildFactory({
+    projectRoot: root,
+    stateDirectory: state,
+    providerConfigs: { load: () => [providerConfig(), cli("claude-code"), cli("codex-cli"), cli("agy")], save: () => undefined, close: () => undefined },
+    baselineFor: () => { throw new Error("prepareSpec reads no baseline"); },
+    cliWorkerHost: { platform: "win32", isRoot: false },
+  });
+  const listing = () => readdirSync(state, { recursive: true }).map(String).sort();
+  try {
+    const before = listing();
+    const cases: [Partial<ReturnType<typeof buildSpec>>, string][] = [
+      [{ architectRuntimeId: "claude-code:default" }, "cli_runtime_role_refused"],
+      [{ workerRuntimeIds: ["fixture:model"], verifierRuntimeIds: ["fixture:model", "agy:default"] }, "cli_runtime_role_refused"],
+      [{ workerRuntimeIds: ["fixture:model", "agy:default"], permissionProfile: "project" as never }, "cli_workers_require_full_access"],
+      [{ workerRuntimeIds: ["fixture:model", "agy:default"], permissionProfile: "guarded" as never }, "cli_workers_require_full_access"],
+      // On Windows, Codex CLI workers wait for CW0b's fix.
+      [{ workerRuntimeIds: ["fixture:model", "codex-cli:default"] }, "cli_worker_platform_refused"],
+    ];
+    for (const [crew, code] of cases) {
+      await assert.rejects(
+        factory.prepareSpec({ ...buildSpec("cw4_prepare"), ...crew }),
+        (error: Error & { code?: string; status?: number }) => error.name === "CliCrewRuleError" && error.code === code && error.status === 409,
+        code,
+      );
+    }
+    assert.deepEqual(listing(), before, "a refused Build writes nothing");
+  } finally {
+    await factory.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});

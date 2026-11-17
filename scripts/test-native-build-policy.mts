@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 
 import {
+  CLI_RUNTIME_ROLE_REFUSED,
+  CLI_WORKERS_REQUIRE_FULL_ACCESS,
   effectiveNativeBuildPolicy,
+  isCliRuntimeId,
+  nativeBuildCliCrewRefusal,
   MINIMUM_NATIVE_RUNNER_NODE_VERSION,
   NATIVE_RUNNER_NODE_LTS_LINES,
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
@@ -135,5 +139,25 @@ assert.equal(supportsNativeRunnerNodeVersion("23.0.0"), false);
 assert.equal(supportsNativeRunnerNodeVersion("25.0.0"), false);
 assert.equal(supportsNativeRunnerNodeVersion("26.0.0"), false);
 assert.equal(supportsNativeRunnerNodeVersion("invalid"), false);
+
+// CW4: CLI workers are workers only, and need Full access (CLI workers plan §3.12, §3.13).
+const cliCrew = {
+  architectRuntimeId: "openai:sol",
+  workerRuntimeIds: ["deepseek:flash", "claude-code:default"],
+  verifierRuntimeIds: ["openai:sol", "deepseek:flash"],
+  permissionProfile: "full" as const,
+};
+assert.equal(isCliRuntimeId("agy:default"), true);
+assert.equal(isCliRuntimeId("anthropic:claude-opus"), false);
+assert.equal(nativeBuildCliCrewRefusal(cliCrew), null);
+assert.equal(nativeBuildCliCrewRefusal({ ...cliCrew, permissionProfile: "project" })?.code, CLI_WORKERS_REQUIRE_FULL_ACCESS);
+assert.equal(nativeBuildCliCrewRefusal({ ...cliCrew, permissionProfile: "guarded" })?.code, CLI_WORKERS_REQUIRE_FULL_ACCESS);
+assert.equal(nativeBuildCliCrewRefusal({ ...cliCrew, workerRuntimeIds: ["deepseek:flash"], permissionProfile: "guarded" }), null, "an API-only crew keeps every access level");
+assert.deepEqual(
+  nativeBuildCliCrewRefusal({ ...cliCrew, reviewerRuntimeId: "agy:default" }),
+  { code: CLI_RUNTIME_ROLE_REFUSED, role: "reviewer", runtimeId: "agy:default", message: "agy:default is a CLI worker and cannot be the reviewer: CLI runtimes are workers only." },
+);
+assert.equal(nativeBuildCliCrewRefusal({ ...cliCrew, architectRuntimeId: "codex-cli:default" })?.role, "architect");
+assert.equal(nativeBuildCliCrewRefusal({ ...cliCrew, verifierRuntimeIds: ["openai:sol", "claude-code:default"] })?.role, "verifier");
 
 console.log("PASS native Build policy");

@@ -201,6 +201,7 @@ import {
   type EnvironmentInventory,
   type InventoryTrigger,
 } from "./verification-inventory.js";
+import type { CliWorkersChecked } from "./cli-worker-crew.js";
 
 export { MANDATORY_CHECK_TOOL_MISSING_PAUSE, PROJECT_VALIDATION_CONFIG_INVALID_PAUSE };
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
@@ -494,6 +495,16 @@ export interface BuildRuntimeOptions {
    * Absent, no inventory is recorded (focused tests and older embeddings).
    */
   environmentInventory?: (input: { trigger: InventoryTrigger }) => Promise<EnvironmentInventory>;
+  /**
+   * CW4: the free checks of the crew's CLI workers, run with the inventory: once before the first planning
+   * step and once after each resume. The step records what `check` returns as one `cli_workers.checked`
+   * event, then hands it to `recorded`, which marks a CLI that failed unhealthy in the run's provider health
+   * before any task is assigned. Absent when the crew has no CLI worker.
+   */
+  cliWorkers?: {
+    check(input: { trigger: InventoryTrigger }): Promise<CliWorkersChecked>;
+    recorded(checked: CliWorkersChecked, epoch: number): void;
+  };
   /**
    * VF7b: a fresh run records `run.browsing_configured` before its first plan
    * (it browses through the Playwright CLI and registers no `browser.*`), and
@@ -962,6 +973,9 @@ export class BuildRuntime {
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
   private readonly environmentInventory?: BuildRuntimeOptions["environmentInventory"];
+  private readonly cliWorkers?: BuildRuntimeOptions["cliWorkers"];
+  /** CW4: the resume sequence this instance last ran the CLI free checks for. */
+  private cliWorkersCheckAttempted?: number;
   private readonly browsing?: BuildRuntimeOptions["browsing"];
   /** VF1: the resume sequence this instance last tried to record an inventory for, so a refused record never re-probes every step. */
   private environmentInventoryAttempted?: number;
@@ -1039,6 +1053,7 @@ export class BuildRuntime {
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.environmentInventory = options.environmentInventory;
+    this.cliWorkers = options.cliWorkers;
     this.browsing = options.browsing;
     this.finalVerificationRuntimeSmoke = options.finalVerificationRuntimeSmoke;
     this.finalVerificationWithPlan = options.finalVerificationWithPlan;
@@ -1875,6 +1890,11 @@ export class BuildRuntime {
     // the last inventory's until the new one is recorded; the call below sets this epoch's.
     this.configureBrowsing(projection);
     if (projection.status === "running" && await this.recordEnvironmentInventoryIfDue(events)) {
+      events = this.store.readRun(this.runId);
+      projection = rebuildSchedulerProjection(events);
+    }
+    // CW4: the crew's CLI free checks, so a CLI that cannot work is unhealthy before any task is assigned.
+    if (projection.status === "running" && await this.recordCliWorkerChecksIfDue(events)) {
       events = this.store.readRun(this.runId);
       projection = rebuildSchedulerProjection(events);
     }
@@ -4535,6 +4555,43 @@ export class BuildRuntime {
     } catch {
       return false;
     }
+    return true;
+  }
+
+  /**
+   * CW4: records one `cli_workers.checked` per epoch (the run's start, then each `run.resumed`), then lets the
+   * factory mark each CLI that failed unhealthy. Checks that throw, or a record that is refused, are not retried
+   * by this instance and never fail or pause the step: an unchecked CLI is launched as before and fails over.
+   */
+  private async recordCliWorkerChecksIfDue(events: readonly SchedulerEvent[]): Promise<boolean> {
+    if (!this.cliWorkers || events.length === 0) return false;
+    let lastResume = 0;
+    let recorded = false;
+    for (const event of events) {
+      if (event.type === "run.resumed") {
+        lastResume = event.sequence;
+        recorded = false;
+      } else if (event.type === "cli_workers.checked") {
+        recorded = true;
+      }
+    }
+    if (recorded || this.cliWorkersCheckAttempted === lastResume) return false;
+    this.cliWorkersCheckAttempted = lastResume;
+    let checked: CliWorkersChecked;
+    try {
+      checked = await this.cliWorkers.check({ trigger: lastResume > 0 ? "resume" : "planning" });
+      this.store.append({
+        runId: this.runId,
+        type: "cli_workers.checked",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `cli-workers-checked:${lastResume}`,
+        payload: { ...checked },
+      });
+    } catch {
+      return false;
+    }
+    this.cliWorkers.recorded(checked, lastResume);
     return true;
   }
 

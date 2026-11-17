@@ -206,6 +206,15 @@ import {
   resolvedProviderBillingBasis,
 } from "./provider-config-store.js";
 import { ProviderHealthRegistry, type ProviderHealthState } from "./provider-health.js";
+import {
+  assertCliCrewRules,
+  checkCliWorkers,
+  cliRuntimeIds,
+  currentCliCrewHost,
+  type CliCrewHost,
+  type CliWorkerFreeChecks,
+} from "./cli-worker-crew.js";
+import type { ProcessHostSemanticFact } from "./process-host-semantic-probes.js";
 import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import { canonicalModelIdentity } from "./verifier-contracts.js";
@@ -411,6 +420,13 @@ export interface NativeBuildFactoryOptions {
    * POSIX browser check. The CLI turns it on; focused tests leave it off.
    */
   playwrightCli?: import("./playwright-cli.js").PlaywrightCliSessions;
+  /**
+   * CW4: CW3's free checks for the crew's CLI workers (cli-worker-crew.ts `CliWorkerFreeChecks`), run before
+   * planning and after each resume. Absent, a crew's CLIs are recorded as `unchecked`.
+   */
+  cliWorkerFreeChecks?: CliWorkerFreeChecks;
+  /** Test seam for the CLI crew rules: the OS, root, and the Windows batch-argv fact. Live callers leave it undefined. */
+  cliWorkerHost?: CliCrewHost & { windowsBatchArgv?: ProcessHostSemanticFact };
   /** Injected only by focused construction-order tests. */
   providerModelFactory?: (
     config: RunnerProviderConfig,
@@ -485,6 +501,8 @@ export class NativeBuildFactory {
   ): Promise<NativeBuildSpec> {
     if (this.closed) throw new Error("Native Build factory is closed.");
     validateProvisioningPrepareOptions(options);
+    // CW4: a crew that breaks a CLI rule is refused before anything of the Build is written.
+    assertCliCrewRules(this.options.providerConfigs.load(), spec, this.cliWorkerHost());
     let validated: ValidatedApprovedSource | undefined;
     if (options?.approvedSourceInput !== undefined) {
       if (spec.planningPolicy?.version !== 1) {
@@ -708,12 +726,14 @@ export class NativeBuildFactory {
     initializationStage = "runtime_configuration";
     const selected = selectRuntimeCandidates(
       this.options.providerConfigs.load(),
-      spec
+      spec,
+      this.cliWorkerHost(),
     );
     const selectedConfigs = selected.configs;
     assertEnforceableBuildBudget(spec, selectedConfigs);
     const candidates = selected.all;
     const workerCandidates = selected.workers;
+    const cliWorkerConfigs = selectedConfigs.filter((config) => config.transport === "cli" && spec.workerRuntimeIds.includes(config.runtimeId));
     const modelUsageRuntimes = selectedConfigs.map((config) =>
       configuredModelUsageRuntime(config, spec)
     );
@@ -1260,8 +1280,9 @@ export class NativeBuildFactory {
     initializationStage = "models";
     const providerModelFactory = this.options.providerModelFactory ?? createProviderModel;
     const userVisuals = new BuildUserMediaStore(join(this.options.stateDirectory, "user-input-media"));
+    // CW4: a CLI worker runs its own CLI and gets no AgentModel (§3.13); the driver's CLI branch (CW5) runs it.
     const models = new Map<string, AgentModel>(
-      selectedConfigs.map((config) => [
+      selectedConfigs.filter((config) => config.transport !== "cli").map((config) => [
         config.runtimeId,
         wrapModelWithBuildUserVisuals(
           withContextWindow(providerModelFactory(config, this.artifacts), config.contextWindowTokens ?? providerProtocolProfile(config.providerId)?.contextWindowTokens), userVisuals, spec.runId, config.inputCapabilities,
@@ -2331,6 +2352,51 @@ export class NativeBuildFactory {
             },
           }
         : {}),
+      ...(cliWorkerConfigs.length > 0
+        ? {
+            cliWorkers: {
+              check: async ({ trigger }: { trigger: "planning" | "resume" }) => {
+                const host = this.cliWorkerHost();
+                const windowsBatchArgv = host.platform !== "win32"
+                  ? undefined
+                  : this.options.cliWorkerHost
+                    ? this.options.cliWorkerHost.windowsBatchArgv
+                    : (this.options.executionHost?.windowsProcessFacts
+                      ? await this.options.executionHost.windowsProcessFacts()
+                      : await this.windowsProcessFactsPromise)?.windowsBatchArgv;
+                const runSegment = safeSegment(spec.runId);
+                const { checked } = await checkCliWorkers({
+                  trigger,
+                  workers: cliWorkerConfigs,
+                  ...(this.options.cliWorkerFreeChecks ? { freeChecks: this.options.cliWorkerFreeChecks } : {}),
+                  platform: host.platform,
+                  ...(windowsBatchArgv ? { windowsBatchArgv } : {}),
+                  // The folders a launch names (§3.5): a task worktree (WorkspaceManager) and the CLI state folder.
+                  launchFolders: {
+                    worktree: join(this.options.stateDirectory, "workspaces", runSegment, "task"),
+                    cliState: join(this.options.stateDirectory, "cli-workers", runSegment, "session"),
+                  },
+                });
+                return checked;
+              },
+              recorded: (checked: import("./cli-worker-crew.js").CliWorkersChecked, epoch: number) => {
+                for (const cli of checked.clis) {
+                  if (cli.status !== "unhealthy" || !cli.failureKind) continue;
+                  const state = health.recordFailure(cli.providerId, {
+                    kind: cli.failureKind,
+                    message: cli.reason ?? `${cli.providerId} failed a free check.`,
+                    ...(cli.retryAfterMs !== undefined ? { retryAfterMs: cli.retryAfterMs } : {}),
+                  });
+                  try {
+                    persistProviderHealth(schedulerStore, spec.runId, state, `cli-workers-checked:${epoch}`);
+                  } catch {
+                    // The in-memory cooldown holds for this runtime; the next epoch checks again.
+                  }
+                }
+              },
+            },
+          }
+        : {}),
       ...(this.options.environmentInventory
         ? {
             environmentInventory: async ({ trigger }) => {
@@ -2710,6 +2776,12 @@ export class NativeBuildFactory {
       }
       throw primary;
     }
+  }
+
+  /** CW4: the OS and root facts the CLI crew rules read; a test may set them. */
+  private cliWorkerHost(): CliCrewHost {
+    const host = this.options.cliWorkerHost;
+    return host ? { platform: host.platform, isRoot: host.isRoot } : currentCliCrewHost();
   }
 
   private capabilitiesConfig(): RunnerCapabilitiesConfig {
@@ -4199,7 +4271,8 @@ function selectConfigs(
 
 export function selectRuntimeCandidates(
   configs: readonly RunnerProviderConfig[],
-  spec: NativeBuildSpec
+  spec: NativeBuildSpec,
+  host: CliCrewHost = currentCliCrewHost(),
 ): {
   configs: RunnerProviderConfig[];
   all: AgentRuntimeCandidate[];
@@ -4207,7 +4280,11 @@ export function selectRuntimeCandidates(
   verifiers: AgentRuntimeCandidate[];
 } {
   const selected = selectConfigs(configs, spec);
-  const all = selected.map(toCandidate);
+  // CW4: a crew that breaks a CLI rule is refused here too, so a crew change and a recovered spec are checked.
+  // Every config, not only the selected ones: the reviewer is not a required runtime of its own.
+  assertCliCrewRules(configs, spec, host);
+  const cli = cliRuntimeIds(selected);
+  const all = selected.map((config) => cli.has(config.runtimeId) ? { ...toCandidate(config), workerOnly: true } : toCandidate(config));
   const workerIds = new Set(spec.workerRuntimeIds);
   const verifierIds = new Set(spec.verifierRuntimeIds);
   return {

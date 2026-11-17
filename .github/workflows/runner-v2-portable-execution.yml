@@ -127,6 +127,7 @@ jobs:
           runner-v2/test/remote-image-content.test.ts
           runner-v2/test/cli-worker-config.test.ts
           runner-v2/test/cli-worker-adapters.test.ts
+          runner-v2/test/cli-worker-crew.test.ts
       # FL2/FL3: the OS-lock core and the Runner's async claims on every host (about 15 s); its own step so the claim p95 it reports is not measured
       # under the parallel contract files above.
       - name: Run owned fence lock contracts

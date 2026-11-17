@@ -440,3 +440,46 @@ test("provider failures are classified from transport metadata before routing", 
   );
   assert.equal(classifyProviderFailure(new Error("socket reset")).kind, "transient");
 });
+
+test("CW4 a CLI worker (workerOnly) takes tasks but is never offered as Architect or chosen as verifier", () => {
+  const health = new ProviderHealthRegistry();
+  const cli: AgentRuntimeCandidate = {
+    runtimeId: "claude-code:default",
+    providerId: "claude-code",
+    modelId: "default",
+    capabilities: ["*"],
+    priority: 0,
+    workerOnly: true,
+  };
+  const router = new RuntimeRouter({ candidates: [cli, ...runtimes], health, preferredVerifierRuntimeId: cli.runtimeId });
+  // A worker like any other: the highest-priority healthy match.
+  assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, "claude-code:default");
+  // Never in an Architect handoff offer, and refused when named.
+  assert.deepEqual(
+    router.selectArchitectHandoff(["code"]).candidates.map((candidate) => candidate.runtimeId),
+    ["openai:gpt-code", "anthropic:claude-code"],
+  );
+  assert.throws(() => router.confirmArchitectHandoff("claude-code:default", ["code"]), /CLI worker and cannot be the Architect/);
+  // Never a verifier, even as the preferred Reviewer and listed as a candidate; its own change still counts
+  // as an author's, so the verifier is independent of it.
+  const verifier = router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["claude-code:default", "openai:gpt-code", "anthropic:claude-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: ["claude-code:default"],
+  });
+  assert.equal(verifier.runtime?.runtimeId, "anthropic:claude-code");
+  assert.equal(verifier.status === "assigned" && verifier.independence, "distinct_model");
+  assert.equal(
+    router.selectVerifier({
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["claude-code:default"],
+      architectRuntimeId: "openai:gpt-code",
+      acceptedChangeAuthorRuntimeIds: [],
+    }).status,
+    "unavailable",
+  );
+  // A cooled-down CLI is skipped like any worker.
+  router.recordFailure("claude-code:default", { kind: "authentication", message: "Claude Code is not logged in." });
+  assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, "openai:gpt-code");
+});

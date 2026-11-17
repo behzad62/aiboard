@@ -13,6 +13,11 @@ export interface AgentRuntimeCandidate {
   modelId: string;
   capabilities: string[];
   priority: number;
+  /**
+   * A CLI worker (CLI workers plan §3.13): chosen only by selectWorker. The Architect and verifier routers keep
+   * it as a candidate, so a change it authored still counts for verifier independence, but never select it.
+   */
+  workerOnly?: boolean;
 }
 
 export interface WorkerHandoffPackage {
@@ -198,7 +203,7 @@ export class RuntimeRouter {
     return {
       status: "user_selection_required",
       candidates: this.eligible(required)
-        .filter((candidate) => !excludedRuntimeIds.has(candidate.runtimeId))
+        .filter((candidate) => !candidate.workerOnly && !excludedRuntimeIds.has(candidate.runtimeId))
         .map(cloneCandidate),
       requiredCapabilities: required,
     };
@@ -230,6 +235,7 @@ export class RuntimeRouter {
     }
     const eligibleAllowed = this.eligible(required).filter(
       (candidate) =>
+        !candidate.workerOnly &&
         allowedRuntimeIds.has(candidate.runtimeId) &&
         !input.excludedRuntimeIds?.has(candidate.runtimeId),
     );
@@ -264,6 +270,9 @@ export class RuntimeRouter {
     requiredCapabilities: readonly string[]
   ): AgentRuntimeCandidate {
     const runtime = this.requireRuntime(runtimeId);
+    if (runtime.workerOnly) {
+      throw new Error(`Runtime ${runtimeId} is a CLI worker and cannot be the Architect.`);
+    }
     const required = unique(requiredCapabilities);
     if (!hasCapabilities(runtime, required)) {
       throw new Error(

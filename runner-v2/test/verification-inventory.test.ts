@@ -460,3 +460,95 @@ test("VF1 a factory-built run records the inventory of its checks in a disposabl
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
+
+test("CW4 a factory-built run checks its CLI workers before the Architect's first turn; a failed CLI is unhealthy and the Build goes on", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw4-factory-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const runId = "run_cw4_factory";
+  const model = new RecordingModel();
+  const modelsBuilt: string[] = [];
+  const requested: string[][] = [];
+  let factory: InstanceType<typeof NativeBuildFactory> | undefined;
+  let handle: Awaited<ReturnType<InstanceType<typeof NativeBuildFactory>["create"]>> | undefined;
+  try {
+    mkdirSync(project);
+    mkdirSync(state);
+    writeFileSync(join(project, "README.md"), "cw4\n");
+    const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+    const cli = (providerId: "claude-code" | "agy") => ({
+      runtimeId: `${providerId}:default`, providerId, modelId: "default", transport: "cli" as const, secret: "",
+      capabilities: ["*"], priority: 2, billingBasis: "account_not_metered" as const,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: project,
+      stateDirectory: state,
+      providerConfigs: {
+        load: () => [{
+          runtimeId: "fixture:model", providerId: "fixture", modelId: "model", transport: "openai-compatible",
+          baseUrl: "http://127.0.0.1:9", secret: "unused", capabilities: ["code"], priority: 1,
+        }, cli("claude-code"), cli("agy")],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      baselineFor: () => baseline.revision,
+      providerModelFactory: (config) => { modelsBuilt.push(config.runtimeId); return model; },
+      // A Windows host that refuses .cmd launches (GitHub's Windows image): Claude Code found as its npm shim.
+      cliWorkerHost: { platform: "win32", isRoot: false, windowsBatchArgv: "unavailable" },
+      cliWorkerFreeChecks: async ({ providerIds }) => {
+        requested.push([...providerIds]);
+        return [
+          { providerId: "claude-code", status: "ready", executable: { path: "C:\npm\claude.cmd", form: "cmd" }, version: "2.1.326" },
+          { providerId: "agy", status: "unhealthy", executable: { path: "C:\bin\agy.exe", form: "exe" }, failure: { kind: "authentication", message: "agy is not logged in." } },
+        ];
+      },
+    });
+    handle = await factory.create(await factory.prepareSpec({
+      version: 2 as const,
+      runId,
+      projectId: "cw4-project",
+      objective: "Check the CLI workers.",
+      architectRuntimeId: "fixture:model",
+      workerRuntimeIds: ["fixture:model", "claude-code:default", "agy:default"],
+      verifierRuntimeIds: ["fixture:model"],
+      alwaysRequireIndependentVerifier: false,
+      maxConcurrency: 3,
+      permissionProfile: "full" as const,
+      runPolicy: "finish" as const,
+      budgetLimits: {},
+      createdAt: "2026-11-18T00:00:00.000Z",
+      idempotencyKey: `cw4:${runId}`,
+    }));
+    assert.deepEqual(modelsBuilt, ["fixture:model"], "no AgentModel is built for a CLI runtime");
+    await handle.runtime.step().catch(() => undefined);
+    const events = handle.runtime.events();
+    const checked = events.find((event) => event.type === "cli_workers.checked");
+    assert.ok(checked, events.map((event) => event.type).join(", "));
+    assert.deepEqual(requested, [["claude-code", "agy"]]);
+    const clis = handle.runtime.projection().cliWorkersChecked!.clis;
+    assert.deepEqual(clis.map((entry) => [entry.providerId, entry.status, entry.failureKind]), [
+      ["claude-code", "unhealthy", "authentication"],
+      ["agy", "unhealthy", "authentication"],
+    ]);
+    assert.match(clis[0]!.reason ?? "", /this PC can't launch \.cmd CLIs/);
+    // Both are cooled down before any task is assigned, as durable health events after the record.
+    const health = events.filter((event) => event.type === "provider.health_changed" && event.idempotencyKey.includes("cli-workers-checked"));
+    assert.deepEqual(health.map((event) => (event.payload.state as { providerId: string }).providerId), ["claude-code", "agy"]);
+    assert.ok(health.every((event) => event.sequence > checked.sequence));
+    const firstArchitectEvent = events.find((event) => event.actor.role === "architect");
+    assert.ok(!firstArchitectEvent || health.every((event) => event.sequence < firstArchitectEvent.sequence), "recorded before the Architect acts");
+    const providerHealth = handle.runtime.projection().runtime.providerHealth;
+    assert.equal(providerHealth["claude-code"]?.status, "cooldown");
+    assert.equal(providerHealth["agy"]?.status, "cooldown");
+    // The Build goes on: the Architect plans with its API model.
+    assert.ok(model.requests.length > 0, "the Architect was called after the checks");
+    // A second step in the same epoch does not check again.
+    await handle.runtime.step().catch(() => undefined);
+    assert.equal(handle.runtime.events().filter((event) => event.type === "cli_workers.checked").length, 1);
+    assert.deepEqual(requested, [["claude-code", "agy"]]);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});

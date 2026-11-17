@@ -6,6 +6,13 @@ import {
   supportsNodeVersion,
 } from "@/runner-v2/src/node-version";
 export {
+  CLI_RUNTIME_ROLE_REFUSED,
+  CLI_WORKERS_REQUIRE_FULL_ACCESS,
+  isCliRuntimeId,
+  nativeBuildCliCrewRefusal,
+  type CliCrewPolicyRefusal,
+} from "@/runner-v2/src/cli-crew-policy";
+export {
   nativeBuildBudgetEnforceabilityError,
   type NativeBudgetRuntime,
   type NativeBudgetRuntimeCostBasis,
