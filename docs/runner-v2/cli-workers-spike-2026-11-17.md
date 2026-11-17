@@ -233,7 +233,8 @@ The Codex escapes:
   in its tree and found nothing alive after the stop. A machine-wide search by command line for the spike's server
   code and paths, the evening of 2026-11-17, found only Codex's run-2 server.
 - Consequence: on Windows the Job's `contained_workload` stop text ("The process and every process it started have
-  exited") is not true for a Codex worker. The plan's §3.11 treats escapes as a POSIX matter only.
+  exited") is not true for a Codex worker. Before this PR, the plan's §3.11 treated escapes as a POSIX matter only;
+  its amendment adds the Windows Job and refuses Codex on Windows until the escape is explained and fixed (CWD-10).
 
 ### 6.2 Linux (portable supervisor, process group)
 
@@ -304,7 +305,9 @@ unverified stop (`AgentCleanupUnverifiedError`); the harness recorded every star
   agy runs); three ran 3 at once (rounds B, E and F: one of each CLI); three ran 2 at once (A2: two agy runs; C: four
   runs two at a time; D: Claude Code and agy); four ran alone. So the real sample at 4 at once is one round of 4
   launches, and at 2 at once three rounds of 8 launches. **The 2- and 4-at-once figures rest mainly on the fake
-  load.**
+  load.** Of agy's 11 launches, 9 have fixtures. The other two, both under the harness, repeat a fixture's refusal
+  and are not committed: round A's second agy run (the `-p` argument error, exit 2) and round A3 (the missing `event`
+  refusal, exit 1). The Git Bash `/quota` accident ran outside the harness and is not among the 25.
 - The fake load is a Node program that reads stdin, runs a shell with `node --test`, `git status` and a CPU-bound
   child for 6 s (60 s for the stop-while-running rows, stopped at 5 s).
 - No Windows Job host record write failed (#221's replace retry). The waits that succeeded were not instrumented, so
@@ -314,8 +317,8 @@ unverified stop (`AgentCleanupUnverifiedError`); the harness recorded every star
 
 ## 9. What this means for the plan
 
-The owner's decisions of 2026-11-17 on items 3 and the POSIX refusal are in the plan amendment in the same pull
-request.
+The owner's decisions of 2026-11-17 on item 3 (CWD-10, Codex on Windows, and CWD-11, the POSIX refusal) are in the
+plan amendment in the same pull request.
 1. §3.5 agy row: replace the arguments with the stream-json form of §2.
 2. §3.5 Claude Code row: `--output-format stream-json --verbose`; the turn ends at the `result` event. That changes
    §3.5 step 4 (wait for the `result` event or the exit, not only the exit) and §3.11 case 2 (the CLI may still be

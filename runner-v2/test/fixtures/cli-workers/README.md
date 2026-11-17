@@ -39,13 +39,14 @@ so no checkout converts them.
 ## Scrubbing
 
 - Local paths are `<home>` (the user's home) and `<root>` (the spike's temporary folder); workspaces are
-  `<root>\w\<case id>`. Claude Code's dash-encoded project folder names are `<home-dashed>` and `<root-dashed>`, its
-  per-user temp hash and message pipe name are `<hash>`, and its `init.memory_paths` values are `<memory-path>`.
+  `<root>\w\<case id>`. Claude Code's `init.memory_paths` values (which held its dash-encoded project folder) are
+  `<memory-path>`, and its per-user temp hash and message pipe name are `<hash>` and `cc-msg-<hash>`.
 - Account fields are replaced: e-mail is `canary@example.test`, org and account ids are
   `00000000-0000-4000-8000-000000000000`, org name is `Canary Org`, Claude Code's `credential_expires_at` and
-  `loginExpiresAt` are `2099-01-01T00:00:00.000Z`, and the org/account segment of plugin paths is `<org>_<account>`.
+  `loginExpiresAt` are `2099-01-01T00:00:00.000Z`.
 - Request and message ids are placeholders: OpenAI `req_<id>`, Anthropic `req_<id>` and `msg_<id>`, and `cf-ray`.
-- Usage figures are synthetic: Claude Code's `rate_limit_event` (`utilization` 0.5, `resetsAt` 4102444800,
+- Usage figures are synthetic: Claude Code's `rate_limit_event` (`utilization` 0.8 for the windows at
+  `allowed_warning` past their 0.75 threshold and 0.2 for the `allowed` five-hour window, `resetsAt` 4102444800,
   `overageDisabledReason` `<reason>`) and agy's `/quota` (`remaining_fraction` 0.5, reset times 2099). The shapes are
   real.
 - Timestamps with the capturing machine's UTC offset are converted to UTC (`Z`).

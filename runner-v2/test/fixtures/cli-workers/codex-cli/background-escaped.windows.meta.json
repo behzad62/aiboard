@@ -34,8 +34,8 @@
     {
       "name": "node.exe",
       "pid": 66540,
-      "inAnyJob": null,
-      "inAnyJobNote": "not checked: this run predates the harness's IsProcessInJob check",
+      "inAnyJob": false,
+      "inAnyJobNote": "checked by hand (IsProcessInJob)",
       "verdict": "real survivor: Codex's Start-Process server, outside any Job (IsProcessInJob false, checked by hand 4 minutes after the stop); stopped by hand"
     },
     {
