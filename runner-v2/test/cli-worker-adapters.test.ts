@@ -934,17 +934,19 @@ test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the gr
 
 test("the fake CLI's detached grandchild outlives the fake, so a stop test can prove it stopped", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-fake-cli-"));
-  let pid: number | undefined;
+  // Set once the fake has recorded it, so the cleanup registered first can stop the grandchild.
+  const grandchild: { pid?: number } = {};
   t.after(() => {
-    if (pid) try { process.kill(pid); } catch { /* already gone */ }
+    if (grandchild.pid) try { process.kill(grandchild.pid); } catch { /* already gone */ }
     rmSync(directory, { recursive: true, force: true });
   });
   const run = runFake({ cli: "claude-code", stdout: cliFixture("claude-code/success.windows.stdout.json"), grandchildMs: 30_000, grandchildDetached: true, record: "detached-run.json" },
     // Started outside the folder the test removes: on Windows a live process's working folder cannot be deleted.
     ["-p"], "x", directory, tmpdir());
   assert.equal(run.status, 0, run.stderr);
-  pid = (JSON.parse(readFileSync(join(directory, "detached-run.json"), "utf8")) as FakeCliRecord).grandchildPid;
+  const pid = (JSON.parse(readFileSync(join(directory, "detached-run.json"), "utf8")) as FakeCliRecord).grandchildPid;
+  grandchild.pid = pid;
   assert.ok(pid && pid > 0);
   // Signal 0 only asks whether the process exists: the fake has exited and its detached grandchild is still there.
-  assert.doesNotThrow(() => process.kill(pid!, 0));
+  assert.doesNotThrow(() => process.kill(pid, 0));
 });
