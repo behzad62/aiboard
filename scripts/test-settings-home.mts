@@ -7,7 +7,7 @@
  * so the conflict rules are the real ones. Stub keys and a stub upstream only.
  */
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { applyHomeBatch, readAiboardHome } from "../runner-v2/src/aiboard-home-store";
@@ -32,7 +32,9 @@ import type { StorageAdapter } from "../lib/client/storage-adapter";
 import {
   HomeSaveError,
   __resetHomeClientForTests,
+  cliWorkerOps,
   getHomeState,
+  homeSupportsCliWorkers,
   loadHome,
   providerOps,
   saveHome,
@@ -434,6 +436,55 @@ try {
     pass("an encrypted store opens once with its passphrase and is saved plain only after the user confirms; a declined picked folder stays untouched");
   }
 
+  // ------------------------------------------------------------ CLI workers (CLI workers plan §3.3, CW1)
+  {
+    freshPage();
+    const runner = installHomeRunner();
+    try {
+      await loadHome();
+      assert.equal(homeSupportsCliWorkers(), true, "the Runner says its home has the cliWorkers section");
+      // Another writer (aiboard config, a newer page) saved a field this page does not know.
+      await otherTabWrites(runner.location, [{ path: "cliWorkers.codex-cli", op: "set", value: { enabled: false, models: [{ id: null }] } }]);
+      const onDisk = JSON.parse(readFileSync(runner.location.configPath, "utf8")) as Record<string, Record<string, Record<string, unknown>>>;
+      onDisk.cliWorkers!["codex-cli"]!.futureField = "kept";
+      writeFileSync(runner.location.configPath, JSON.stringify(onDisk), { mode: 0o600 });
+
+      await saveHome(() => cliWorkerOps("codex-cli", { enabled: true, models: [{ id: "gpt-test-codex", reasoningEffort: "high" }], maxMinutesPerAttempt: 120 }));
+      assert.deepEqual(runner.posts.at(-1)!.ops.map((op) => [op.path, op.op]), [["cliWorkers.codex-cli", "merge"]]);
+      let home = await readAiboardHome(runner.location, { credentials: false });
+      assert.deepEqual(home.config.cliWorkers?.["codex-cli"], {
+        futureField: "kept", enabled: true, models: [{ id: "gpt-test-codex", reasoningEffort: "high" }], maxMinutesPerAttempt: 120,
+      }, "the entry round-trips, and a field this page does not know is kept");
+      const shown = getHomeState();
+      assert.ok(shown.status === "ready" && shown.view.config.cliWorkers?.["codex-cli"]?.enabled === true, "the page shows the Runner's re-read");
+
+      // null removes an optional field; a refused value (outside the argument charset) changes nothing and reverts.
+      await saveHome(() => cliWorkerOps("codex-cli", { maxMinutesPerAttempt: null }));
+      home = await readAiboardHome(runner.location, { credentials: false });
+      assert.equal(home.config.cliWorkers?.["codex-cli"]?.maxMinutesPerAttempt, undefined, "the default (90 minutes) applies again");
+      const revision = home.revision;
+      const refused = await saveHome(() => cliWorkerOps("codex-cli", { models: [{ id: "gpt; rm -rf /" }] })).then(() => null, (error: unknown) => error);
+      assert.ok(refused instanceof HomeSaveError && refused.code === "home_invalid_op");
+      assert.equal((await readAiboardHome(runner.location, { credentials: false })).revision, revision, "nothing was written");
+      const reverted = getHomeState();
+      assert.ok(reverted.status === "ready" && reverted.view.config.cliWorkers?.["codex-cli"]?.models[0]?.id === "gpt-test-codex", "the shown change is reverted");
+      assert.throws(() => cliWorkerOps("opencode" as never, { enabled: true }), HomeSaveError);
+      assert.ok(!readFileSync(runner.location.configPath, "utf8").includes("secret"), "the section holds no secret");
+    } finally {
+      runner.restore();
+    }
+    // A Runner from before CW1 does not say it has the section.
+    freshPage();
+    const old = installHomeRunner({ cliWorkers: false });
+    try {
+      assert.equal((await loadHome()).status, "ready");
+      assert.equal(homeSupportsCliWorkers(), false);
+    } finally {
+      old.restore();
+    }
+    pass("cliWorkers entries round-trip through the home, a field this page does not know is kept, a charset violation is refused, and an older Runner does not offer the section");
+  }
+
   // ------------------------------------------------------------ only the home client writes settings fields
   {
     const root = process.cwd();
@@ -477,6 +528,13 @@ try {
     assert.equal(scan(join(root, "lib/client/x.ts"), 'import { applyHomeMirror } from "./store";').length, 1);
     assert.equal(scan(join(root, "lib/client/home-client.ts"), 'import { applyHomeMirror } from "./store";').length, 0);
     for (const file of files) offenders.push(...scan(file, readFileSync(file, "utf8")));
+    // The cliWorkers section (CW1) has one writer too: home-client.ts builds its op paths.
+    const CLI_PATH = /["'`]cliWorkers\./;
+    assert.ok(CLI_PATH.test('{ path: "cliWorkers.agy", op: "set" }') && CLI_PATH.test("path: `cliWorkers.${id}`"), "the scan catches a string and a template path");
+    const cliPathWriters = files
+      .map((file) => relative(root, file).replace(/\\/g, "/"))
+      .filter((rel) => rel !== "lib/client/home-client.ts" && CLI_PATH.test(readFileSync(join(root, rel), "utf8")));
+    assert.deepEqual(cliPathWriters, [], "only the home client builds a cliWorkers op path");
     assert.deepEqual(offenders, [], "no code outside the home client writes a settings field of the store");
     pass(`no code outside the home client writes a settings field of the store (${files.length} files scanned)`);
   }

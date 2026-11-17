@@ -21,8 +21,9 @@ import { HOME_SECRET_PLACEHOLDER, type ProviderConfigStore, type RunnerProviderC
  * removed with `aiboard keys remove`, or replaced, takes effect at once.
  *
  * Configs that take no key from the home pass through as pushed: account-peer configs (ChatGPT and
- * Copilot, whose peer address and token come from the launcher, OD-32) and a config that carries its
- * own secret (the web before HM4a, which a Runner with HM3 still meets, §13 "Release order").
+ * Copilot, whose peer address and token come from the launcher, OD-32), CLI workers (whose CLI signs in
+ * with its own login and is never reached through the model proxy, CLI workers plan §3.1), and a config
+ * that carries its own secret (the web before HM4a, which a Runner with HM3 still meets, §13 "Release order").
  */
 
 export class PushedConfigError extends Error {
@@ -34,7 +35,7 @@ export class PushedConfigError extends Error {
 
 /** Whether the Runner resolves this pushed config from the home. */
 export function takesKeyFromHome(config: RunnerProviderConfig): boolean {
-  if (config.transport === "account-runner") return false;
+  if (config.transport === "account-runner" || config.transport === "cli") return false;
   if (config.secretSource === "home") return true;
   return typeof config.secret !== "string" || config.secret === "";
 }

@@ -708,3 +708,131 @@ test("an unreadable config.json says to fix or remove that file, not to enter th
     assert.doesNotMatch(error.message, /keys reset/);
   } finally { cleanup(fx); }
 });
+
+// ------------------------------------------------------------------ cliWorkers (CLI workers plan §3.3, CW1)
+
+const cliEntry = () => ({
+  enabled: true,
+  executablePath: process.platform === "win32" ? "C:\\Tools\\codex.exe" : "/usr/local/bin/codex",
+  models: [{ id: null }, { id: "gpt-test-codex", reasoningEffort: "high" }],
+  maxMinutesPerAttempt: 120,
+  consentedAt: "2026-11-17T00:00:00.000Z",
+  lastTest: { at: "2026-11-17T00:01:00.000Z", cliVersion: "0.167.1", modelId: "gpt-test-codex", outcome: "usage_limit", resetsAt: "2026-11-17T05:00:00.000Z", message: "You have hit your usage limit." },
+});
+
+test("cliWorkers entries round-trip with set, merge and remove; null removes an optional field", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "set", value: cliEntry() }, { path: "cliWorkers.agy", op: "set", value: { enabled: false } }], 0);
+    let home = await readAiboardHome(fx.location);
+    assert.deepEqual(home.config.cliWorkers?.["codex-cli"], cliEntry());
+    assert.deepEqual(home.config.cliWorkers?.agy, { enabled: false, models: [] }, "set fills enabled and models; the attempt limit stays absent (90 minutes, CWD-6)");
+    assert.equal(home.config.pathRevisions["cliWorkers.codex-cli"], 1);
+
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "merge", value: { enabled: false, maxMinutesPerAttempt: null, lastTest: null } }]);
+    home = await readAiboardHome(fx.location);
+    const { maxMinutesPerAttempt: _limit, lastTest: _test, ...kept } = cliEntry();
+    assert.deepEqual(home.config.cliWorkers?.["codex-cli"], { ...kept, enabled: false }, "merge keeps the fields it does not name");
+
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "set", value: { enabled: true, models: [{ id: "gpt-test-codex" }] } }]);
+    home = await readAiboardHome(fx.location);
+    assert.deepEqual(home.config.cliWorkers?.["codex-cli"], { enabled: true, models: [{ id: "gpt-test-codex" }] }, "set replaces the entry");
+
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "remove" }, { path: "cliWorkers.claude-code", op: "set", value: null }]);
+    home = await readAiboardHome(fx.location);
+    assert.deepEqual(home.config.cliWorkers, { agy: { enabled: false, models: [] } });
+    for (const bound of [5, 240]) await write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { maxMinutesPerAttempt: bound } }]);
+    assert.equal((await readAiboardHome(fx.location)).config.cliWorkers?.agy?.maxMinutesPerAttempt, 240);
+  } finally { cleanup(fx); }
+});
+
+test("a writer that predates cliWorkers keeps it verbatim, and fields a newer writer added to an entry survive", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "providers.openai", op: "set", value: provider() }], 0);
+    const config = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
+    config.cliWorkers = { "codex-cli": { ...cliEntry(), futureField: { nested: [1] } }, opencode: { enabled: true, futureOnly: "kept" } };
+    writeFileSync(fx.location.configPath, JSON.stringify(config), { mode: 0o600 });
+    // Writes that touch other sections, as a writer from before CW1 makes them.
+    await write(fx, [{ path: "providers.openai", op: "merge", value: { enabled: false } }, { path: "settings.defaultMode", op: "set", value: "panel" }]);
+    let after = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
+    assert.deepEqual(after.cliWorkers, config.cliWorkers, "the section is kept as written, an entry this Runner does not know included");
+    // A merge into the entry keeps the newer writer's field.
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "merge", value: { enabled: false } }]);
+    after = JSON.parse(readFileSync(fx.location.configPath, "utf8"));
+    assert.deepEqual(after.cliWorkers["codex-cli"].futureField, { nested: [1] });
+    assert.equal(after.cliWorkers["codex-cli"].enabled, false);
+    assert.deepEqual(after.cliWorkers.opencode, { enabled: true, futureOnly: "kept" });
+    // A malformed section in a file of this version is refused; in a newer file it reads as absent.
+    after.cliWorkers = "not an object";
+    writeFileSync(fx.location.configPath, JSON.stringify(after), { mode: 0o600 });
+    await rejectsWith(readAiboardHome(fx.location), "home_unreadable");
+    after.contractVersion = "aiboard.home.v2";
+    writeFileSync(fx.location.configPath, JSON.stringify(after), { mode: 0o600 });
+    assert.equal((await readAiboardHome(fx.location)).config.cliWorkers, undefined);
+  } finally { cleanup(fx); }
+});
+
+test("cliWorkers refuses unknown CLIs, unknown fields, any secret, and values outside their bounds", async () => {
+  const fx = fixture();
+  try {
+    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: true } }], 0);
+    const refusals: Array<[string, unknown]> = [
+      ["cliWorkers.opencode", { enabled: true }],
+      ["cliWorkers.__proto__", { enabled: true }],
+      ["cliWorkers", { agy: { enabled: true } }],
+      ["cliWorkers.agy", { enabled: true, apiKey: "sk-stub-should-never-land-0001" }],
+      ["cliWorkers.agy", { enabled: true, secret: "stub-should-never-land-0002" }],
+      ["cliWorkers.agy", { enabled: true, token: "stub-should-never-land-0003" }],
+      ["cliWorkers.agy", { enabled: "yes" }],
+      ["cliWorkers.agy", { models: [{ id: "gpt test" }] }],
+      ["cliWorkers.agy", { models: [{ id: "--dangerously-bypass" }] }],
+      ["cliWorkers.agy", { models: [{ id: "a".repeat(129) }] }],
+      ["cliWorkers.agy", { models: [{ id: "default" }] }],
+      ["cliWorkers.agy", { models: [{ id: "gpt-test", reasoningEffort: "high; rm -rf /" }] }],
+      ["cliWorkers.agy", { models: [{ id: "gpt-test", extra: 1 }] }],
+      ["cliWorkers.agy", { models: [{ reasoningEffort: "high" }] }],
+      ["cliWorkers.agy", { models: [{ id: null }, { id: null }] }],
+      ["cliWorkers.agy", { models: Array.from({ length: 65 }, (_, index) => ({ id: `m${index}` })) }],
+      ["cliWorkers.agy", { maxMinutesPerAttempt: 4 }],
+      ["cliWorkers.agy", { maxMinutesPerAttempt: 241 }],
+      ["cliWorkers.agy", { maxMinutesPerAttempt: 90.5 }],
+      ["cliWorkers.agy", { maxMinutesPerAttempt: "90" }],
+      ["cliWorkers.agy", { executablePath: "codex.exe" }],
+      ["cliWorkers.agy", { executablePath: "/usr/bin/codex\n--flag" }],
+      ["cliWorkers.agy", { consentedAt: "yesterday" }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, outcome: "great" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, account: "user@example.test" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, modelId: "bad model" } }],
+      ["cliWorkers.agy", { lastTest: { ...cliEntry().lastTest, message: "x".repeat(301) } }],
+      ["cliWorkers.agy", { lastTest: { at: "2026-11-17T00:00:00.000Z", outcome: "passed" } }],
+    ];
+    const before = readFileSync(fx.location.configPath, "utf8");
+    for (const [path, value] of refusals) {
+      await rejectsWith(write(fx, [{ path, op: "merge", value }]), "home_invalid_op");
+      await rejectsWith(write(fx, [{ path, op: "set", value }]), "home_invalid_op");
+    }
+    await rejectsWith(write(fx, [{ path: "credentials.cliWorkers.agy", op: "set", value: { secret: SECRET_A } }]), "home_invalid_op");
+    assert.equal(readFileSync(fx.location.configPath, "utf8"), before, "nothing was written");
+    assert.ok(!existsSync(fx.location.credentialsPath), "no credential was saved for a CLI");
+  } finally { cleanup(fx); }
+});
+
+test("a CLI test message is saved redacted, and two clients editing different CLIs both land while the same CLI conflicts", async () => {
+  const fx = fixture();
+  try {
+    const leaked = "Error: Authorization: Bearer stub-bearer-token-0123456789abcdef api_key=stub-api-key-0123456789";
+    await write(fx, [{ path: "cliWorkers.claude-code", op: "set", value: { enabled: true, lastTest: { ...cliEntry().lastTest, message: leaked } } }], 0);
+    const saved = readFileSync(fx.location.configPath, "utf8");
+    assert.ok(!saved.includes("stub-bearer-token-0123456789abcdef") && !saved.includes("stub-api-key-0123456789"), "the message is redacted before it is saved");
+    const home = await readAiboardHome(fx.location);
+    assert.match(String(home.config.cliWorkers?.["claude-code"]?.lastTest?.message), /^Error: /);
+
+    await write(fx, [{ path: "cliWorkers.agy", op: "set", value: { enabled: true } }], 1);
+    await write(fx, [{ path: "cliWorkers.codex-cli", op: "set", value: { enabled: true } }], 1);
+    const conflict = await rejectsWith(write(fx, [{ path: "cliWorkers.agy", op: "merge", value: { enabled: false } }], 1), "home_conflict");
+    assert.deepEqual((conflict.details as HomeConflictDetails).sections, { "cliWorkers.agy": { enabled: true, models: [] } });
+    const after = await readAiboardHome(fx.location);
+    assert.deepEqual(Object.keys(after.config.cliWorkers ?? {}).sort(), ["agy", "claude-code", "codex-cli"]);
+  } finally { cleanup(fx); }
+});

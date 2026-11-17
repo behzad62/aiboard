@@ -66,6 +66,43 @@ export interface HomeCustomModelEntry {
   [field: string]: unknown;
 }
 
+/** The CLIs a Build can use as workers (CLI workers plan §3.1); runner-v2/src/cli-worker-config.ts has the same list. */
+export const CLI_WORKER_PROVIDER_IDS = ["codex-cli", "claude-code", "agy"] as const;
+export type CliWorkerProviderId = typeof CLI_WORKER_PROVIDER_IDS[number];
+
+/**
+ * One CLI's entry under `cliWorkers` (§3.3). A CLI keeps its own login, so there is no key or token
+ * here, and the Runner refuses any field it does not name.
+ */
+export interface HomeCliWorkerEntry {
+  enabled: boolean;
+  executablePath?: string;
+  /** `id: null` is the CLI's own default. */
+  models: { id: string | null; reasoningEffort?: string }[];
+  /** 5–240 minutes; the Runner uses 90 when absent (CWD-6). */
+  maxMinutesPerAttempt?: number;
+  consentedAt?: string;
+  lastTest?: {
+    at: string;
+    cliVersion: string;
+    modelId: string | null;
+    outcome: "passed" | "not_installed" | "not_logged_in" | "usage_limit" | "model_unavailable" | "timed_out" | "unreadable_result";
+    resetsAt?: string;
+    message?: string;
+  };
+  [unknown: string]: unknown;
+}
+
+/** The fields a CLI entry op may name; `null` removes an optional one. */
+export type HomeCliWorkerPatch = {
+  enabled?: boolean;
+  executablePath?: string | null;
+  models?: HomeCliWorkerEntry["models"];
+  maxMinutesPerAttempt?: number | null;
+  consentedAt?: string | null;
+  lastTest?: HomeCliWorkerEntry["lastTest"] | null;
+};
+
 export interface HomeConfig {
   contractVersion: string;
   revision: number;
@@ -75,6 +112,7 @@ export interface HomeConfig {
   openAIConnectionMode: "api" | "subscription";
   customModels: HomeCustomModelEntry[];
   settings: Record<string, unknown>;
+  cliWorkers?: Partial<Record<CliWorkerProviderId, HomeCliWorkerEntry>>;
   [unknown: string]: unknown;
 }
 
@@ -100,6 +138,8 @@ export interface HomeView {
   } | null;
   keysError?: { code: string; message: string };
   catalogVersion?: string;
+  /** What the Runner's home can hold beyond the HM sections; absent on a Runner from before CW1. */
+  capabilities?: { cliWorkers?: boolean };
 }
 
 /** The map-valued settings whose single entries are their own sections (§5.8 "Ops"). */
@@ -388,6 +428,17 @@ export function applyOpsToView(view: HomeView, ops: readonly HomeOp[]): HomeView
       }
     } else if (op.path === "openAIConnectionMode") {
       config.openAIConnectionMode = op.op === "remove" ? "api" : (op.value as "api" | "subscription");
+    } else if ((rest = pathAfter(op.path, "cliWorkers.")) !== undefined) {
+      const id = rest as CliWorkerProviderId;
+      const workers: Partial<Record<CliWorkerProviderId, HomeCliWorkerEntry>> = { ...(config.cliWorkers ?? {}) };
+      if (op.op === "remove" || op.value === null) delete workers[id];
+      else {
+        const base = op.op === "merge" && workers[id] ? workers[id] : { enabled: false, models: [] };
+        const entry = { ...base, ...(op.value as Record<string, unknown>) } as Record<string, unknown>;
+        for (const [key, value] of Object.entries(entry)) if (value === null) delete entry[key];
+        workers[id] = entry as HomeCliWorkerEntry;
+      }
+      config.cliWorkers = workers;
     } else if ((rest = pathAfter(op.path, "settings.")) !== undefined) {
       const map = HOME_SETTINGS_MAP_FIELDS.find((field) => rest!.startsWith(`${field}.`));
       if (map) {
@@ -583,6 +634,22 @@ export function providerOps(providerId: string, patch: HomeProviderPatch, secret
     ops.push({ path: `credentials.providers.${providerId}`, op: "set", value: { secret: secret.trim() } });
   }
   return ops;
+}
+
+/** Whether the connected Runner's home has the `cliWorkers` section (CW1); an older Runner refuses its paths. */
+export function homeSupportsCliWorkers(): boolean {
+  return state.status === "ready" && state.view.capabilities?.cliWorkers === true;
+}
+
+/**
+ * One CLI worker's entry, merged so fields this writer does not name keep their value. The only way the
+ * page writes the `cliWorkers` section: a CLI's login stays in the CLI's own files, so no key goes here.
+ */
+export function cliWorkerOps(providerId: CliWorkerProviderId, patch: HomeCliWorkerPatch): HomeOp[] {
+  if (!(CLI_WORKER_PROVIDER_IDS as readonly string[]).includes(providerId)) {
+    throw new HomeSaveError("home_invalid_op", `${providerId} is not a CLI worker.`);
+  }
+  return Object.keys(patch).length > 0 ? [{ path: `cliWorkers.${providerId}`, op: "merge", value: structuredClone(patch) }] : [];
 }
 
 /** The fields of a CustomModel the home keeps; never its key. */

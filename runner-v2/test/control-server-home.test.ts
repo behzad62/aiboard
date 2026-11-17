@@ -415,3 +415,55 @@ test("the cached home reader reuses a snapshot only while the home's files are u
     await fx.close();
   }
 });
+
+// ------------------------------------------------------------------ CLI workers (CLI workers plan §3.1, §3.3, CW1)
+
+const CLI_CONFIG = { runtimeId: "codex-cli:gpt-test-codex", providerId: "codex-cli", modelId: "gpt-test-codex", transport: "cli", secret: "", capabilities: ["code"], priority: 3, cli: { reasoningEffort: "high" } };
+
+test("a pushed cli config is stored as pushed; one with a secret, base URL, token or secret source is refused and nothing is stored", async () => {
+  const fx = await fixture();
+  try {
+    for (const extra of [{ secret: CANARY }, { baseUrl: `http://127.0.0.1:${fx.upstream.port}/v1` }, { runnerToken: "runner-token-stub" }, { secretSource: "home" }, { cli: { reasoningEffort: "high; rm -rf /" } }, { modelId: "gpt test", runtimeId: "codex-cli:gpt test" }]) {
+      const refused = await fx.call("/v2/provider-configs", { method: "PUT", body: { configs: [{ ...CLI_CONFIG, ...extra }] } });
+      assert.equal(refused.status, 400, JSON.stringify(extra));
+      assert.equal(refused.body.code, "invalid_provider_config");
+      assert.deepEqual(fx.configs.current, [], "nothing is stored");
+    }
+    const stored = await fx.call("/v2/provider-configs", { method: "PUT", body: { configs: [CLI_CONFIG] } });
+    assert.equal(stored.status, 200);
+    assert.deepEqual(fx.configs.current, [CLI_CONFIG], "stored exactly as pushed: never resolved from the home, never given a key");
+
+    // A later push that names the home keeps the cli config: it takes no key from the home, so it is never re-resolved or dropped.
+    await seedOpenAi(fx);
+    const later = await fx.call("/v2/provider-configs", { method: "PUT", body: { configs: [{ runtimeId: "openai:gpt-5", providerId: "openai", modelId: "gpt-5", transport: "openai-compatible", capabilities: ["*"], priority: 0 }] } });
+    assert.equal(later.status, 200);
+    assert.deepEqual(fx.configs.current.find((config) => config.runtimeId === CLI_CONFIG.runtimeId), CLI_CONFIG);
+    assert.equal(fx.configs.current.find((config) => config.runtimeId === "openai:gpt-5")?.secretSource, "home");
+    assert.equal(fx.upstream.hits, 0, "a cli config is never sent anywhere");
+  } finally {
+    await fx.close();
+  }
+});
+
+test("GET /v2/home says the home has the cliWorkers section, and its entries are saved through batches with no secret", async () => {
+  const fx = await fixture();
+  try {
+    const view = await fx.call("/v2/home");
+    assert.deepEqual(view.body.capabilities, { cliWorkers: true });
+    const saved = await fx.call("/v2/home", { method: "POST", body: { baseRevision: view.body.revision, ops: [
+      { path: "cliWorkers.claude-code", op: "set", value: { enabled: true, models: [{ id: null }, { id: "sonnet", reasoningEffort: "high" }], maxMinutesPerAttempt: 45 } },
+    ] } });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(saved.body.touched, ["cliWorkers.claude-code"]);
+    const after = await fx.call("/v2/home");
+    assert.deepEqual((after.body.config as { cliWorkers: unknown }).cliWorkers, { "claude-code": { enabled: true, models: [{ id: null }, { id: "sonnet", reasoningEffort: "high" }], maxMinutesPerAttempt: 45 } });
+    const refused = await fx.call("/v2/home", { method: "POST", body: { baseRevision: after.body.revision, ops: [
+      { path: "cliWorkers.claude-code", op: "merge", value: { authToken: CANARY } },
+    ] } });
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.code, "home_invalid_op");
+    for (const text of fx.responses) assert.equal(text.includes(CANARY), false, "a refused secret is never echoed");
+  } finally {
+    await fx.close();
+  }
+});
