@@ -147,21 +147,21 @@ test("authorized stop cleanup budget reaches every production joiner and physica
   const harness = readFileSync(join(runnerRoot, "test", "support", "real-streaming-harness.ts"), "utf8");
   assert.match(harness, /AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS/);
 });
-test("CW5a: only the managed transport may report a launch never started, and only for a refusal before openStreaming", () => {
-  const constructors = sourceCodeFiles(sourceRoot)
-    .filter((path) => /new ManagedLaunchNeverStartedError\(/.test(readFileSync(path, "utf8")))
-    .map((path) => relative(runnerRoot, path).replaceAll("\\", "/"));
-  assert.deepEqual(constructors, ["src/execution-host-managed-transport.ts"]);
+test("CW5a: the managed transport refuses a batch launch before any streaming launch state, after the abort check", () => {
   const transport = readFileSync(join(sourceRoot, "execution-host-managed-transport.ts"), "utf8");
-  const check = transport.indexOf("assertWindowsBatchLaunchAvailable(executable.path");
+  const abort = transport.indexOf("if (signal.aborted) throw cancelled();");
+  const check = transport.indexOf('if (executable && requiredLifecycleScope === "process_group" && options.windowsBatchArgv !== undefined)');
+  const assertion = transport.indexOf("assertWindowsBatchLaunchAvailable(executable.path, options.windowsBatchArgv)");
   const open = transport.indexOf("await run.openStreaming(");
-  assert.ok(check > 0 && open > check, "the batch refusal precedes every streaming launch effect");
-  assert.equal((transport.match(/refusedBeforeOpen = refusal;/g) ?? []).length, 1);
-  assert.match(transport, /primary === refusedBeforeOpen && primary instanceof WindowsBatchLaunchUnavailableError[\s\S]{0,240}!recordOf\(request\.identity\) && !run\.streamingState\.readHostLaunch\(launchId\(request\.identity\.processId\)\)\)\s*throw new ManagedLaunchNeverStartedError/);
+  assert.ok(abort > 0 && check > abort, "a cancelled or expired start reports that before the batch refusal");
+  assert.ok(assertion > check && open > assertion, "the batch refusal precedes every streaming launch effect");
+  assert.equal((transport.match(/assertWindowsBatchLaunchAvailable\(/g) ?? []).length, 1);
+  // Only a record already saved stopped with pid 0, with no session and no unreleased host launch, is answered from the record.
+  assert.match(transport, /const neverStarted = \(target: ManagedProcessTarget\): boolean => \{\s*if \(target\.status !== "stopped" \|\| target\.pid !== 0 \|\| recordOf\(target\)\) return false;\s*const launch = run\.streamingState\.readHostLaunch\(launchId\(target\.processId\)\);\s*return !launch \|\| launch\.state === "released";/);
+  assert.doesNotMatch(transport, /ManagedLaunchNeverStartedError/);
   const service = readFileSync(join(sourceRoot, "managed-process.ts"), "utf8");
   const start = service.slice(service.indexOf("  async start("), service.indexOf("  async poll("));
-  assert.ok(start.indexOf("primary instanceof ManagedLaunchNeverStartedError") > 0 &&
-    start.indexOf("primary instanceof ManagedLaunchNeverStartedError") < start.indexOf("this.stopExact("), "only a proven never-started launch skips the exact stop");
+  assert.match(start, /catch \(primary\) \{\s*try \{ await this\.stopExact\(/, "every failed start runs the exact stop");
   assert.match(start, /AggregateError\(\[primary, cleanup\], "Managed failed start retains unverified exact cleanup\."\)/);
 });
 test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway", () => {

@@ -11,7 +11,7 @@ import { readOutputLines, searchOutput } from "./managed-process-search.js";
 import { MANAGED_OUTPUT_FINAL_SPILL_BYTES, MANAGED_OUTPUT_LIVE_TAIL_BYTES, decodeOutputCursor, encodeOutputCursor, hasNewOutput, normalizeOutputRead, sliceOutput, streamsFor, type ManagedOutputCursorBinding, type ManagedOutputReadRequest, type ManagedOutputReadResult, type ManagedOutputSlice, type ManagedOutputStreamName } from "./managed-process-output.js";
 import { historicalSnapshot, readHistoricalManagedProcessRecord } from "./managed-process-history.js";
 import { MAX_MANAGED_OUTPUT_BYTES, managedIdentity, managedProcessId, managedSnapshot, parseManagedSessionRecord, persistManagedSessionRecord, readManagedRecordValue, type ManagedSessionRecord } from "./managed-process-record.js";
-import { ManagedLaunchNeverStartedError, type ManagedProcessOwner, type ManagedProcessRunRuntime } from "./managed-process-transport.js";
+import type { ManagedProcessOwner, ManagedProcessRunRuntime } from "./managed-process-transport.js";
 export * from "./managed-process-contracts.js";
 export type { ManagedOutputReadRequest, ManagedOutputReadResult } from "./managed-process-output.js";
 export { readHistoricalManagedProcessObservations } from "./managed-process-history.js";
@@ -182,11 +182,6 @@ export class ManagedProcessService {
         if (exact.signal?.aborted || this.closing) throw cancelled("start");
         return managedSnapshot(this.records.get(processId)!);
       } catch (primary) {
-        // CW5a: the runtime proved nothing of this launch exists, so there is nothing to stop.
-        if (primary instanceof ManagedLaunchNeverStartedError) {
-          this.save({ ...this.records.get(processId)!, status: "stopped", updatedAt: this.clock() });
-          throw primary.refusal;
-        }
         try { await this.stopExact(this.records.get(processId)!, runtime); }
         catch (cleanup) { throw new AggregateError([primary, cleanup], "Managed failed start retains unverified exact cleanup."); }
         throw primary;
