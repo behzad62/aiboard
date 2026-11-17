@@ -1,0 +1,1 @@
+error: Weekly quota exhausted for Gemini Models. Resets in 162h13m35s.

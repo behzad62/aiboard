@@ -58,10 +58,42 @@ so no checkout converts them.
 - Session, thread and conversation ids, tool-use ids and task ids are real; they identify a toy session, not an
   account.
 
+## Synthetic fixtures (CW2, 2026-11-17)
+
+**Files with `.synthetic.` in their name were written by hand, not captured.** No CLI produced them. CW2 wrote
+them to pin the rows of the plan's §3.8 that no real output covers: a usage limit, a 429, a 5xx or overload, and agy
+logged out. Each has a `meta.json` with `"synthetic": true` and `modelledOn`, which names the recorded fixture or
+the owner's log its shape comes from and says which words are invented. The free-check ones are described in
+`agy/free/synthetic.meta.json`.
+
+| File | Modelled on | Invented |
+|---|---|---|
+| `codex-cli/usage-limit.synthetic.*` | the owner's logs ("You've hit your usage limit", exit 1); the event shape of `model-unavailable.windows`; the 0-byte `-o` file of every failed CW0 run | the event layout around the logged prose |
+| `codex-cli/usage-limit-stated-reset.synthetic.*` | the above | the appended "try again in 3 hours 12 minutes" |
+| `codex-cli/rate-limit.synthetic.*` | `logged-out.linux` (reconnect notices, then `turn.failed`) | 429 in place of 401, and the whole `turn.failed` wording "exceeded retry limit, last status: 429 Too Many Requests…" |
+| `codex-cli/server-error.synthetic.*` | `logged-out.linux`'s `turn.failed` message | 503 Service Unavailable and "upstream connect error" in place of 401 |
+| `claude-code/usage-limit.synthetic.*` | `free/logged-out-streamjson.linux` (init, an assistant event with `error`, an `is_error` result) and the `rate_limit_event` of `background-streamjson.windows` | `status: "rejected"`, the message text |
+| `claude-code/usage-limit-result-only.synthetic.*` | `logged-out.linux` (json mode) | the older "usage limit reached\|<unix seconds>" text |
+| `claude-code/rate-limit.synthetic.*`, `claude-code/overloaded.synthetic.*` | `model-unavailable.windows` (`api_error_status`, `api_error_type`) | 429 `rate_limit_error`, 529 `overloaded_error` |
+| `agy/usage-limit.synthetic.*`, `agy/usage-limit-weekly.synthetic.*` | the owner's logs (exit 3, "Resets in 4h53m36s", a weekly cap of 162h13m35s, `retryable: true`); the stream shape of `model-unavailable.windows` | the sentence before "Resets in", and where `retryable` sits in the result |
+| `agy/rate-limit.synthetic.*`, `agy/server-error.synthetic.*` | as agy's usage limit | the 429 and 503 messages, and their `"retryable": true` |
+| `agy/logged-out.synthetic.*`, `agy/free/models-logged-out.synthetic.stderr.txt` | `model-unavailable.windows` (refused before any model call) | the login wording (agy was only seen logged in), and the result's `"retryable": false` |
+| `agy/free/quota-exhausted.synthetic.json` | `free/quota.json` | one bucket at `remaining_fraction` 0 |
+
+The synthetic ids are recognisable: `00000000-0000-…-0000000c0de1` (Codex), `…0000000c1a0d` (Claude Code),
+`…00000000a6e1` (agy).
+
 ## Not here
 
 - No real usage-limit output for any CLI (none hit a limit during the spike), no 429 and no 5xx or overload message,
-  and no agy logged-out output. CW2 needs the owner's logs for those rows of the plan's §3.8.
+  and no agy logged-out output. The synthetic fixtures above stand in for them until real output is captured; a
+  captured one should replace its synthetic twin.
 - Claude Code stream-json for a success, a needs-decision, an `is_error` result from a model call, and a killed run.
   The stream-json fixtures are the background run and the free logged-out run; the `result` event has the json
   mode's fields.
+
+## Fake CLIs
+
+`runner-v2/test/support/fake-cli.mjs` replays these fixtures as Codex CLI, Claude Code or agy: it reads its argv and
+stdin like the real CLI, writes Codex's `-o` file, and refuses an agy stream message without `event` as agy does.
+`runner-v2/test/support/fake-cli.ts` describes its scenario file.

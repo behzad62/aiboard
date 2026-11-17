@@ -63,7 +63,7 @@ export function isIsoTimestamp(value: unknown): value is string {
   return Number.isFinite(time) && new Date(time).toISOString() === value;
 }
 
-/** Token shapes a CLI's error text can quote (as submission-guard.ts's), and e-mail addresses (account fields, §3.3). */
+/** Token shapes a CLI's error text can quote (as submission-guard.ts's), and account fields (e-mail, organization ids, §3.3). */
 const MESSAGE_SCRUBS: readonly RegExp[] = [
   /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|$)/g,
   /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g,
@@ -71,11 +71,17 @@ const MESSAGE_SCRUBS: readonly RegExp[] = [
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,})\b/g,
   /\bAIza[0-9A-Za-z_-]{30,}/g,
   /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
+  // Organization ids (§3.3: organization fields never reach events or the home): OpenAI's `org-…`, and a UUID that
+  // follows an organization word, as in Anthropic's "rate limit for your organization (813ed5d4-…)", "organization
+  // ids: …", `"organizationUuid":"…"`, `orgId` or "organization 'Acme' (…)": the word, an optional id/uuid suffix,
+  // and an optional quoted name between it and the UUID.
+  /\borg-[A-Za-z0-9]{8,}\b/g,
+  /(?<=\b(?:org|organi[sz]ation)s?(?:[ _-]?(?:ids?|uuids?))?\W{0,20}(?:(?:'[^'\n]{1,80}'|"[^"\n]{1,80}")\W{1,5})?)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
 ];
 
 /**
- * A test message as the home keeps it: line endings as `\n`, known token shapes and e-mail addresses
- * replaced, then the Runner's general redaction, cut to CLI_TEST_MESSAGE_MAX characters.
+ * A test message as the home keeps it: line endings as `\n`, known token shapes, e-mail addresses and
+ * organization ids replaced, then the Runner's general redaction, cut to CLI_TEST_MESSAGE_MAX characters.
  */
 export function scrubCliMessage(value: string): string {
   let text = value.replace(/\r\n?/g, "\n");

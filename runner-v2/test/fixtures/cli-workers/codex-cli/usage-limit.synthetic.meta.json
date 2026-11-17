@@ -1,0 +1,9 @@
+{
+  "cli": "codex-cli",
+  "case": "usage-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "The owner's logs (docs/plans/2026-11-03-simple-build-and-delegate.md §2.1): the prose \"You've hit your usage limit\" and exit 1. The event shape (an error event, then turn.failed with the same message) is CW0's model-unavailable.windows run. The -o file is 0 bytes, as in every failed CW0 run. No reset time is stated.",
+  "exitCode": 1
+}

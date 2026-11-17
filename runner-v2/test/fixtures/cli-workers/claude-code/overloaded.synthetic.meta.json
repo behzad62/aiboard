@@ -1,0 +1,9 @@
+{
+  "cli": "claude-code",
+  "case": "overloaded",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "As rate-limit.synthetic, with Anthropic's 529 overloaded_error.",
+  "exitCode": 1
+}

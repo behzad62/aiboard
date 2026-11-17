@@ -1,0 +1,9 @@
+{
+  "cli": "agy",
+  "case": "server-error",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "As usage-limit.synthetic, with a 503 overload message; no agy 5xx was ever captured.",
+  "exitCode": 3
+}

@@ -1,0 +1,9 @@
+{
+  "cli": "agy",
+  "case": "usage-limit-weekly",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "As usage-limit.synthetic, with the weekly cap of the owner's logs (162h13m35s).",
+  "exitCode": 3
+}

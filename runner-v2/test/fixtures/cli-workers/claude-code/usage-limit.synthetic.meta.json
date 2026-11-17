@@ -1,0 +1,10 @@
+{
+  "cli": "claude-code",
+  "case": "usage-limit",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "CW0's free/logged-out-streamjson.linux run (init, an assistant event with error, then an is_error result) and the rate_limit_event shape of background-streamjson.windows, with the five-hour window at status \"rejected\". The message text follows Claude Code's usage-limit wording; no limit was hit in CW0. resetsAt is 4102444800, as in the recorded fixtures' synthetic figures.",
+  "exitCode": 1,
+  "args": "the §3.5 stream-json form"
+}

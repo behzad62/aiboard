@@ -1,0 +1,9 @@
+{
+  "cli": "codex-cli",
+  "case": "server-error",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "CW0's logged-out.linux turn.failed message, with 503 Service Unavailable in place of 401 Unauthorized.",
+  "exitCode": 1
+}

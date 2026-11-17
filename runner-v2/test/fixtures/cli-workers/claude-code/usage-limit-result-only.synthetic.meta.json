@@ -1,0 +1,9 @@
+{
+  "cli": "claude-code",
+  "case": "usage-limit-result-only",
+  "synthetic": true,
+  "capturedAt": null,
+  "writtenAt": "2026-11-17",
+  "modelledOn": "A json-mode result object (CW0's logged-out.linux) whose result is Claude Code's older usage-limit form, \"Claude AI usage limit reached|<unix seconds>\", with no rate_limit_event.",
+  "exitCode": 1
+}
