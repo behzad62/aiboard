@@ -1,0 +1,1 @@
+{"outcome":"done","summary":"Added exported mul(a, b) and one test; both tests passed, and no commit was made.","question":null,"replanReason":null,"checks":[{"label":"Tests passed","executable":"node","args":["--test"]}],"notRun":[],"concerns":[]}

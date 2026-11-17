@@ -1,0 +1,37 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "linux",
+  "case": "killed",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>/schemas/result.schema.json",
+    "-o",
+    "<root>/out-L/codex-killed-r0-a8c5fa/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>/w/codex-killed-r0-a8c5fa",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": null,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": "SIGTERM",
+  "timedOutByHarness": false,
+  "durationMs": 13497,
+  "stdoutBytes": 1570,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "codex-code-mode"
+    }
+  ],
+  "notes": "Non-root; SIGTERM 12 s after launch: partial JSONL, empty -o file; the managed record shows exit code and signal null. codex-code-mode (own process group) was alive right after the group stop and a zombie later."
+}

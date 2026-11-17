@@ -1,0 +1,33 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "windows",
+  "case": "needs-decision",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--model",
+    "sonnet",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "6e9ecd7e-f045-475e-b718-988bfac19da6"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 11845,
+  "stdoutBytes": 4310,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "--model sonnet; outcome needs_decision."
+}

@@ -1,0 +1,31 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "linux",
+  "case": "success-before-signal",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "3986db69-0900-477a-b298-08caec0f1467"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 10404,
+  "stdoutBytes": 2498,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "Non-root; the run finished in 10.4 s, before the 12 s SIGTERM, so this is a second success shape, not a crash."
+}

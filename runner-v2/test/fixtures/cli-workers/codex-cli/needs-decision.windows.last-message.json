@@ -1,0 +1,1 @@
+{"outcome":"needs_decision","summary":"The behavior of divide(a, b) when b is 0 needs the owner's decision.","question":"What should divide(a, b) do when b is 0?","replanReason":null,"checks":[],"notRun":[],"concerns":[]}

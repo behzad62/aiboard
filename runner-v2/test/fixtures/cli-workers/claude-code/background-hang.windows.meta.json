@@ -1,0 +1,74 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "windows",
+  "case": "background-hang",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "14d8474d-0d29-427e-90cb-259a5a67bd01"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": null,
+  "exitSignal": null,
+  "managedStatus": null,
+  "signalled": null,
+  "timedOutByHarness": true,
+  "durationMs": 600347,
+  "stdoutBytes": 0,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "conhost.exe"
+    },
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "bash.exe"
+    },
+    {
+      "name": "helper.exe"
+    },
+    {
+      "name": "powershell.exe"
+    },
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "bash.exe"
+    },
+    {
+      "name": "conhost.exe"
+    },
+    {
+      "name": "powershell.exe"
+    },
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "conhost.exe"
+    },
+    {
+      "name": "cmd.exe"
+    }
+  ],
+  "notes": "Bash run_in_background server: the turn ended in 8 s (structured output given, Stop hook ran) but `claude -p` never exited and printed nothing; the harness stopped it at 600 s."
+}

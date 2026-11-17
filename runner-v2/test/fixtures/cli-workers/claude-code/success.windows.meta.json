@@ -1,0 +1,31 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "windows",
+  "case": "success",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "3139a957-fc06-44f1-bbe3-d651f906244f"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 19486,
+  "stdoutBytes": 4011,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "--output-format json: one result object; structured_output carries the schema result."
+}

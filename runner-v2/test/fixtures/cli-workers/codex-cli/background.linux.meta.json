@@ -1,0 +1,33 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "linux",
+  "case": "background",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>/schemas/result.schema.json",
+    "-o",
+    "<root>/out-L/codex-background-r0-6e8c96/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>/w/codex-background-r0-6e8c96",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 11992,
+  "stdoutBytes": 1314,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "Non-root. The server ran under sh -lc in a new session (outside the managed group); the stop result is group-scoped."
+}

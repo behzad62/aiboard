@@ -1,0 +1,33 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "windows",
+  "case": "success",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>\\schemas\\result.schema.json",
+    "-o",
+    "<root>\\out-A\\codex-success-r0-788a59/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>\\w\\codex-success-r0-788a59",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 30351,
+  "stdoutBytes": 3881,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "Result in -o last-message.json; thread id in thread.started; usage in turn.completed."
+}

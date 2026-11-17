@@ -1,0 +1,16 @@
+{
+  "loggedIn": true,
+  "authMethod": "claude.ai",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "<home>\\.claude\\projects",
+  "configDirectory": "<home>\\.claude",
+  "loginExpiresAt": "2026-12-06T19:00:43.771Z",
+  "consoleProfileSignInOffered": true,
+  "email": "canary@example.test",
+  "orgId":"00000000-0000-4000-8000-000000000000",
+  "orgName": "Canary Org",
+  "subscriptionType": "pro",
+  "storedClaudeAiLogin": true,
+  "planTier": "pro"
+}

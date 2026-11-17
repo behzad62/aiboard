@@ -1,0 +1,44 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "windows",
+  "case": "model-unavailable",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>\\schemas\\result.schema.json",
+    "-o",
+    "<root>\\out-F\\codex-bad-model-r0-f920f2/last-message.json",
+    "-m",
+    "cw0-no-such-model",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>\\w\\codex-bad-model-r0-f920f2",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 1,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 7398,
+  "stdoutBytes": 557,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "python.exe",
+      "inAnyJob": false
+    },
+    {
+      "name": "conhost.exe",
+      "inAnyJob": false
+    }
+  ],
+  "notes": "-m cw0-no-such-model with a ChatGPT login: error + turn.failed events, the -o file is empty, exit 1. A Codex hook process (the owner's plugin) outlived the stop, in no job (see the report)."
+}

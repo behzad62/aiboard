@@ -1,0 +1,40 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "windows",
+  "case": "background-escaped",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>\\schemas\\result.schema.json",
+    "-o",
+    "<root>\\out-C\\codex-background-r0-bd480f/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>\\w\\codex-background-r0-bd480f",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 18182,
+  "stdoutBytes": 1590,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [
+    {
+      "name": "node.exe"
+    },
+    {
+      "name": "conhost.exe"
+    }
+  ],
+  "notes": "Started a server with pwsh Start-Process; after the proven Job stop that node.exe was alive and in no job (see the report)."
+}

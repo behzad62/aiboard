@@ -1,0 +1,31 @@
+{
+  "cli": "agy",
+  "cliVersion": "1.5.10",
+  "os": "windows",
+  "case": "literal-dash-prompt",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<root>\\schemas\\result.schema.json",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--print-timeout",
+    "0",
+    "-p=-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 18982,
+  "stdoutBytes": 1501,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "`-p=-` is a literal prompt \"-\" (stdin ignored) under --output-format json: shows the json result shape."
+}

@@ -1,0 +1,31 @@
+{
+  "cli": "agy",
+  "cliVersion": "1.5.10",
+  "os": "windows",
+  "case": "argv-prompt-flag-error",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<root>\\schemas\\result.schema.json",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--print-timeout",
+    "0"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 2,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 3411,
+  "stdoutBytes": 0,
+  "stderrBytes": 213,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "`-p --output-format json …`: -p takes the next argument as its prompt; exit 2, nothing sent."
+}

@@ -1,0 +1,33 @@
+{
+  "cli": "agy",
+  "cliVersion": "1.5.10",
+  "os": "windows",
+  "case": "success",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--json-schema",
+    "<root>\\schemas\\result.schema.json",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--print-timeout",
+    "0",
+    "-p="
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 0,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 28510,
+  "stdoutBytes": 12804,
+  "stderrBytes": 0,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "stream-json in and out, -p= last; stdin {\"event\":\"user\",\"message\":{\"content\":…}}."
+}

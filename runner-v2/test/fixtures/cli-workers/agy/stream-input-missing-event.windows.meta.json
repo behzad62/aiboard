@@ -1,0 +1,33 @@
+{
+  "cli": "agy",
+  "cliVersion": "1.5.10",
+  "os": "windows",
+  "case": "stream-input-missing-event",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--json-schema",
+    "<root>\\schemas\\result.schema.json",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--print-timeout",
+    "0",
+    "-p="
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 1,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 7703,
+  "stdoutBytes": 3343,
+  "stderrBytes": 57,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "stdin message without an \"event\" field: result status ERROR, exit 1, nothing sent."
+}

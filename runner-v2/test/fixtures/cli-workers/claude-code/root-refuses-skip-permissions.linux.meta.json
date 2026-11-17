@@ -1,0 +1,31 @@
+{
+  "cli": "claude-code",
+  "cliVersion": "2.1.326 (Claude Code)",
+  "os": "linux",
+  "case": "root-refuses-skip-permissions",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    "<schema-json>",
+    "--effort",
+    "low",
+    "--dangerously-skip-permissions",
+    "--session-id",
+    "18ca09e5-c3ed-41bb-abc1-ca3e9bb50818"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 1,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 1889,
+  "stdoutBytes": 0,
+  "stderrBytes": 93,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "As root: --dangerously-skip-permissions is refused before anything runs, exit 1."
+}

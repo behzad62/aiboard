@@ -1,0 +1,10 @@
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "<home>/.claude/projects",
+  "configDirectory": "<home>/.claude",
+  "loginExpiresAt": null,
+  "consoleProfileSignInOffered": true
+}

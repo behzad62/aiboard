@@ -1,0 +1,33 @@
+{
+  "cli": "codex-cli",
+  "cliVersion": "codex-cli 0.169.0",
+  "os": "linux",
+  "case": "logged-out",
+  "capturedAt": "2026-11-17",
+  "args": [
+    "exec",
+    "--json",
+    "--output-schema",
+    "<root>/schemas/result.schema.json",
+    "-o",
+    "<root>/out-LO/codex-logged-out-r0-e83787/last-message.json",
+    "-c",
+    "model_reasoning_effort=low",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "-C",
+    "<root>/w/codex-logged-out-r0-e83787",
+    "-"
+  ],
+  "stdin": "see the prompt in docs/runner-v2/cli-workers-spike-2026-11-17.md",
+  "exitCode": 1,
+  "exitSignal": null,
+  "managedStatus": "stopped",
+  "signalled": null,
+  "timedOutByHarness": false,
+  "durationMs": 17378,
+  "stdoutBytes": 2983,
+  "stderrBytes": 917,
+  "stopProven": true,
+  "aliveAfterStop": [],
+  "notes": "No login: 401 reconnect events over WebSocket then HTTPS, exit 1."
+}
