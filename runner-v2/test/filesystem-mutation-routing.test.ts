@@ -27,7 +27,11 @@ const privateOwners = new Set([
   // Reviewed again 2026-11-17 (docs/runner-v2/filesystem-owner-review-2026-11-17-cw1.md): besides its envelope it now
   // replaces the fixed sibling cli-worker-configs.json (plain JSON, no secret) through the same exclusive 0600
   // temporary and rename, so a rolled-back Runner never meets a `cli` transport inside the envelope.
-  "encrypted-provider-config-store.ts", "execution-host.ts", "execution-isolation-provider.ts",
+  "encrypted-provider-config-store.ts",
+  // Reviewed again 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw3.md): a transient binding (CLI
+  // worker checks and Tests) mkdirs <state>/transient-runs/<runId> for its run root, private record store, private
+  // Job host and artifacts, and removes exactly that folder only after the binding's close proved every process stopped.
+  "execution-host.ts", "execution-isolation-provider.ts",
   "final-verification-cleanup.ts", "final-verification-port-authority.ts", "final-verification-profile.ts",
   "git-baseline.ts", "git-bootstrap.ts", "git-preflight.ts", "integration-manager.ts", "managed-process-record.ts",
   "managed-process-supervisor.mjs", "managed-process.ts", "native-build-factory.ts", "native-process-backend.ts",

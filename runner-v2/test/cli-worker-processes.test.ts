@@ -19,6 +19,7 @@ import { createRunnerCapabilityContract } from "../src/runner-capability-contrac
 import { cliFixture, FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
 
 const CLAUDE = "C:\\Tools\\claude.exe";
+const CANARIES = ["canary@example.test", "Canary Org", "00000000-0000-4000-8000-000000000000"];
 
 function alive(pid: number): boolean {
   try {
@@ -69,6 +70,8 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
       platform: "win32",
       isRoot: () => false,
       inspect: async () => "file",
+      // On Windows the host's own Job fact decides (§3.11); a POSIX host has none, and the win32 seam needs one.
+      windowsJobContainment: async () => (process.platform === "win32" ? (await host.windowsProcessFacts?.())?.jobContainment : "verified"),
       command: (_path, args) => ({ executable: process.execPath, arguments: [wrapper, scenario, ...args] }),
       testTimeoutMs: 3_000,
     });
@@ -89,7 +92,8 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     assert.deepEqual(existsSync(tests) ? readdirSync(tests) : [], [], "the Test folder is removed after the verified stop");
 
     // A CLI that never answers, with a child of its own: the deadline, then the binding's stop takes the whole tree.
-    scenario = scenarioFor("hanging", { holdMs: 60_000, grandchildMs: 60_000 });
+    // On Windows the child is detached, outside libuv's own kill-on-close job, so only the Runner's Job can stop it.
+    scenario = scenarioFor("hanging", { holdMs: 60_000, grandchildMs: 60_000, ...(process.platform === "win32" ? { grandchildDetached: true } : {}) });
     const timedOut = await detection.test("claude-code", { model: null });
     assert.equal(timedOut.lastTest.outcome, "timed_out", JSON.stringify(timedOut));
     assert.equal(timedOut.stopVerified, true);
@@ -104,6 +108,19 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     assert.deepEqual(listed(join(state, "transient-runs")), [], "every transient run folder was removed");
     assert.deepEqual(listed(join(state, "builds")).filter((name) => name.includes("cli-worker")), [], "no run root under builds/");
     assert.deepEqual(listed(join(state, "managed-processes")).filter((name) => name.endsWith(".json")), [], "no record in the shared store");
+    assert.deepEqual(listed(join(state, "managed-processes-job-host")).filter((name) => name.startsWith("process_")), [],
+      "no record or output log in the shared Windows Job host");
+    // §3.2: the account fields `auth status` prints are never stored. Nothing under the state folder holds one.
+    const holding: string[] = [];
+    const scan = (folder: string) => {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        const path = join(folder, entry.name);
+        if (entry.isDirectory()) scan(path);
+        else if (entry.isFile() && CANARIES.some((canary) => readFileSync(path).toString("latin1").includes(canary))) holding.push(path);
+      }
+    };
+    scan(state);
+    assert.deepEqual(holding, [], "no file under the state folder holds an account field");
   } finally {
     await host.close();
     rmSync(root, { recursive: true, force: true });

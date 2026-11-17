@@ -135,8 +135,9 @@ export interface ExecutionHostRunBindingInput {
   readonly managedStopObserver?: ManagedProcessStopObserver;
   /**
    * CW3: a short-lived Runner-internal run (a CLI worker's free checks or Test, cli-worker-processes.ts). Its run
-   * root, managed-process records and artifacts live in `<state>/transient-runs/<runId>/` instead of the shared
-   * stores, so a run that leaves no history adds nothing to them. The folder is removed when the binding's close has
+   * root, managed-process records, Windows Job host (records and output logs, no spares) and artifacts live in
+   * `<state>/transient-runs/<runId>/` instead of the shared stores, so a run that leaves no history adds nothing to
+   * them. The Windows process facts are still the host's. The folder is removed when the binding's close has
    * proven every process stopped; a close that fails, a host closed under it or a crash keeps it.
    */
   readonly transient?: boolean;
@@ -335,6 +336,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       let transient: TransientRunState | undefined;
       // Set once createRunBinding returned: from then on only the binding's proven close may release a transient run.
       let constructed = false;
+      // What the caller and the host's own close get: for a transient run, the wrapper that releases its folder.
+      let exposed: ExecutionHostRunBinding | undefined;
       try {
         if (input.transient) {
           const root = join(stateDirectory, "transient-runs", runId);
@@ -342,7 +345,14 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           // Not recursive: a transient run id is never reused, so an existing folder is refused.
           await mkdir(root, { mode: 0o700 });
           try {
-            transient = { root, managedProcesses: new ManagedProcessService({ stateDirectory: join(root, "managed"), platform: managedPlatform }) };
+            transient = {
+              root,
+              managedProcesses: new ManagedProcessService({ stateDirectory: join(root, "managed"), platform: managedPlatform }),
+              // Its own Job host, as historical Git inspection has: the shared one keeps every released process's
+              // record and output logs for good, and a CLI's checks print account fields. No spares: a check or
+              // Test never prestarts a Job-host pair, and never takes a running Build's spare slot.
+              windowsJobHost: createWindowsJobProcessHost({ stateDirectory: join(root, "job-host"), platform: platform === "windows" ? "win32" : "linux" }),
+            };
           } catch (error) {
             await rm(root, { recursive: true, force: true }).catch(() => undefined);
             throw error;
@@ -365,24 +375,26 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           ...(transient
             ? { runtimeRoot: join(transient.root, "runtime"), artifacts: new ArtifactStore(join(transient.root, "artifacts")), managedProcesses: transient.managedProcesses }
             : { artifacts: input.artifacts ?? options.artifacts, managedProcesses }),
-          windowsJobHost,
+          windowsJobHost: transient ? transient.windowsJobHost : windowsJobHost,
           platform,
           streamingStoreOptions: options.streamingStoreOptions,
           streamingOutput: options.streamingOutput,
           cleanupFault: options.cleanupFault,
           resolveWindowsFacts,
           onClosed: () => {
-            if (bindings.get(runId) === binding) bindings.delete(runId);
+            const current = bindings.get(runId);
+            if (current === binding || (exposed !== undefined && current === exposed)) bindings.delete(runId);
           },
         });
         constructed = true;
+        exposed = transient ? transientRunBinding(binding, transient) : binding;
         constructionOwners.delete(constructionOwner);
-        bindings.set(runId, binding);
+        bindings.set(runId, exposed);
         if (closed) {
-          await binding.close();
+          await exposed.close();
           throw new Error("ExecutionHost closed while a run binding was being created.");
         }
-        return transient ? transientRunBinding(binding, transient) : binding;
+        return exposed;
       } catch (error) {
         // Failed rollback stays reserved and creator-owned until host cleanup.
         if (constructionOwner.isComplete()) {
@@ -559,6 +571,7 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
 interface TransientRunState {
   readonly root: string;
   readonly managedProcesses: ManagedProcessService;
+  readonly windowsJobHost: WindowsJobProcessHost;
 }
 
 /**
@@ -579,7 +592,9 @@ function transientRunBinding(binding: ExecutionHostRunBinding, state: TransientR
 async function releaseTransientRunState(state: TransientRunState): Promise<void> {
   await state.managedProcesses.close();
   try {
-    await rm(state.root, { recursive: true, force: true });
+    // A stopped supervisor exits just after it reports the stop, so Windows may hold its output log open for a moment;
+    // the logs can hold what a CLI printed (account fields from `auth status`), so the removal retries briefly.
+    await rm(state.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   } catch (error) {
     console.warn(`[runner] a transient run's folder could not be removed (${state.root}): ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -4,7 +4,6 @@
 // a double here (real child processes, a stop proven by their exit or reported unproven on demand); the execution-host
 // path itself is cli-worker-processes.test.ts.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,110 +14,19 @@ import { applyHomeBatch, readAiboardHome } from "../src/aiboard-home-store.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
 import { buildCliWorkerArgs } from "../src/cli-worker-adapters.js";
 import type { CliWorkerProviderId } from "../src/cli-worker-config.js";
-import { CliWorkerDetection, cliWorkerCmdArgumentRefusal, type CliWorkerCheck } from "../src/cli-worker-detection.js";
-import type { CliWorkerProcess, CliWorkerProcesses, CliWorkerProcessOutput, CliWorkerProcessSession } from "../src/cli-worker-processes.js";
+import { CliWorkerDetection, cliWorkerCmdArgumentRefusal, cliWorkerFreeCheckEntry, type CliWorkerCheck } from "../src/cli-worker-detection.js";
 import { ControlServer } from "../src/control-server.js";
 import type { ProcessHostSemanticFact } from "../src/process-host-semantic-probes.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
-import { cliFixture, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
+import { cliFixture, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
+import { fakeProcesses, type FakeProcesses } from "./support/fake-cli-processes.js";
 
 const token = "test-control-token";
 const CLAUDE = "C:\\Tools\\claude.exe";
 const AGY = "C:\\Tools\\agy.exe";
 const CODEX = "C:\\Tools\\codex.exe";
 const CANARIES = ["canary@example.test", "Canary Org", "00000000-0000-4000-8000-000000000000", "loginExpiresAt", "2099-01-01T00:00:00.000Z", "credential_expires_at"];
-
-// ---------------------------------------------------------------------------------------------------------------
-// A CliWorkerProcesses double: real child processes (node + the fake CLI) whose session stop is proven by waiting for
-// every child's exit, or reported unproven on demand. Each start's scenario follows the CLI path the detection resolved.
-
-type Purpose = "check" | "test";
-
-interface FakeLaunch { purpose: Purpose; workingDirectory: string; executable: string; args: string[] }
-
-interface FakeProcesses extends CliWorkerProcesses {
-  opens: Array<{ purpose: Purpose; workingDirectory: string }>;
-  launches: FakeLaunch[];
-  closes: Array<{ purpose: Purpose; verified: boolean }>;
-  /** Faults by purpose: the binding does not open, a start throws the aggregate, a read throws, the stop is unproven. */
-  fail: Partial<Record<"open" | "start" | "read" | "stop", Purpose>>;
-  launched(purpose: Purpose): FakeLaunch[];
-}
-
-function fakeProcesses(scenarios: Map<string, string>): FakeProcesses {
-  const self: FakeProcesses = {
-    opens: [],
-    launches: [],
-    closes: [],
-    fail: {},
-    launched: (purpose) => self.launches.filter((launch) => launch.purpose === purpose),
-    async open({ purpose, workingDirectory }): Promise<CliWorkerProcessSession> {
-      if (self.fail.open === purpose) throw new Error("The run binding could not open.");
-      self.opens.push({ purpose, workingDirectory });
-      const children: Array<{ kill(): void; closed: Promise<void> }> = [];
-      let closing: Promise<void> | undefined;
-      return {
-        async start({ executable, args }): Promise<CliWorkerProcess> {
-          self.launches.push({ purpose, workingDirectory, executable, args: [...args] });
-          if (self.fail.start === purpose) {
-            // What ManagedProcessService throws when a start failed after the process may have been born.
-            throw new AggregateError([new Error("spawn reported no exit")], "Process start failed; process cleanup remains owned by the Runner.");
-          }
-          const scenario = scenarios.get(executable);
-          if (!scenario) throw new Error(`no fake CLI for ${executable}`);
-          const child = spawn(process.execPath, [FAKE_CLI_SCRIPT, ...args], {
-            cwd: workingDirectory,
-            env: { ...process.env, [FAKE_CLI_SCENARIO_ENV]: scenario },
-            stdio: "pipe",
-            windowsHide: true,
-          });
-          let stdout = "", stderr = "", exited = false, exitCode: number | null = null;
-          let wake: (() => void) | undefined;
-          const signal = () => { const resolve = wake; wake = undefined; resolve?.(); };
-          child.stdout.setEncoding("utf8");
-          child.stderr.setEncoding("utf8");
-          child.stdout.on("data", (text: string) => { stdout += text; signal(); });
-          child.stderr.on("data", (text: string) => { stderr += text; signal(); });
-          child.on("error", () => undefined);
-          child.stdin.on("error", () => undefined);
-          const closed = new Promise<void>((resolve) => child.on("close", (code) => { exited = true; exitCode = code; signal(); resolve(); }));
-          children.push({ kill: () => { if (!exited) child.kill(); }, closed });
-          return {
-            async closeInput(text?: string) {
-              if (text) child.stdin.write(text);
-              child.stdin.end();
-            },
-            async read(waitMs: number): Promise<CliWorkerProcessOutput> {
-              if (self.fail.read === purpose) throw new Error("The output could not be read.");
-              if (!stdout && !stderr && !exited) {
-                await new Promise<void>((resolve) => {
-                  const timer = setTimeout(resolve, waitMs);
-                  wake = () => { clearTimeout(timer); resolve(); };
-                });
-              }
-              const output = { stdout, stderr, exited, exitCode };
-              stdout = "";
-              stderr = "";
-              return output;
-            },
-          };
-        },
-        async close() {
-          closing ??= (async () => {
-            for (const child of children) child.kill();
-            await Promise.all(children.map((child) => child.closed));
-            const verified = self.fail.stop !== purpose;
-            self.closes.push({ purpose, verified });
-            if (!verified) throw new AggregateError([new Error("Job emptiness was not proven.")], "CLI worker processes could not be proven stopped.");
-          })();
-          return await closing;
-        },
-      };
-    },
-  };
-  return self;
-}
 
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -142,6 +50,8 @@ interface FixtureOptions {
   isRoot?: boolean;
   /** The host's batch-argv fact; "absent" is no fact at all (the detection gets undefined). Default "verified". */
   batch?: ProcessHostSemanticFact | "absent";
+  /** The host's Job containment fact, the same way. Default "verified". */
+  jobContainment?: ProcessHostSemanticFact | "absent";
   state?: string;
   found?: Partial<Record<string, string>>;
   absent?: string[];
@@ -178,12 +88,14 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     const lookup: CheckToolLookup = async (name) => (found[name] ? { status: "found", path: found[name]! } : { status: "missing" });
     const now = { value: options.now ?? Date.parse("2026-11-18T00:00:00.000Z") };
     const batch = options.batch ?? "verified";
+    const job = options.jobContainment ?? "verified";
     const detection = new CliWorkerDetection({
       stateDirectory: state,
       processes,
       lookup,
       home: location,
       windowsBatchArgv: async () => (batch === "absent" ? undefined : batch),
+      windowsJobContainment: async () => (job === "absent" ? undefined : job),
       platform: options.platform ?? "win32",
       isRoot: () => options.isRoot ?? false,
       now: () => now.value,
@@ -586,6 +498,67 @@ test(".cmd CLIs: Claude Code's shim, a host that can't launch .cmd, and unsafe f
     } finally {
       await f.close();
     }
+  }
+});
+
+test("on Windows a CLI runs only under a verified Job: otherwise it is unavailable with its reason, nothing launches, and a Test answers 409", async () => {
+  for (const jobContainment of ["unavailable", "partial", "absent"] as const) {
+    const f = await fixture({ jobContainment, scenarios: (s) => ({ [CLAUDE]: claudeScenario(s), [AGY]: agyScenario(s) }) });
+    try {
+      const { body } = await f.call("/v2/cli-workers");
+      for (const providerId of ["claude-code", "agy"] as const) {
+        const check = worker(body, providerId);
+        assert.equal(check.status, "unavailable", `${jobContainment} ${providerId}`);
+        assert.equal(check.code, "job_containment_unavailable");
+        assert.match(check.reason!, /can't run .* as a worker: Windows did not pass AIBoard's check that a Job object holds a CLI/);
+        assert.equal(check.failure?.kind, "authentication");
+      }
+      const tested = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
+      assert.equal(tested.status, 409, JSON.stringify(tested.body));
+      assert.equal(tested.body.code, "job_containment_unavailable");
+      assert.equal(f.processes.opens.length, 0, `${jobContainment}: nothing was launched`);
+      assert.equal(await lastTest(f, "claude-code"), undefined);
+    } finally {
+      await f.close();
+    }
+  }
+  // The rule is Windows': a POSIX host has no Job fact, and its CLIs are refused for the OS anyway (v1).
+  const g = await fixture({ platform: "linux", jobContainment: "absent" });
+  try {
+    assert.equal(worker((await g.call("/v2/cli-workers")).body, "claude-code").code, "platform_refused");
+  } finally {
+    await g.close();
+  }
+});
+
+test("CW4's seam: each check maps to a CliWorkerFreeCheck, and freeChecks never rejects", async () => {
+  const base = { displayName: "agy", checkedAt: "2026-11-18T00:00:00.000Z" };
+  const executable = { path: AGY, source: "path" as const, form: "exe" as const };
+  assert.deepEqual(cliWorkerFreeCheckEntry({ ...base, providerId: "agy", status: "ready", executable, version: "1.5.10" }),
+    { providerId: "agy", status: "ready", executable: { path: AGY, form: "exe" }, version: "1.5.10" });
+  assert.deepEqual(cliWorkerFreeCheckEntry({ ...base, providerId: "agy", status: "refused", code: "platform_refused", reason: "agy is not available on Linux." }),
+    { providerId: "agy", status: "unhealthy", failure: { kind: "authentication", message: "agy is not available on Linux." } });
+  const quota = { kind: "usage_limit" as const, message: "agy is out of usage.", retryAfterMs: 1_000 };
+  assert.deepEqual(cliWorkerFreeCheckEntry({ ...base, providerId: "agy", status: "unavailable", code: "usage_limit", reason: quota.message, failure: quota, executable }),
+    { providerId: "agy", status: "unhealthy", executable: { path: AGY, form: "exe" }, failure: quota });
+  assert.deepEqual(cliWorkerFreeCheckEntry({ ...base, providerId: "agy", status: "unknown", code: "login_unknown", reason: "AIBoard could not tell whether agy is logged in." }),
+    { providerId: "agy", status: "unknown", note: "AIBoard could not tell whether agy is logged in." });
+
+  const f = await fixture({ scenarios: (s) => ({ [CLAUDE]: claudeScenario(s), [AGY]: agyScenario(s, { loggedOut: true }) }) });
+  try {
+    const checks = await f.detection.freeChecks({ providerIds: ["claude-code", "agy", "codex-cli"] });
+    assert.deepEqual(checks.map((entry) => [entry.providerId, entry.status, entry.failure?.kind]), [
+      ["claude-code", "ready", undefined], ["agy", "unhealthy", "authentication"], ["codex-cli", "unhealthy", "authentication"],
+    ]);
+    assert.match(checks[1]!.failure!.message, /not logged in/);
+    const aborted = new AbortController();
+    aborted.abort();
+    assert.deepEqual(await f.detection.freeChecks({ providerIds: ["agy"], signal: aborted.signal }), [{ providerId: "agy", status: "unknown", note: "The check was cancelled." }]);
+    f.processes.fail.open = "check";
+    const failed = await f.detection.freeChecks({ providerIds: ["claude-code"] });
+    assert.equal(failed[0]!.status, "unknown", "a check that could not run is a result, never a rejection");
+  } finally {
+    await f.close();
   }
 });
 

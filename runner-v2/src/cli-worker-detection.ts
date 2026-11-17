@@ -14,7 +14,8 @@
  * (cli-worker-processes.ts: an execution-host run binding, the Windows Job or the POSIX process group, with
  * `AIBOARD_MCP_DEPTH=2`), from a Runner-owned folder, never a worktree or a project folder.
  *
- * CW4's Build-start check takes `CliWorkerFreeCheck` (the service's `check`) as an injected dependency.
+ * CW4's Build-start check (native-build-factory.ts `cliWorkerFreeChecks`) is the service's `freeChecks`, which maps each
+ * `check` to cli-worker-crew.ts's `CliWorkerFreeCheck` (`cliWorkerFreeCheckEntry`).
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
@@ -58,6 +59,7 @@ import {
   type HomeCliWorkerTestV1,
 } from "./cli-worker-config.js";
 import { isCliModelUnavailableText } from "./cli-worker-failures.js";
+import type { CliWorkerFreeCheck, CliWorkerFreeChecks } from "./cli-worker-crew.js";
 import type { ProcessHostSemanticFact } from "./process-host-semantic-probes.js";
 import type { ProviderFailure } from "./provider-health.js";
 import type { CliWorkerProcess, CliWorkerProcesses, CliWorkerProcessSession } from "./cli-worker-processes.js";
@@ -97,6 +99,7 @@ export type CliWorkerCheckCode =
   | "not_installed"
   | "executable_refused"
   | "executable_unknown"
+  | "job_containment_unavailable"
   | "cmd_shim_schema"
   | "cmd_launch_unavailable"
   | "cmd_argument_unsafe"
@@ -136,7 +139,7 @@ export interface CliWorkerCheckOptions {
 }
 
 /** The function CW4's Build-start check takes as its injected dependency. */
-export type CliWorkerFreeCheck = (providerId: CliWorkerProviderId, options?: CliWorkerCheckOptions) => Promise<CliWorkerCheck>;
+export type CliWorkerCheckFunction = (providerId: CliWorkerProviderId, options?: CliWorkerCheckOptions) => Promise<CliWorkerCheck>;
 
 // ---------------------------------------------------------------------------------------------------------------
 // The service
@@ -158,6 +161,12 @@ export interface CliWorkerDetectionOptions {
    * host where it is not `verified` is reported "this PC can't launch .cmd CLIs" and never launched.
    */
   windowsBatchArgv?: () => Promise<ProcessHostSemanticFact | undefined>;
+  /**
+   * The host's Windows Job containment fact (§3.11). On Windows a CLI runs only under a verified Job: the allowance
+   * was measured there, and the portable fallback cannot stop what an agent session leaves behind. When it is not
+   * `verified` the check reports the CLI unavailable, launching nothing, and a Test is refused.
+   */
+  windowsJobContainment?: () => Promise<ProcessHostSemanticFact | undefined>;
   /** Test seams. */
   platform?: NodeJS.Platform;
   isRoot?: () => boolean;
@@ -204,6 +213,21 @@ export class CliWorkerTestBusyError extends Error {
 /** `at`: when the check finished (its 60 s start then). `stale`: a Test ran since, so the next read checks again. */
 interface CacheEntry { key: string; at: number; check: Promise<CliWorkerCheck>; settled: boolean; stale: boolean }
 
+/**
+ * One check as CW4's `CliWorkerFreeCheck`: `refused` and `unavailable` are `unhealthy`, with the reason as the
+ * failure (agy's spent quota keeps its `usage_limit` kind and stated reset); `unknown` keeps its reason as the note.
+ */
+export function cliWorkerFreeCheckEntry(check: CliWorkerCheck): CliWorkerFreeCheck {
+  const executable = check.executable ? { executable: { path: check.executable.path, form: check.executable.form } } : {};
+  const version = check.version ? { version: check.version } : {};
+  if (check.status === "ready") return { providerId: check.providerId, status: "ready", ...executable, ...version };
+  if (check.status === "unknown") {
+    return { providerId: check.providerId, status: "unknown", ...executable, ...version, ...(check.reason ? { note: check.reason } : {}) };
+  }
+  const message = check.reason ?? `${check.displayName} can't run as a worker here.`;
+  return { providerId: check.providerId, status: "unhealthy", ...executable, ...version, failure: check.failure ?? { kind: "authentication", message } };
+}
+
 export class CliWorkerDetection {
   private readonly cache = new Map<CliWorkerProviderId, CacheEntry>();
   private readonly testing = new Set<CliWorkerProviderId>();
@@ -242,7 +266,7 @@ export class CliWorkerDetection {
   }
 
   /** One CLI's free check (§3.2), uncached. CW4's Build-start check calls this. */
-  readonly check: CliWorkerFreeCheck = async (providerId, options = {}) => {
+  readonly check: CliWorkerCheckFunction = async (providerId, options = {}) => {
     const checkedAt = new Date(this.now()).toISOString();
     const base = { providerId, displayName: CLI_WORKER_DISPLAY_NAMES[providerId], checkedAt };
     const platformRefusal = cliWorkerPlatformRefusal(providerId, this.platform);
@@ -272,6 +296,10 @@ export class CliWorkerDetection {
     if (resolved.status === "unknown") return { ...base, status: "unknown", code: "executable_unknown", reason: resolved.reason };
     const executable = { path: resolved.path, source: resolved.source, form: resolved.form };
 
+    if (this.platform === "win32" && (await this.options.windowsJobContainment?.()) !== "verified") {
+      return unavailable("job_containment_unavailable", `This PC can't run ${name} as a worker: Windows did not pass AIBoard's check that a Job object holds a CLI and everything it starts.`, { executable });
+    }
+
     if (executable.form === "cmd") {
       const refusal = await this.cmdRefusal(providerId, executable.path, options.worktreeFolder);
       if (refusal) return unavailable(refusal.code, refusal.reason, { executable });
@@ -298,6 +326,24 @@ export class CliWorkerDetection {
       if (cached) cached.stale = true;
     }
   }
+
+  /**
+   * CW4's seam (native-build-factory.ts `cliWorkerFreeChecks`): each requested CLI's free check, uncached, at a
+   * Build's start and each resume. It never rejects: a check that throws is `unknown` with its reason. CW4 applies
+   * its own `.cmd` rules to the launch folders on what this returns.
+   */
+  readonly freeChecks: CliWorkerFreeChecks = async ({ providerIds, signal }) => {
+    const homePaths = await this.homeExecutablePaths().catch(() => ({} as Partial<Record<CliWorkerProviderId, string>>));
+    return await Promise.all(providerIds.map(async (providerId): Promise<CliWorkerFreeCheck> => {
+      if (signal?.aborted) return { providerId, status: "unknown", note: "The check was cancelled." };
+      try {
+        const executablePath = homePaths[providerId];
+        return cliWorkerFreeCheckEntry(await this.check(providerId, executablePath === undefined ? {} : { executablePath }));
+      } catch (error) {
+        return { providerId, status: "unknown", note: scrubCliMessage(`${CLI_WORKER_DISPLAY_NAMES[providerId]}'s check failed: ${errorText(error)}`) };
+      }
+    }));
+  };
 
   // -------------------------------------------------------------------------------------------------------------
 
@@ -450,7 +496,7 @@ export class CliWorkerDetection {
     };
 
     // Outcomes the free checks already decide, without a launch.
-    if (check.status === "refused" || (check.code && check.code.startsWith("cmd_")) || check.code === "executable_refused")
+    if (check.status === "refused" || (check.code && check.code.startsWith("cmd_")) || check.code === "executable_refused" || check.code === "job_containment_unavailable")
       throw new CliWorkerTestRefusedError(check);
     if (check.code === "not_installed") return await saved("not_installed", check.reason);
     if (check.code === "not_logged_in") return await saved("not_logged_in", check.reason);
@@ -490,8 +536,13 @@ export class CliWorkerDetection {
       keepFolder = true;
       const run = await this.runTestProcess(session, providerId, check.executable.path, args, outputPath);
       keepFolder = !run.stopVerified;
-      // A start or read that failed, after the stop was proven: the folder goes, the error answers the request.
-      if (run.failure) throw run.failure.error;
+      // A start or read that failed, after the stop was proven: the folder goes, and the request is answered with
+      // what happened (the process host's own message may speak of cleanup it has since proven). Nothing is saved:
+      // the CLI was never heard from.
+      if (run.failure) {
+        console.warn(`[runner] a ${name} test could not run: ${describe(run.failure.error)}`);
+        throw new Error(`${name} could not be started for the test; anything it started was stopped. Check the CLI, then test again.`);
+      }
       if (!run.stopVerified) {
         return await saved("timed_out", `${name}'s test processes could not be proven stopped; the test folder is kept for cleanup.`,
           { stopVerified: false, launched: true });
