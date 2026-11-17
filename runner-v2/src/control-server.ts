@@ -570,6 +570,8 @@ export class ControlServer {
       throw new HttpError(404, "not_found", "Unknown browser endpoint.");
     }
     if (segments[1] === "cli-workers") {
+      // The checks and the Test start CLI agents: refused with every other local agent route in nested state.
+      if (this.localAgentsUnavailableNestedState) throw new LocalAgentsUnavailableError();
       await this.routeCliWorkers(request, response, url, segments);
       return;
     }
@@ -594,7 +596,8 @@ export class ControlServer {
           modelProxy: Boolean(this.home && this.modelProxy?.url),
           secretlessProviderConfigs: Boolean(this.home && this.providerConfigs),
           browserInstall: Boolean(this.browserInstall),
-          cliWorkers: Boolean(this.cliWorkers),
+          // CW3: the `/v2/cli-workers` routes exist. Not `/v2/home`'s `capabilities.cliWorkers` (CW1: the home section).
+          cliWorkerChecks: Boolean(this.cliWorkers),
         },
         catalogVersion,
         ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),
@@ -1505,8 +1508,12 @@ export class ControlServer {
       }
       try {
         const result = await applyHomeBatch(home, { baseRevision: body.baseRevision as number, ops: body.ops as HomeOp[] });
-        await this.endCooldownsForPassedKeyTests(body.ops as unknown[]);
         sendJson(response, 200, { revision: result.revision, touched: result.touched, removedCredentials: result.removedCredentials });
+        // After the response: the Build manager's lock can be held by a resume or a rebuild, and a Settings save never
+        // waits on it. A failure is only logged; the home write already succeeded.
+        void this.endCooldownsForPassedKeyTests(body.ops as unknown[]).catch((error: unknown) => {
+          console.warn(`[runner] a passing key test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+        });
       } catch (error) {
         if (error instanceof AiboardHomeError && error.code === "home_conflict") {
           // The current values of every conflicting section; credential sections say only whether a key is saved.
@@ -1588,8 +1595,9 @@ export class ControlServer {
   /**
    * CWD-4: the web saves a passing API key test as `providers.<id>` with `lastValidationSucceeded: true` (Settings'
    * Test button). Once saved, that provider's cooldowns end in the Runner's running and paused Builds, through the
-   * same route as a passing CLI worker test. The home write already succeeded, so a Build that cannot record it is
-   * only logged.
+   * same route as a passing CLI worker test. It runs after the response; a Build that cannot record it is only
+   * logged. Custom models are left out: every custom endpoint's health is kept under the one provider id `custom`,
+   * so one endpoint's passing test cannot vouch for the others.
    */
   private async endCooldownsForPassedKeyTests(ops: readonly unknown[]): Promise<void> {
     const builds = this.builds;

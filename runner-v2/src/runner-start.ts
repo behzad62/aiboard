@@ -3,6 +3,8 @@ import { installPlaywrightCliShims, PlaywrightCliSessions, resolvePlaywrightCliI
 import { BrowserInstallService } from "./browser-install.js";
 import { createCheckToolLookup } from "./check-tool-lookup.js";
 import { CliWorkerDetection } from "./cli-worker-detection.js";
+import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
+import { createExecutionHostCliWorkerProcesses } from "./cli-worker-processes.js";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
@@ -558,11 +560,15 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         environment: executionHost.filteredEnvironmentSource(),
         workingDirectory: options.stateDirectory,
       }),
-      // CLI workers CW3: the free checks and the Test button run as Runner-internal commands from Runner-owned folders.
+      // CLI workers CW3: the free checks and the Test button run under a worker's process ownership (a run binding of
+      // the execution host: the Windows Job or the POSIX process group), from Runner-owned folders.
       ...(homeLocation ? { cliWorkers: new CliWorkerDetection({
         stateDirectory: options.stateDirectory,
-        processes: executionHost.internalProcesses,
-        environment: () => executionHost.filteredEnvironmentSource(),
+        processes: createExecutionHostCliWorkerProcesses({
+          host: executionHost,
+          capabilitiesConfig: () => capabilitiesConfig,
+          capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: options.stateDirectory }),
+        }),
         lookup: createCheckToolLookup({ environment: () => executionHost.filteredEnvironmentSource() }),
         home: homeLocation,
         windowsBatchArgv: async () => (await executionHost.windowsProcessFacts?.())?.windowsBatchArgv,

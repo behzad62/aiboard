@@ -3031,3 +3031,36 @@ test("MCP ownership census excludes only durably released Git records", () => {
     passed = true;
   } finally { if (passed) rmSync(root, { recursive: true }); }
 });
+
+test("a live NativeBuildFactory handle ends a provider's cooldown in the registry its routers read and records it durably (CLI workers CW3)", async () => {
+  const fixture = createFixture("provider-test-cooldown");
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    const runId = "capability_provider_test";
+    const baseline = await captureGitBaseline({ projectPath: fixture.project, stateDirectory: fixture.state, runId });
+    factory = createFactory(fixture.project, fixture.state, baseline.revision, { extensions: [], languageServers: [] });
+    const prepared = await factory.prepareSpec(buildSpec(runId));
+    handle = await factory.create(prepared);
+    assert.equal(handle.endProviderCooldown?.("claude-code", "provider-test:0"), false, "nothing to end in a healthy Build");
+    await handle.close();
+    handle = undefined;
+    // A Claude Code worker was logged out before this Runner restarted: the cooldown is in the run's durable history.
+    const seed = new SqliteSchedulerStore(join(runRoot(fixture.state, runId), "scheduler.sqlite"));
+    seed.append({ runId, type: "provider.health_changed", occurredAt: new Date().toISOString(), actor: { role: "runner", id: "runtime-router" },
+      idempotencyKey: "provider-health:seed:claude-code", payload: { state: { providerId: "claude-code", status: "cooldown", consecutiveFailures: 1,
+        updatedAt: Date.now(), failureKind: "authentication", failureMessage: "Claude Code is not logged in.", cooldownUntil: Date.now() + 86_400_000 } } });
+    seed.close();
+    handle = await factory.create(prepared);
+    assert.equal(handle.runtime.projection().runtime.providerHealth["claude-code"]?.status, "cooldown");
+    assert.equal(handle.endProviderCooldown?.("claude-code", "provider-test:1"), true);
+    assert.equal(handle.runtime.projection().runtime.providerHealth["claude-code"]?.status, "healthy", "the durable event");
+    const model = handle.usage().models.find((entry) => entry.providerId === "claude-code");
+    assert.equal(model?.cooldownUntil, undefined, "the live registry no longer reports the cooldown");
+    assert.equal(handle.endProviderCooldown?.("claude-code", "provider-test:2"), false, "a second pass finds nothing left to end");
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    fixture.cleanup();
+  }
+});

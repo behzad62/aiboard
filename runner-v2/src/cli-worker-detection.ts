@@ -10,13 +10,15 @@
  *   the Runner owns (`<state>/cli-worker-tests/<random>/`). The folder is removed after a verified stop and kept
  *   after an unverified one. The outcome is saved to the home as `cliWorkers.<providerId>.lastTest`.
  *
- * Every process here runs under the Runner-internal process kernel as a Runner-internal owner (as the browser
- * install button and the Git preflight do), from a Runner-owned folder, never a worktree or a project folder.
+ * Every process here, the free probes and the Test alike, runs under the same process ownership as a worker
+ * (cli-worker-processes.ts: an execution-host run binding, the Windows Job or the POSIX process group, with
+ * `AIBOARD_MCP_DEPTH=2`), from a Runner-owned folder, never a worktree or a project folder.
  *
  * CW4's Build-start check takes `CliWorkerFreeCheck` (the service's `check`) as an injected dependency.
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { inspect as describe } from "node:util";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -58,7 +60,7 @@ import {
 import { isCliModelUnavailableText } from "./cli-worker-failures.js";
 import type { ProcessHostSemanticFact } from "./process-host-semantic-probes.js";
 import type { ProviderFailure } from "./provider-health.js";
-import type { RunnerInternalOwnedProcess, RunnerInternalProcessKernel } from "./runner-internal-process-kernel.js";
+import type { CliWorkerProcess, CliWorkerProcesses, CliWorkerProcessSession } from "./cli-worker-processes.js";
 import { INVENTORY_VERSION_PROBE_TIMEOUT_MS } from "./verification-inventory.js";
 
 /** §3.2: free-check results are cached this long; Settings' Refresh bypasses the cache. */
@@ -67,10 +69,8 @@ export const CLI_WORKER_CHECK_CACHE_MS = 60_000;
 export const CLI_WORKER_PROBE_TIMEOUT_MS = INVENTORY_VERSION_PROBE_TIMEOUT_MS;
 /** §3.4: the Test's one tiny prompt. */
 export const CLI_WORKER_TEST_TIMEOUT_MS = 120_000;
-/** Proving a stop: a graceful shutdown, then termination, each bounded as the browser install's. */
-const SHUTDOWN_TIMEOUT_MS = 5_000;
-const TERMINATION_TIMEOUT_MS = 15_000;
-const POLL_INTERVAL_MS = 50;
+/** One read waits at most this long for new output, so the deadline and the result event are seen promptly. */
+const READ_WAIT_MS = 500;
 
 /** The Test's prompt. It goes on stdin; it asks for the result schema's smallest valid answer and no tool use. */
 export const CLI_WORKER_TEST_PROMPT = [
@@ -100,7 +100,6 @@ export type CliWorkerCheckCode =
   | "cmd_shim_schema"
   | "cmd_launch_unavailable"
   | "cmd_argument_unsafe"
-  | "cmd_checks_unavailable"
   | "not_logged_in"
   | "login_unknown"
   | "usage_limit"
@@ -148,10 +147,8 @@ export type CliWorkerCommand = (path: string, args: readonly string[]) => { exec
 export interface CliWorkerDetectionOptions {
   /** The Runner's state folder: the lookup folder and the Test folders live under it. */
   stateDirectory: string;
-  /** The Runner-internal process kernel (Runner-owned processes with a verified stop). */
-  processes: Pick<RunnerInternalProcessKernel, "launch">;
-  /** The environment the Runner gives its own processes (sensitive names already dropped). */
-  environment: () => Readonly<Record<string, string>>;
+  /** Where every check and Test process runs: a worker's process ownership (cli-worker-processes.ts). */
+  processes: CliWorkerProcesses;
   /** VF2's lookup, so a CLI is found where a launch would find it. */
   lookup: CheckToolLookup;
   /** The home: each CLI's `executablePath`, and where a Test's outcome is saved. */
@@ -161,11 +158,6 @@ export interface CliWorkerDetectionOptions {
    * host where it is not `verified` is reported "this PC can't launch .cmd CLIs" and never launched.
    */
   windowsBatchArgv?: () => Promise<ProcessHostSemanticFact | undefined>;
-  /**
-   * Whether `processes` itself can launch a `.cmd`. The Runner-internal kernel cannot (its batch fact is always
-   * `unavailable`), so in production a `.cmd` CLI's checks are reported as not run from Settings, never launched.
-   */
-  launcherRunsCmd?: boolean;
   /** Test seams. */
   platform?: NodeJS.Platform;
   isRoot?: () => boolean;
@@ -209,7 +201,8 @@ export class CliWorkerTestBusyError extends Error {
   }
 }
 
-interface CacheEntry { key: string; at: number; check: Promise<CliWorkerCheck> }
+/** `at`: when the check finished (its 60 s start then). `stale`: a Test ran since, so the next read checks again. */
+interface CacheEntry { key: string; at: number; check: Promise<CliWorkerCheck>; settled: boolean; stale: boolean }
 
 export class CliWorkerDetection {
   private readonly cache = new Map<CliWorkerProviderId, CacheEntry>();
@@ -229,15 +222,20 @@ export class CliWorkerDetection {
       const executablePath = paths[providerId];
       const key = executablePath ?? "";
       const cached = this.cache.get(providerId);
-      if (!options.refresh && cached && cached.key === key && this.now() - cached.at < CLI_WORKER_CHECK_CACHE_MS) return await cached.check;
+      // A check still running is joined, Refresh included, so a second click starts no second set of probes.
+      if (cached && cached.key === key && (!cached.settled || (!options.refresh && !cached.stale && this.now() - cached.at < CLI_WORKER_CHECK_CACHE_MS)))
+        return await cached.check;
       const check = this.check(providerId, executablePath === undefined ? {} : { executablePath });
-      const entry = { key, at: this.now(), check };
+      const entry: CacheEntry = { key, at: this.now(), check, settled: false, stale: false };
       this.cache.set(providerId, entry);
       try {
         return await check;
       } catch (error) {
         if (this.cache.get(providerId) === entry) this.cache.delete(providerId);
         throw error;
+      } finally {
+        entry.at = this.now();
+        entry.settled = true;
       }
     }));
     return { checkedAt: new Date(this.now()).toISOString(), platform: this.platform, workers };
@@ -277,12 +275,6 @@ export class CliWorkerDetection {
     if (executable.form === "cmd") {
       const refusal = await this.cmdRefusal(providerId, executable.path, options.worktreeFolder);
       if (refusal) return unavailable(refusal.code, refusal.reason, { executable });
-      if (!this.options.launcherRunsCmd) {
-        return {
-          ...base, executable, status: "unknown", code: "cmd_checks_unavailable",
-          reason: `${name} is a .cmd here. Settings can't run its checks yet: AIBoard's own checks can't launch .cmd files. Install its .exe to check it here.`,
-        };
-      }
     }
 
     return await this.probe(providerId, executable, base);
@@ -300,7 +292,10 @@ export class CliWorkerDetection {
       return await this.runTest(providerId, request);
     } finally {
       this.testing.delete(providerId);
-      this.cache.delete(providerId);
+      // The Test may have changed what the checks find (a login it reported, say). A check still running is kept, so
+      // a Refresh joins it, and is read again once it settles.
+      const cached = this.cache.get(providerId);
+      if (cached) cached.stale = true;
     }
   }
 
@@ -339,6 +334,11 @@ export class CliWorkerDetection {
     return refusal ? { code: "cmd_argument_unsafe", reason: refusal } : undefined;
   }
 
+  /**
+   * The free probes of one CLI, in one session from the lookup folder. Their output counts only after the session's
+   * stop is proven. Readiness is decided by the login: a version or an agy `/quota` that does not parse is left out
+   * of the result, never a reason to call the CLI unready.
+   */
   private async probe(
     providerId: CliWorkerProviderId,
     executable: NonNullable<CliWorkerCheck["executable"]>,
@@ -346,35 +346,56 @@ export class CliWorkerDetection {
   ): Promise<CliWorkerCheck> {
     const adapter = CLI_WORKER_ADAPTERS[providerId];
     const name = adapter.displayName;
+    const failed = (reason: string, extra: Partial<CliWorkerCheck> = {}): CliWorkerCheck =>
+      ({ ...base, executable, ...extra, status: "unknown", code: "probe_failed", reason });
+    let session: CliWorkerProcessSession;
+    try {
+      session = await this.options.processes.open({ purpose: "check", workingDirectory: this.lookupFolder });
+    } catch (error) {
+      return failed(`${name}'s checks could not start: ${errorText(error)}`);
+    }
     const runs = new Map<string, Promise<CliProbeOutput>>();
-    let unverified = false;
     const probe = (args: readonly string[]): Promise<CliProbeOutput> => {
       const key = JSON.stringify(args);
       let run = runs.get(key);
       if (!run) {
-        run = this.runProbe(executable.path, args).then((result) => {
-          if (!result.stopVerified) unverified = true;
-          return result.output;
-        });
+        run = this.runProbe(session, executable.path, args);
         runs.set(key, run);
       }
       return run;
     };
-    const failed = (reason: string, extra: Partial<CliWorkerCheck> = {}): CliWorkerCheck =>
-      ({ ...base, executable, ...extra, status: "unknown", code: "probe_failed", reason });
-
-    let version: string | undefined;
-    let login: CliLoginState;
-    let models: CliModelList;
+    let collected: { version?: string; login: CliLoginState; models: CliModelList; quota?: AgyQuotaGroup[] } | undefined;
+    let error: unknown;
     try {
-      const [versionOutput, loginOutput] = await Promise.all([probe(adapter.freeChecks.version), probe(adapter.freeChecks.login)]);
-      version = versionOutput.exitCode === 0 ? parseCliVersionOutput(versionOutput.stdout) : undefined;
-      login = adapter.parseLogin(loginOutput);
-      models = await adapter.listModels(probe);
-    } catch (error) {
-      return failed(`${name}'s checks could not run: ${errorText(error)}`);
+      // Both settle before anything fails: a probe still starting when the other failed would otherwise start after
+      // the session's close began.
+      const settled = await Promise.allSettled([probe(adapter.freeChecks.version), probe(adapter.freeChecks.login)]);
+      for (const result of settled) if (result.status === "rejected") throw result.reason;
+      const [versionOutput, loginOutput] = settled.map((result) => (result as PromiseFulfilledResult<CliProbeOutput>).value) as [CliProbeOutput, CliProbeOutput];
+      const version = versionOutput.exitCode === 0 ? parseCliVersionOutput(versionOutput.stdout) : undefined;
+      const login = adapter.parseLogin(loginOutput);
+      const models = await adapter.listModels(probe);
+      let quota: AgyQuotaGroup[] | undefined;
+      if (adapter.freeChecks.quota && login.status === "logged_in") {
+        try {
+          const output = await probe(adapter.freeChecks.quota);
+          quota = output.exitCode === 0 ? parseAgyQuota(output.stdout, this.now()) : undefined;
+        } catch {
+          quota = undefined;
+        }
+      }
+      collected = { ...(version ? { version } : {}), login, models, ...(quota ? { quota } : {}) };
+    } catch (caught) {
+      error = caught;
     }
-    if (unverified) return failed(`${name}'s check processes could not be proven stopped, so AIBoard does not trust their output.`, version ? { version } : {});
+    // Every probe's stop is proven before anything they printed is used (a timed-out probe is stopped here too).
+    try {
+      await session.close();
+    } catch {
+      return failed(`${name}'s check processes could not be proven stopped, so AIBoard does not trust their output.`);
+    }
+    if (!collected) return failed(`${name}'s checks could not run: ${errorText(error)}`);
+    const { version, login, models, quota } = collected;
     const found = {
       executable,
       ...(version ? { version } : {}),
@@ -390,48 +411,21 @@ export class CliWorkerDetection {
     if (login.status === "unknown") {
       return { ...base, ...found, status: "unknown", code: "login_unknown", reason: `AIBoard could not tell whether ${name} is logged in.` };
     }
-    if (adapter.freeChecks.quota) {
-      let groups: AgyQuotaGroup[] | undefined;
-      try {
-        const output = await probe(adapter.freeChecks.quota);
-        groups = output.exitCode === 0 ? parseAgyQuota(output.stdout, this.now()) : undefined;
-      } catch {
-        groups = undefined;
-      }
-      if (unverified) return failed(`${name}'s check processes could not be proven stopped, so AIBoard does not trust their output.`, found);
-      if (groups) {
-        const failure = agyQuotaFailure(groups, this.now());
-        if (failure) return { ...base, ...found, quota: groups, status: "unavailable", code: "usage_limit", reason: failure.message, failure };
-        return { ...base, ...found, quota: groups, status: "ready" };
-      }
+    if (quota) {
+      const failure = agyQuotaFailure(quota, this.now());
+      if (failure) return { ...base, ...found, quota, status: "unavailable", code: "usage_limit", reason: failure.message, failure };
+      return { ...base, ...found, quota, status: "ready" };
     }
     return { ...base, ...found, status: "ready" };
   }
 
-  /** One free probe (§3.2): 8 s, output cut, no stdin, from the lookup folder, its stop proven. */
-  private async runProbe(path: string, args: readonly string[]): Promise<{ output: CliProbeOutput; stopVerified: boolean }> {
+  /** One free probe (§3.2): 8 s, output cut, stdin closed at once. The session's close stops and proves it. */
+  private async runProbe(session: CliWorkerProcessSession, path: string, args: readonly string[]): Promise<CliProbeOutput> {
     const command = this.command(path, args);
-    const id = randomUUID();
-    const owned = await this.options.processes.launch({
-      principalId: `cli-worker-check-${id}`,
-      callId: `cli-worker-check-${id}`,
-      runId: "runner-cli-worker-checks",
-      kind: "command",
-      executable: command.executable,
-      arguments: command.arguments,
-      workingDirectory: this.lookupFolder,
-      environment: this.options.environment(),
-      access: [],
-    });
-    const output = collectOutput(owned, CLI_PROBE_OUTPUT_MAX_CHARS);
-    try { await owned.closeInput(); } catch { /* a command without stdin */ }
-    const exited = await waitUntil(owned, this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS, () => false);
-    const stop = await proveStop(owned, !exited);
-    output.stop();
-    return {
-      output: { exitCode: exited ? stop.exitCode ?? null : null, stdout: output.stdout(), stderr: output.stderr() },
-      stopVerified: stop.verified,
-    };
+    const started = await session.start({ executable: command.executable, args: command.arguments });
+    try { await started.closeInput(); } catch { /* it exited before reading stdin */ }
+    const output = await readUntil(started, this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS, () => false);
+    return { exitCode: output.exited ? output.exitCode : null, stdout: output.stdout, stderr: output.stderr };
   }
 
   private command(path: string, args: readonly string[]): { executable: string; arguments: readonly string[] } {
@@ -475,6 +469,7 @@ export class CliWorkerDetection {
     const schemaPath = join(folder, "result.schema.json");
     const outputPath = join(folder, "result.json");
     await mkdir(work, { recursive: true, mode: 0o700 });
+    // Kept unless no process ran in it, or every process that did was proven stopped.
     let keepFolder = false;
     try {
       const model = request.model;
@@ -491,8 +486,12 @@ export class CliWorkerDetection {
       }
       if (adapter.schemaDelivery === "file") await writeFile(schemaPath, cliWorkerResultSchemaJson(), { mode: 0o600 });
 
-      const run = await this.launchTest(providerId, check.executable.path, args, work, outputPath);
+      const session = await this.options.processes.open({ purpose: "test", workingDirectory: work });
+      keepFolder = true;
+      const run = await this.runTestProcess(session, providerId, check.executable.path, args, outputPath);
       keepFolder = !run.stopVerified;
+      // A start or read that failed, after the stop was proven: the folder goes, the error answers the request.
+      if (run.failure) throw run.failure.error;
       if (!run.stopVerified) {
         return await saved("timed_out", `${name}'s test processes could not be proven stopped; the test folder is kept for cleanup.`,
           { stopVerified: false, launched: true });
@@ -500,61 +499,64 @@ export class CliWorkerDetection {
       const { outcome, message, resetsAt } = testOutcome(name, run.reading, run.stderr, this.now());
       return await saved(outcome, message, { ...(resetsAt ? { resetsAt } : {}), launched: true });
     } finally {
-      if (!keepFolder) await rm(folder, { recursive: true, force: true });
+      if (!keepFolder) {
+        try {
+          await rm(folder, { recursive: true, force: true });
+        } catch (error) {
+          // The result stands; a folder Windows held open stays behind (its processes were proven stopped).
+          console.warn(`[runner] a ${name} test folder could not be removed (${folder}): ${describe(error)}`);
+        }
+      }
     }
   }
 
-  private async launchTest(providerId: CliWorkerProviderId, path: string, args: readonly string[], work: string, outputPath: string): Promise<{ reading: CliRunReading; stderr: string; stopVerified: boolean }> {
+  /**
+   * The Test's one process: the prompt on stdin, then output until the CLI delivers its result (Claude Code, agy), it
+   * exits (Codex, whose -o file is complete only then), or the time runs out. Then the session's stop, which must be
+   * proven before anything is read as the CLI's outcome. It never throws: a start or read that failed is returned as
+   * `failure`, after the stop was tried, so the caller decides about the folder from `stopVerified` alone.
+   */
+  private async runTestProcess(session: CliWorkerProcessSession, providerId: CliWorkerProviderId, path: string, args: readonly string[], outputPath: string): Promise<{ reading: CliRunReading; stderr: string; stopVerified: boolean; failure?: { error: unknown } }> {
     const adapter = CLI_WORKER_ADAPTERS[providerId];
-    const command = this.command(path, args);
-    const id = randomUUID();
-    const owned = await this.options.processes.launch({
-      principalId: `cli-worker-test-${id}`,
-      callId: `cli-worker-test-${id}`,
-      runId: "runner-cli-worker-tests",
-      kind: "command",
-      executable: command.executable,
-      arguments: command.arguments,
-      workingDirectory: work,
-      environment: this.options.environment(),
-      access: [],
-    });
-    const reader = adapter.createStreamReader();
-    const decoder = new TextDecoder();
-    const output = collectOutput(owned, CLI_PROBE_OUTPUT_MAX_CHARS, (chunk) => reader.push(decoder.decode(chunk, { stream: true })));
-    let stopVerified = false;
+    let reader: ReturnType<typeof adapter.createStreamReader> | undefined;
+    let stderr = "";
     let exitCode: number | null = null;
+    let error: unknown;
+    let failed = false;
     try {
+      reader = adapter.createStreamReader();
+      const live = reader;
+      const command = this.command(path, args);
+      const started = await session.start({ executable: command.executable, args: command.arguments });
       try {
-        await owned.write(new TextEncoder().encode(buildCliWorkerStdin(providerId, CLI_WORKER_TEST_PROMPT)), 10_000);
-        await owned.closeInput();
+        await started.closeInput(buildCliWorkerStdin(providerId, CLI_WORKER_TEST_PROMPT));
       } catch {
         // The CLI closed its input before reading the prompt (it refused its arguments, or exited): what it printed
         // and its exit say why, so the run is read as usual.
       }
-      // Claude Code and agy deliver their result in a `result` event, which ends the turn even while a process
-      // stays up; Codex's -o file is complete only at exit (§3.5 step 4).
-      const turnEnds = adapter.resultDelivery === "result_event" ? () => reader.turnEnded : () => false;
-      const exited = await waitUntil(owned, this.options.testTimeoutMs ?? CLI_WORKER_TEST_TIMEOUT_MS, turnEnds);
-      if (!exited && !reader.turnEnded) reader.noteRunnerStop("deadline");
-      const stop = await proveStop(owned, !exited && !reader.turnEnded);
-      stopVerified = stop.verified;
-      exitCode = exited ? stop.exitCode ?? null : null;
-    } catch (error) {
-      const stop = await proveStop(owned, true);
-      stopVerified = stop.verified;
-      output.stop();
-      if (!stopVerified) return { reading: { outcome: { type: "stopped", reason: "cancelled" }, turnEnded: false }, stderr: "", stopVerified };
-      throw error;
+      const turnEnds = adapter.resultDelivery === "result_event" ? () => live.turnEnded : () => false;
+      const output = await readUntil(started, this.options.testTimeoutMs ?? CLI_WORKER_TEST_TIMEOUT_MS, turnEnds, (chunk) => live.push(chunk));
+      stderr = output.stderr;
+      if (output.exited) exitCode = output.exitCode;
+      else if (!live.turnEnded) live.noteRunnerStop("deadline");
+    } catch (caught) {
+      failed = true;
+      error = caught;
     }
-    output.stop();
-    reader.push(decoder.decode());
+    let stopVerified = true;
+    try {
+      await session.close();
+    } catch {
+      stopVerified = false;
+    }
+    const stopped: CliRunReading = { outcome: { type: "stopped", reason: "cancelled" }, turnEnded: false };
+    if (!stopVerified) return { reading: stopped, stderr, stopVerified };
+    if (failed || !reader) return { reading: stopped, stderr, stopVerified, failure: { error } };
     reader.end();
     let outputFile: string | null = null;
     if (adapter.resultDelivery === "exit_output_file") {
       try { outputFile = (await readFile(outputPath, "utf8")).slice(0, CLI_PROBE_OUTPUT_MAX_CHARS); } catch { outputFile = null; }
     }
-    const stderr = output.stderr();
     return { reading: reader.read({ exitCode, stderr, outputFile, now: this.now() }), stderr, stopVerified };
   }
 
@@ -645,51 +647,23 @@ function resetFrom(failure: ProviderFailure, now: number): { resetsAt?: string }
   return failure.retryAfterMs === undefined ? {} : { resetsAt: new Date(now + failure.retryAfterMs).toISOString() };
 }
 
-interface CollectedOutput { stdout(): string; stderr(): string; stop(): void }
-
-/** Keeps at most `max` characters of each stream; `onStdout` sees every stdout chunk (the live stream reader). */
-function collectOutput(owned: RunnerInternalOwnedProcess, max: number, onStdout?: (chunk: Uint8Array) => void): CollectedOutput {
-  const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
-  const text = { stdout: "", stderr: "" };
-  const unsubscribe = owned.setOutputSink((metadata, bytes) => {
-    const stream = metadata.stream === "stderr" ? "stderr" : "stdout";
-    if (stream === "stdout") onStdout?.(bytes);
-    if (text[stream].length >= max) return;
-    text[stream] = (text[stream] + decoders[stream].decode(bytes, { stream: true })).slice(0, max);
-  });
-  let stopped = false;
-  return {
-    stdout: () => text.stdout,
-    stderr: () => text.stderr,
-    stop: () => {
-      if (stopped) return;
-      stopped = true;
-      unsubscribe();
-    },
-  };
-}
-
-/** Polls until the process exits (true), `done()` holds, or the time runs out (false for both). */
-async function waitUntil(owned: RunnerInternalOwnedProcess, timeoutMs: number, done: () => boolean): Promise<boolean> {
+/**
+ * Reads a process until it exits (and its output was read to the end), `done()` holds, or `timeoutMs` passes. Each
+ * stream is kept up to CLI_PROBE_OUTPUT_MAX_CHARS; `onStdout` sees every stdout chunk (the live stream reader).
+ */
+async function readUntil(started: CliWorkerProcess, timeoutMs: number, done: () => boolean, onStdout?: (chunk: string) => void): Promise<{ stdout: string; stderr: string; exited: boolean; exitCode: number | null }> {
   const deadline = Date.now() + timeoutMs;
+  let stdout = "", stderr = "";
   for (;;) {
-    if ((await owned.reconcile()).state === "exited") return true;
-    if (done() || Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-}
-
-/** Stops the process and everything it started, and proves it. An unproven stop is reported, never thrown. */
-async function proveStop(owned: RunnerInternalOwnedProcess, force: boolean): Promise<{ verified: boolean; exitCode?: number }> {
-  try {
-    const disposition = await owned.closeVerified({
-      shutdownTimeoutMs: force ? 1 : SHUTDOWN_TIMEOUT_MS,
-      terminationTimeoutMs: TERMINATION_TIMEOUT_MS,
-      ...(force ? { forceImmediately: true } : {}),
-    });
-    return { verified: true, ...(disposition.exitCode !== undefined ? { exitCode: disposition.exitCode } : {}) };
-  } catch {
-    return { verified: false };
+    const remaining = deadline - Date.now();
+    const output = await started.read(Math.max(0, Math.min(remaining, READ_WAIT_MS)));
+    if (output.stdout) {
+      onStdout?.(output.stdout);
+      if (stdout.length < CLI_PROBE_OUTPUT_MAX_CHARS) stdout = (stdout + output.stdout).slice(0, CLI_PROBE_OUTPUT_MAX_CHARS);
+    }
+    if (output.stderr && stderr.length < CLI_PROBE_OUTPUT_MAX_CHARS) stderr = (stderr + output.stderr).slice(0, CLI_PROBE_OUTPUT_MAX_CHARS);
+    if (output.exited) return { stdout, stderr, exited: true, exitCode: output.exitCode };
+    if (done() || Date.now() >= deadline) return { stdout, stderr, exited: false, exitCode: null };
   }
 }
 

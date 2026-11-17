@@ -4146,7 +4146,8 @@ test("a passing provider test ends that provider's cooldown in running and pause
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-provider-test-"));
   const schedulers: SqliteSchedulerStore[] = [];
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
-  const statuses: Record<string, SchedulerProjection["status"]> = { run_running: "running", run_paused: "paused", run_done: "completed" };
+  // run_broken is first: its store refuses the event, and the Builds after it still end their cooldowns.
+  const statuses: Record<string, SchedulerProjection["status"]> = { run_broken: "running", run_running: "running", run_paused: "paused", run_done: "completed" };
   const registries = new Map<string, ProviderHealthRegistry>();
   const cooldown = { providerId: "claude-code", status: "cooldown" as const, consecutiveFailures: 1, updatedAt: 1, failureKind: "authentication" as const,
     failureMessage: "Claude Code is not logged in.", cooldownUntil: Date.now() + 86_400_000 };
@@ -4174,8 +4175,10 @@ test("a passing provider test ends that provider's cooldown in running and pause
           projectHandoff: async () => { throw new Error("unused"); },
           cleanup: () => undefined,
           close: () => undefined,
-          endProviderCooldown: (providerId: string, source: string) =>
-            endProviderCooldownInBuild(health, scheduler, input.runId, providerId, source),
+          endProviderCooldown: (providerId: string, source: string) => {
+            if (input.runId === "run_broken") throw new Error("the scheduler store is closing");
+            return endProviderCooldownInBuild(health, scheduler, input.runId, providerId, source);
+          },
         };
       },
     });
@@ -4187,8 +4190,8 @@ test("a passing provider test ends that provider's cooldown in running and pause
       const events = schedulers[index]!.readRun(runId);
       const durable = providerHealthFromSchedulerEvents(events).find((state) => state.providerId === "claude-code");
       const live = registries.get(runId)!;
-      if (runId === "run_done") {
-        assert.equal(durable?.status, "cooldown", "a terminal Build keeps its record");
+      if (runId === "run_done" || runId === "run_broken") {
+        assert.equal(durable?.status, "cooldown", `${runId}: a terminal Build, or one whose store refused, keeps its record`);
         assert.equal(live.isAvailable("claude-code"), false);
         continue;
       }

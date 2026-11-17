@@ -638,9 +638,14 @@ export class NativeBuildManager implements BuildControlPlane {
         if (handle.historical || !handle.endProviderCooldown) continue;
         const status = handle.runtime.projection().status;
         if (status !== "running" && status !== "paused") continue;
-        await this.withRuntimeActivity(async () => {
-          if (handle.endProviderCooldown!(providerId, source)) ended.push(runId);
-        });
+        // One Build whose store refuses the event (closing under it, say) keeps its cooldown; the others still end theirs.
+        try {
+          await this.withRuntimeActivity(async () => {
+            if (handle.endProviderCooldown!(providerId, source)) ended.push(runId);
+          });
+        } catch (error) {
+          console.warn(`[runner] a passing ${providerId} test could not end Build ${runId}'s cooldown: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       return ended;
     });

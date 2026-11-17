@@ -47,9 +47,12 @@ const deterministicPrTests = [
   // CW4: the CLI crew rules, the .cmd rules and the cli_workers.checked event, in memory with a temporary scheduler
   // store (no process, about 1 s).
   "runner-v2/test/cli-worker-crew.test.ts",
-  // CW3: the free checks and the Test button over HTTP with fake CLIs (node runs, no real CLI) and one Test under the
-  // Runner-internal process kernel (about 12 s on Windows, most of it that one kernel launch; a few seconds on Linux).
+  // CW3: the free checks and the Test button over HTTP with fake CLIs and a process-host double (node runs, no real
+  // CLI; about 10 s on Windows, a few seconds on Linux), and the same checks and Tests through the real execution host,
+  // the Job or the process group, as a worker's processes run (about 19 s on Windows, most of it the host's process
+  // facts and the Job host's start; a few seconds on Linux).
   "runner-v2/test/control-server-cli-workers.test.ts",
+  "runner-v2/test/cli-worker-processes.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

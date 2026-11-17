@@ -133,6 +133,13 @@ export interface ExecutionHostRunBindingInput {
   readonly processEnvironment?: RunnerProcessEnvironmentResolver;
   /** VF7b: told before and after each managed stop of this run (playwright-cli.ts's browser cleanup). */
   readonly managedStopObserver?: ManagedProcessStopObserver;
+  /**
+   * CW3: a short-lived Runner-internal run (a CLI worker's free checks or Test, cli-worker-processes.ts). Its run
+   * root, managed-process records and artifacts live in `<state>/transient-runs/<runId>/` instead of the shared
+   * stores, so a run that leaves no history adds nothing to them. The folder is removed when the binding's close has
+   * proven every process stopped; a close that fails, a host closed under it or a crash keeps it.
+   */
+  readonly transient?: boolean;
 }
 
 /**
@@ -267,11 +274,12 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
     options.ambientEnvironment ?? {},
   );
   const hostId = `execution-host-${randomUUID()}`;
+  const managedPlatform: NodeJS.Platform = platform === "windows"
+    ? "win32"
+    : process.platform === "win32" ? "linux" : process.platform;
   const managedProcesses = options.managedProcesses ?? new ManagedProcessService({
     stateDirectory: join(stateDirectory, "managed-processes"),
-    platform: platform === "windows"
-      ? "win32"
-      : process.platform === "win32" ? "linux" : process.platform,
+    platform: managedPlatform,
   });
   const ownsManagedProcesses = options.managedProcesses === undefined;
   const windowsJobHost = options.windowsJobHost ?? createWindowsJobProcessHost({
@@ -324,7 +332,22 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
       let finishBinding!: () => void;
       const completion = new Promise<void>((resolveCompletion) => { finishBinding = resolveCompletion; });
       bindingOperations.add(completion);
+      let transient: TransientRunState | undefined;
+      // Set once createRunBinding returned: from then on only the binding's proven close may release a transient run.
+      let constructed = false;
       try {
+        if (input.transient) {
+          const root = join(stateDirectory, "transient-runs", runId);
+          await mkdir(dirname(root), { recursive: true, mode: 0o700 });
+          // Not recursive: a transient run id is never reused, so an existing folder is refused.
+          await mkdir(root, { mode: 0o700 });
+          try {
+            transient = { root, managedProcesses: new ManagedProcessService({ stateDirectory: join(root, "managed"), platform: managedPlatform }) };
+          } catch (error) {
+            await rm(root, { recursive: true, force: true }).catch(() => undefined);
+            throw error;
+          }
+        }
         const binding = await createRunBinding({
           constructionOwner,
           hostId,
@@ -339,8 +362,9 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           ...(input.localMcpDepth !== undefined ? { mcpChildDepth: input.localMcpDepth + 1 } : {}),
           ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
           ...(input.managedStopObserver ? { managedStopObserver: input.managedStopObserver } : {}),
-          artifacts: input.artifacts ?? options.artifacts,
-          managedProcesses,
+          ...(transient
+            ? { runtimeRoot: join(transient.root, "runtime"), artifacts: new ArtifactStore(join(transient.root, "artifacts")), managedProcesses: transient.managedProcesses }
+            : { artifacts: input.artifacts ?? options.artifacts, managedProcesses }),
           windowsJobHost,
           platform,
           streamingStoreOptions: options.streamingStoreOptions,
@@ -351,18 +375,24 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
             if (bindings.get(runId) === binding) bindings.delete(runId);
           },
         });
+        constructed = true;
         constructionOwners.delete(constructionOwner);
         bindings.set(runId, binding);
         if (closed) {
           await binding.close();
           throw new Error("ExecutionHost closed while a run binding was being created.");
         }
-        return binding;
+        return transient ? transientRunBinding(binding, transient) : binding;
       } catch (error) {
         // Failed rollback stays reserved and creator-owned until host cleanup.
         if (constructionOwner.isComplete()) {
           constructionOwners.delete(constructionOwner);
           if (bindings.get(runId) === reservation) bindings.delete(runId);
+          // A transient run whose construction threw and rolled back completely started nothing that outlives it. A
+          // binding that was built and then failed its close keeps its folder, as any unproven close does.
+          if (transient && !constructed) {
+            try { await releaseTransientRunState(transient); } catch { /* its folder stays; the construction error stands */ }
+          }
         }
         throw error;
       } finally {
@@ -524,6 +554,35 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
     },
   });
   return host;
+}
+
+interface TransientRunState {
+  readonly root: string;
+  readonly managedProcesses: ManagedProcessService;
+}
+
+/**
+ * CW3: a transient run's binding. Its close is the binding's own close, which throws unless every process was proven
+ * stopped (then the folder stays); after that proof the run's private record store is closed and its folder removed.
+ * A folder that cannot be removed (a handle Windows held a moment longer) is logged and left: the stop stands.
+ */
+function transientRunBinding(binding: ExecutionHostRunBinding, state: TransientRunState): ExecutionHostRunBinding {
+  return Object.freeze({
+    ...binding,
+    async close() {
+      await binding.close();
+      await releaseTransientRunState(state);
+    },
+  });
+}
+
+async function releaseTransientRunState(state: TransientRunState): Promise<void> {
+  await state.managedProcesses.close();
+  try {
+    await rm(state.root, { recursive: true, force: true });
+  } catch (error) {
+    console.warn(`[runner] a transient run's folder could not be removed (${state.root}): ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 interface CreateRunBindingInput {
