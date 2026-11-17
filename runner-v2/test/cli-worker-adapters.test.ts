@@ -924,8 +924,9 @@ test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the gr
   assert.equal(acted.status, 0, acted.stderr);
   const record = JSON.parse(readFileSync(join(directory, "agy-run.json"), "utf8")) as FakeCliRecord;
   assert.ok(Number.isSafeInteger(record.grandchildPid) && record.grandchildPid! > 0);
-  // process.cwd() is the real path: on macOS the temp folder under /var is reached through /private/var.
-  assert.equal(record.cwd, realpathSync.native(repo));
+  // Both sides by real path: macOS reaches the temp folder under /var through /private/var, and on Windows the
+  // fake's process.cwd() keeps an 8.3 short name (RUNNER~1) that the temp path may spell out in full.
+  assert.equal(realpathSync.native(record.cwd), realpathSync.native(repo));
   assert.equal(readFileSync(join(repo, "docs", "project", "plan.md"), "utf8"), "edited by the CLI\n");
   assert.equal(spawnSync("git", ["log", "-1", "--format=%s"], { cwd: repo, encoding: "utf8" }).stdout.trim(), "cli commit");
   assert.deepEqual(spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim().split(/\r?\n/), ["docs/project/plan.md"]);
