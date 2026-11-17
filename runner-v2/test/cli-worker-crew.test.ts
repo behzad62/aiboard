@@ -202,6 +202,19 @@ test("CW4 a logged-out CLI and a spent agy quota are unhealthy with their §3.8 
   assert.deepEqual(ready.checked.clis.map((cli) => [cli.status, cli.reason]), [["ready", undefined], ["unknown", "agy models timed out after 8 s."]]);
 });
 
+test("CW4 an empty failure message, a fractional or negative retry time and an unknown kind still record the CLI", async () => {
+  const { checked, failures } = await checkCliWorkers(checkInput({ results: [
+    { providerId: "claude-code", status: "unhealthy", failure: { kind: "usage_limit", message: "", retryAfterMs: 1500.4 } },
+    { providerId: "agy", status: "unhealthy", failure: { kind: "nonsense" as never, message: "agy failed.", retryAfterMs: -5 } },
+  ] }));
+  assert.deepEqual(failures, [
+    { providerId: "claude-code", failure: { kind: "usage_limit", message: "Claude Code failed a free check.", retryAfterMs: 1500 } },
+    { providerId: "agy", failure: { kind: "transient", message: "agy failed." } },
+  ]);
+  // The record replays, so the epoch is never dropped.
+  assert.deepEqual(parseCliWorkersChecked(JSON.parse(JSON.stringify(checked))), checked);
+});
+
 test("CW4 free checks that throw or skip a CLI record it unknown, never unhealthy", async () => {
   const thrown = await checkCliWorkers({ ...checkInput(), freeChecks: async () => { throw new Error("probe host gone"); } });
   assert.deepEqual(thrown.failures, []);
@@ -382,6 +395,8 @@ test("CW4 POST /v2/runs refuses a crew that breaks a CLI rule with 409 and its c
       ["project", {}, "cli_workers_require_full_access"],
       ["guarded", {}, "cli_workers_require_full_access"],
       ["full", { reviewerRuntimeId: "agy:default", verifierRuntimeIds: ["openai:sol", "agy:default"] }, "cli_runtime_role_refused"],
+      // As the web sends it: CLI runtimes left out of the verifier list, the CLI reviewer still named.
+      ["full", { reviewerRuntimeId: "agy:default", verifierRuntimeIds: ["openai:sol", "google:gemini"] }, "cli_runtime_role_refused"],
     ];
     for (const [permissionProfile, build, code] of cases) {
       const response = await post(permissionProfile, build);
@@ -391,6 +406,17 @@ test("CW4 POST /v2/runs refuses a crew that breaks a CLI rule with 409 and its c
       assert.match(body.error ?? "", /CLI worker/);
     }
     assert.deepEqual(supervisor.listRuns(), [], "no run is created, so a retry with a fixed crew starts clean");
+    // The crew-change route too: a CLI reviewer outside the verifier list gets the code, not a generic invalid body.
+    const crew = await fetch(`${url}/v2/runs/run_cw4_control/build/crew`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        architectRuntimeId: "openai:sol", workerRuntimeIds: ["google:gemini"], verifierRuntimeIds: ["openai:sol", "google:gemini"],
+        reviewerRuntimeId: "claude-code:default", idempotencyKey: "crew:cw4",
+      }),
+    });
+    assert.equal(crew.status, 409);
+    assert.equal(((await crew.json()) as { code?: string }).code, "cli_runtime_role_refused");
     assert.equal(bootstrapped, 0, "no baseline is captured");
     assert.deepEqual(created, []);
   } finally {

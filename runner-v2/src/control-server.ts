@@ -57,7 +57,8 @@ import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./proces
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
-import { assertCliCrewRules, CliCrewRuleError } from "./cli-worker-crew.js";
+import { assertCliCrewRules, CLI_RUNTIME_ROLE_REFUSED, CliCrewRuleError } from "./cli-worker-crew.js";
+import { isCliRuntimeId } from "./cli-crew-policy.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { applyHomeBatch, keyHint, readAiboardHome, type AiboardHomeSnapshot, type HomeOp } from "./aiboard-home-store.js";
@@ -1116,9 +1117,12 @@ export class ControlServer {
           body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId)) ||
           !Array.isArray(body.verifierRuntimeIds) || body.verifierRuntimeIds.length < 1 ||
           body.verifierRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId) || runtimeId !== runtimeId.trim()) ||
-          new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length ||
-          (body.reviewerRuntimeId !== undefined && (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId)))
+          new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
         ) invalidBody();
+        refuseCliReviewer(body.reviewerRuntimeId);
+        if (body.reviewerRuntimeId !== undefined && (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId))) {
+          invalidBody();
+        }
         const builds = this.requireBuilds();
         if (!builds.changeCrew) throw new HttpError(409, "unsupported", "This runner cannot change a Build's models.");
         sendJson(
@@ -2009,6 +2013,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
   ) invalidBody();
   if (typeof body.alwaysRequireIndependentVerifier !== "boolean") invalidBody();
+  refuseCliReviewer(body.reviewerRuntimeId);
   if (
     body.reviewerRuntimeId !== undefined &&
     (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId))
@@ -2104,6 +2109,16 @@ function assertExactBodyKeys(body: unknown, expected: string[]): asserts body is
   if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
   const allowed = new Set(expected);
   if (Object.keys(body).some((key) => !allowed.has(key))) invalidBody();
+}
+
+/**
+ * CW4: a CLI reviewer is refused with its code before the reviewer-in-verifiers check, since the web leaves CLI
+ * runtimes out of the verifier list and a CLI reviewer would otherwise get a generic invalid body.
+ */
+function refuseCliReviewer(reviewerRuntimeId: unknown): void {
+  if (isNonEmptyString(reviewerRuntimeId) && isCliRuntimeId(reviewerRuntimeId)) {
+    throw new CliCrewRuleError(CLI_RUNTIME_ROLE_REFUSED, `${reviewerRuntimeId} is a CLI worker and cannot be the reviewer: CLI runtimes are workers only.`, reviewerRuntimeId);
+  }
 }
 
 function invalidBody(): never {

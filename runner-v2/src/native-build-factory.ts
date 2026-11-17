@@ -2395,10 +2395,10 @@ export class NativeBuildFactory {
                   if (cli.status === "unhealthy" && cli.failureKind) {
                     persist(health.recordFailure(cli.providerId, {
                       kind: cli.failureKind,
-                      message: cli.reason ?? `${cli.providerId} failed a free check.`,
+                      message: cli.reason || `${cli.providerId} failed a free check.`,
                       ...(cli.retryAfterMs !== undefined ? { retryAfterMs: cli.retryAfterMs } : {}),
                     }));
-                  } else if (cli.status === "ready" && !health.isAvailable(cli.providerId) &&
+                  } else if (cli.status === "ready" && health.get(cli.providerId).status === "cooldown" &&
                       cooldownCausedByCliCheck(schedulerStore.readRun(spec.runId), cli.providerId)) {
                     // A check found it logged out (or out of /quota); now it passes, so that cooldown ends. A cooldown a
                     // real run caused (a usage limit in a task) stays: a free check proves nothing about it.

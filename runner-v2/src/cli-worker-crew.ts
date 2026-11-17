@@ -229,7 +229,16 @@ export async function checkCliWorkers(input: CheckCliWorkersInput): Promise<{
       ? result.failure ?? { kind: "authentication" as const, message: `${CLI_WORKER_DISPLAY_NAMES[providerId]} failed a free check.` }
       : cmdLaunchFailure(providerId, result, input, runtimeIds);
     if (failure) {
-      const recorded = { ...failure, message: bound(failure.message) };
+      // A message and a retry time the health registry accepts, so one odd result never drops the epoch's record.
+      const retryAfterMs = typeof failure.retryAfterMs === "number" && Number.isFinite(failure.retryAfterMs) && failure.retryAfterMs >= 0
+        ? Math.min(Math.round(failure.retryAfterMs), Number.MAX_SAFE_INTEGER)
+        : undefined;
+      const recorded: ProviderFailure = {
+        // An unknown kind is transient, as an unknown CLI message is (§3.8).
+        kind: FAILURE_KINDS.has(failure.kind) ? failure.kind : "transient",
+        message: bound(failure.message || "") || `${CLI_WORKER_DISPLAY_NAMES[providerId]} failed a free check.`,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      };
       failures.push({ providerId, failure: recorded });
       clis.push({
         ...base, ...facts, status: "unhealthy", failureKind: recorded.kind, reason: recorded.message,

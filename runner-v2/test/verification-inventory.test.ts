@@ -8,6 +8,7 @@ import type { CheckToolLookup, CheckToolLookupResult } from "../src/check-tool-l
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 import type { FinalVerificationExecutionProfile } from "../src/final-verification-profile.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
   boundEnvironmentInventory,
@@ -475,6 +476,7 @@ test("CW4 a factory-built run checks its CLI workers before the Architect's firs
   const modelsBuilt: string[] = [];
   const requested: string[][] = [];
   let agyLoggedIn = false;
+  let claudeExe = false;
   let factory: InstanceType<typeof NativeBuildFactory> | undefined;
   let handle: Awaited<ReturnType<InstanceType<typeof NativeBuildFactory>["create"]>> | undefined;
   try {
@@ -504,7 +506,9 @@ test("CW4 a factory-built run checks its CLI workers before the Architect's firs
       cliWorkerFreeChecks: async ({ providerIds }) => {
         requested.push([...providerIds]);
         return [
-          { providerId: "claude-code", status: "ready", executable: { path: "C:\\npm\\claude.cmd", form: "cmd" }, version: "2.1.326" },
+          claudeExe
+            ? { providerId: "claude-code", status: "ready", executable: { path: "C:\\bin\\claude.exe", form: "exe" }, version: "2.1.326" }
+            : { providerId: "claude-code", status: "ready", executable: { path: "C:\\npm\\claude.cmd", form: "cmd" }, version: "2.1.326" },
           agyLoggedIn
             ? { providerId: "agy", status: "ready", executable: { path: "C:\\bin\\agy.exe", form: "exe" } }
             : { providerId: "agy", status: "unhealthy", executable: { path: "C:\\bin\\agy.exe", form: "exe" }, failure: { kind: "authentication", message: "agy is not logged in." } },
@@ -559,9 +563,23 @@ test("CW4 a factory-built run checks its CLI workers before the Architect's firs
     assert.equal(runtime.events().filter((event) => event.type === "cli_workers.checked").length, 1);
     assert.equal(requested.length, 1);
 
-    // The owner logs agy in and resumes: the resume epoch checks again, and the cooldown a check caused ends.
+    // The owner logs agy in and installs claude.exe, then resumes. Before that, a task ran Claude Code into a real
+    // usage limit: the driver records it under its own key (native-worker-driver.ts, provider-health:<id>:<n>).
     agyLoggedIn = true;
+    claudeExe = true;
     if (runtime.projection().status === "running") runtime.pause("owner", "pause:cw4");
+    const external = new SqliteSchedulerStore(join(state, "builds", runnerRunStateSegment(runId), "scheduler.sqlite"));
+    try {
+      const now = Date.now();
+      external.append({
+        runId, type: "provider.health_changed", occurredAt: new Date(now).toISOString(), actor: { role: "runner", id: "runtime-router" },
+        idempotencyKey: "provider-health:claude-code:99",
+        payload: { state: { providerId: "claude-code", status: "cooldown", consecutiveFailures: 2, updatedAt: now,
+          failureKind: "usage_limit", failureMessage: "Claude Code reached its usage limit.", cooldownUntil: now + 3_600_000 } },
+      });
+    } finally {
+      external.close();
+    }
     runtime.resume("resume:cw4");
     const resumed = runtime.events().filter((event) => event.type === "run.resumed").at(-1)!;
     await runtime.step().catch(() => undefined);
@@ -570,12 +588,13 @@ test("CW4 a factory-built run checks its CLI workers before the Architect's firs
     assert.equal(records.length, 2);
     assert.equal(records[1]!.idempotencyKey, `cli-workers-checked:${resumed.sequence}`);
     assert.equal(runtime.projection().cliWorkersChecked!.trigger, "resume");
-    assert.deepEqual(runtime.projection().cliWorkersChecked!.clis.map((entry) => entry.status), ["unhealthy", "ready"]);
+    assert.deepEqual(runtime.projection().cliWorkersChecked!.clis.map((entry) => entry.status), ["ready", "ready"]);
     assert.equal(runtime.projection().runtime.providerHealth.agy?.status, "healthy", "a passing check ends the cooldown a check caused");
-    assert.equal(runtime.projection().runtime.providerHealth["claude-code"]?.status, "cooldown", "the .cmd refusal still holds");
-    const ended = fromChecks(after).filter((event) =>
-      event.sequence > resumed.sequence && (event.payload.state as { providerId: string }).providerId === "agy");
-    assert.deepEqual(ended.map((event) => (event.payload.state as { status: string }).status), ["healthy"]);
+    assert.equal(runtime.projection().runtime.providerHealth["claude-code"]?.status, "cooldown", "a real usage limit outlives a passing free check");
+    const sinceResume = (providerId: string) => fromChecks(after).filter((event) =>
+      event.sequence > resumed.sequence && (event.payload.state as { providerId: string }).providerId === providerId);
+    assert.deepEqual(sinceResume("agy").map((event) => (event.payload.state as { status: string }).status), ["healthy"]);
+    assert.deepEqual(sinceResume("claude-code"), [], "the check writes nothing over the driver's cooldown");
   } finally {
     await handle?.close();
     await factory?.close();
