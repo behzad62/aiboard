@@ -220,16 +220,15 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
       if (!context && (!durable || durable.state !== "active" && durable.state !== "released")) {
         return Object.freeze({ ...target, stdout: tail(target.stdout, maximum), stderr: tail(target.stderr, maximum) });
       }
-      if (!durable && target.status === "stopped" && target.pid === 0) {
-        // A rejected static discovery never acquired a session. This is bounded
-        // terminal metadata, not a PID-based native observation or release proof.
+      if (neverStarted(target)) {
+        // A rejected static discovery or a launch refused before its session never acquired a session. This is
+        // bounded terminal metadata, not a PID-based native observation or release proof.
         if (context) {
           assertCall(context, target, run.runId, ["process.poll", "process.list"]);
           const claims = run.executionGrants.consume(context.executionGrant!, bindingFor(context, options.permissionProfile));
           assertCurrentConsumedExecutionGrantClaims(claims);
         }
-        return Object.freeze({ processId: target.processId, pid: 0, status: "stopped" as const, exitCode: target.exitCode, signal: target.signal,
-          startedAt: target.startedAt, updatedAt: target.updatedAt, stdout: tail(target.stdout, maximum), stderr: tail(target.stderr, maximum) });
+        return recordedStop(target, maximum);
       }
       if (!context) { recordOf(target); return await snapshot(target, undefined, undefined, maximum); }
       const assertion = expected(target, context, "observe");

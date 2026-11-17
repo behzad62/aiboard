@@ -124,23 +124,6 @@ function refusedLaunchFixture(start: FakeStart, options: { proveStop?: () => boo
 const running = (request: ManagedProcessLaunchRequest): ManagedProcessSnapshot => ({ processId: request.identity.processId, pid: 7, status: "running",
   exitCode: null, signal: null, startedAt: "2026-11-17T00:00:00.000Z", updatedAt: "2026-11-17T00:00:00.000Z", stdout: "", stderr: "" });
 
-test("a runtime that refuses before any spawn: its proven stop finds nothing, so only the coded refusal and a stopped record", async () => {
-  const refusal = new WindowsBatchLaunchUnavailableError();
-  const f = refusedLaunchFixture(async () => { throw refusal; });
-  try {
-    let error: unknown;
-    try { await f.service.start({ command: "tool.cmd" }, f.context, f.root); } catch (caught) { error = caught; }
-    assert.equal(error, refusal, "the service throws the refusal itself, not a wrapper or an aggregate");
-    assert.equal((error as WindowsBatchLaunchUnavailableError).code, "windows_batch_argv_unverified");
-    assert.equal(error instanceof AggregateError, false);
-    assert.equal(isProcessStopUnprovenError(error), false);
-    assert.deepEqual(f.stops, [f.record().processId], "the record reaches stopped only through the proven stop");
-    assert.equal(f.record().status, "stopped");
-    assert.doesNotThrow(() => f.detach(), "the runtime detaches: no record of its run is left unstopped");
-    await f.service.close();
-  } finally { rmSync(f.root, { recursive: true, force: true }); }
-});
-
 test("a runtime that refuses after creating state keeps the exact stop and its unverified-cleanup aggregate", async () => {
   const refusal = new WindowsBatchLaunchUnavailableError(); let prove = false;
   const f = refusedLaunchFixture(async (request, live) => { live.add(request.identity.processId); throw refusal; }, { proveStop: () => prove });
@@ -160,15 +143,20 @@ test("a runtime that refuses after creating state keeps the exact stop and its u
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test("other start failures are unchanged: a proven stop rethrows the failure, a success stays running", async () => {
-  const failure = new Error("spawn failed");
-  const f = refusedLaunchFixture(async (request, live) => { live.add(request.identity.processId); throw failure; });
-  try {
-    await assert.rejects(f.service.start({ command: "tool" }, f.context, f.root), (caught: unknown) => caught === failure);
-    assert.deepEqual(f.stops, [f.record().processId]);
-    assert.equal(f.record().status, "stopped");
-    assert.doesNotThrow(() => f.detach());
-  } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+test("a failed start whose stop is proven throws the failure alone, with a stopped record and a free detach", async () => {
+  // A coded refusal raised before any spawn (nothing live) and an ordinary failure after a spawn both take the same exact stop.
+  for (const [failure, spawned] of [[new WindowsBatchLaunchUnavailableError(), false], [new Error("spawn failed"), true]] as const) {
+    const f = refusedLaunchFixture(async (request, live) => { if (spawned) live.add(request.identity.processId); throw failure; });
+    try {
+      let error: unknown;
+      try { await f.service.start({ command: "tool" }, f.context, f.root); } catch (caught) { error = caught; }
+      assert.equal(error, failure, "the service throws the failure itself, not an aggregate");
+      assert.equal(isProcessStopUnprovenError(error), false);
+      assert.deepEqual(f.stops, [f.record().processId], "the record reaches stopped only through the proven stop");
+      assert.equal(f.record().status, "stopped");
+      assert.doesNotThrow(() => f.detach(), "the runtime detaches: no record of its run is left unstopped");
+    } finally { await f.service.close(); rmSync(f.root, { recursive: true, force: true }); }
+  }
   const g = refusedLaunchFixture(async (request) => running(request));
   try { assert.equal((await g.service.start({ command: "tool" }, g.context, g.root)).status, "running"); }
   finally { await g.service.close(); rmSync(g.root, { recursive: true, force: true }); }

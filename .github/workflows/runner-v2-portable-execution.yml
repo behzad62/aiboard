@@ -113,6 +113,7 @@ jobs:
           runner-v2/test/runner-resource-cleanup.test.ts
           runner-v2/test/static-adapter-policy.test.ts
           runner-v2/test/managed-process.test.ts
+          runner-v2/test/managed-never-started-list.test.ts
           runner-v2/test/windows-job-active-probe.test.ts
           runner-v2/test/native-build-rollback-order.test.ts
           runner-v2/test/verification-plan-v2-contract.test.ts
