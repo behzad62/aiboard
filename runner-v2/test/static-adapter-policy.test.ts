@@ -147,6 +147,23 @@ test("authorized stop cleanup budget reaches every production joiner and physica
   const harness = readFileSync(join(runnerRoot, "test", "support", "real-streaming-harness.ts"), "utf8");
   assert.match(harness, /AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS/);
 });
+test("CW5a: the managed transport refuses a batch launch before any streaming launch state, after the abort check", () => {
+  const transport = readFileSync(join(sourceRoot, "execution-host-managed-transport.ts"), "utf8");
+  const abort = transport.indexOf("if (signal.aborted) throw cancelled();");
+  const check = transport.indexOf('if (executable && requiredLifecycleScope === "process_group" && options.windowsBatchArgv !== undefined)');
+  const assertion = transport.indexOf("assertWindowsBatchLaunchAvailable(executable.path, options.windowsBatchArgv)");
+  const open = transport.indexOf("await run.openStreaming(");
+  assert.ok(abort > 0 && check > abort, "a cancelled or expired start reports that before the batch refusal");
+  assert.ok(assertion > check && open > assertion, "the batch refusal precedes every streaming launch effect");
+  assert.equal((transport.match(/assertWindowsBatchLaunchAvailable\(/g) ?? []).length, 1);
+  // Only a record already saved stopped with pid 0, with no session and no unreleased host launch, is answered from the record.
+  assert.match(transport, /const neverStarted = \(target: ManagedProcessTarget\): boolean => \{\s*if \(target\.status !== "stopped" \|\| target\.pid !== 0 \|\| recordOf\(target\)\) return false;\s*const launch = run\.streamingState\.readHostLaunch\(launchId\(target\.processId\)\);\s*return !launch \|\| launch\.state === "released";/);
+  assert.doesNotMatch(transport, /ManagedLaunchNeverStartedError/);
+  const service = readFileSync(join(sourceRoot, "managed-process.ts"), "utf8");
+  const start = service.slice(service.indexOf("  async start("), service.indexOf("  async poll("));
+  assert.match(start, /catch \(primary\) \{\s*try \{ await this\.stopExact\(/, "every failed start runs the exact stop");
+  assert.match(start, /AggregateError\(\[primary, cleanup\], "Managed failed start retains unverified exact cleanup\."\)/);
+});
 test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway", () => {
   const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8");
   assert.match(

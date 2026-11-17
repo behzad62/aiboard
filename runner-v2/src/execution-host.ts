@@ -851,6 +851,8 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     const managedRuntime = createExecutionHostManagedRuntime({
       run: binding, permissionProfile: input.permissionProfile, environment: input.ambientEnvironment, artifacts: input.artifacts,
       ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
+      // CW5a: the same once-run fact the Windows backends were built with (createWindowsBackends).
+      ...(input.platform === "windows" ? { windowsBatchArgv: (await input.resolveWindowsFacts()).windowsBatchArgv } : {}),
     });
     managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(
       input.managedStopObserver ? observeManagedStops(managedRuntime, input.managedStopObserver) : managedRuntime,
