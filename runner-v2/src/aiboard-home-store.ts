@@ -12,9 +12,24 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, posix, win32 } from "node:path";
 
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
+import {
+  CLI_DEFAULT_MODEL_ID,
+  CLI_TEST_MESSAGE_MAX,
+  CLI_TEST_OUTCOMES,
+  CLI_WORKER_MODELS_MAX,
+  CLI_WORKER_PROVIDER_IDS,
+  isCliArgumentValue,
+  isCliAttemptMinutes,
+  isCliVersion,
+  isCliWorkerProviderId,
+  isIsoTimestamp,
+  scrubCliMessage,
+  type CliWorkerProviderId,
+  type HomeCliWorkersV1,
+} from "./cli-worker-config.js";
 import { openEncryptedJson } from "./encrypted-provider-config-store.js";
 import { migrateHomeConfigModelIds, snapshotProvider } from "./home-model-policy.js";
 import { acquireLockFile } from "./launcher-instance.js";
@@ -126,7 +141,11 @@ export interface HomeCustomModelV1 {
 
 export type HomeSettingsV1 = { [field in HomeSettingsField]?: unknown } & Record<string, unknown>;
 
-/** `<home>/config.json`. The `exec` section is DX1's (OD-33); until then it is an unknown field, kept verbatim. */
+/**
+ * `<home>/config.json`. The `exec` section is DX1's (OD-33); until then it is an unknown field, kept verbatim.
+ * `cliWorkers` is the CLI workers' section (CLI workers plan §3.3, CW1): one entry per CLI, written at
+ * `cliWorkers.<providerId>`. It never holds a credential: each CLI keeps its own login.
+ */
 export interface AiboardHomeConfigV1 {
   contractVersion: string;
   revision: number;
@@ -136,6 +155,7 @@ export interface AiboardHomeConfigV1 {
   openAIConnectionMode: "api" | "subscription";
   customModels: HomeCustomModelV1[];
   settings: HomeSettingsV1;
+  cliWorkers?: HomeCliWorkersV1;
   [unknown: string]: unknown;
 }
 
@@ -221,7 +241,8 @@ type Section =
   | { kind: "setting"; field: HomeSettingsField }
   | { kind: "settingEntry"; field: typeof HOME_SETTINGS_MAP_FIELDS[number]; entry: string }
   | { kind: "credential"; target: "providers" | "customModels"; id: string }
-  | { kind: "credentialRemoteMcp" };
+  | { kind: "credentialRemoteMcp" }
+  | { kind: "cliWorker"; id: CliWorkerProviderId };
 
 const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -254,6 +275,10 @@ export function parseHomePath(path: string): Section {
     return { kind: "customModel", id: rest };
   }
   if (path === "openAIConnectionMode") return { kind: "openAIConnectionMode" };
+  if ((rest = after("cliWorkers.")) !== undefined) {
+    if (!isCliWorkerProviderId(rest)) throw invalid(`${path}: the CLI workers are ${CLI_WORKER_PROVIDER_IDS.join(", ")}.`);
+    return { kind: "cliWorker", id: rest };
+  }
   if ((rest = after("settings.")) !== undefined) {
     for (const field of HOME_SETTINGS_MAP_FIELDS) {
       const entry = rest.startsWith(`${field}.`) ? rest.slice(field.length + 1) : undefined;
@@ -277,6 +302,7 @@ function sectionSegments(section: Section): string[] {
     case "settingEntry": return ["settings", section.field, section.entry];
     case "credential": return ["credentials", section.target, section.id];
     case "credentialRemoteMcp": return ["credentials", "remoteMcpAuthorizationToken"];
+    case "cliWorker": return ["cliWorkers", section.id];
   }
 }
 
@@ -525,6 +551,7 @@ function parseConfig(bytes: Buffer): { config: AiboardHomeConfigV1; newer: boole
   check(Array.isArray(config.customModels) && config.customModels.every((entry) => isRecord(entry) && typeof entry.id === "string"), "customModels", () => { config.customModels = []; });
   check(isRecord(config.settings), "settings", () => { config.settings = {}; });
   check(config.openAIConnectionMode === "api" || config.openAIConnectionMode === "subscription", "openAIConnectionMode", () => { config.openAIConnectionMode = "api"; });
+  check(config.cliWorkers === undefined || (isRecord(config.cliWorkers) && Object.values(config.cliWorkers).every(isRecord)), "cliWorkers", () => { delete config.cliWorkers; });
   return { config, newer };
 }
 
@@ -907,6 +934,103 @@ function toolRuntimeValue(value: unknown, label: string): Record<string, unknown
   return result;
 }
 
+// ------------------------------------------------------------------ CLI workers (§3.3 of the CLI workers plan)
+
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARACTERS_BUT_LINES = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+const CLI_ARGUMENT_RULE = "1 to 128 of A-Z a-z 0-9 . _ : / - (not starting with -)";
+
+function timestamp(value: unknown, label: string): string {
+  if (!isIsoTimestamp(value)) throw invalid(`${label} must be an ISO time such as 2026-11-17T00:00:00.000Z.`);
+  return value;
+}
+
+/** A model id the CLI gets as an argument; null is the CLI's own default (the runtime id's "default"). */
+function cliModelId(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  if (value === CLI_DEFAULT_MODEL_ID) throw invalid(`${label}: the CLI's own default is null, not "${CLI_DEFAULT_MODEL_ID}".`);
+  if (!isCliArgumentValue(value)) throw invalid(`${label} must be null or ${CLI_ARGUMENT_RULE}.`);
+  return value;
+}
+
+function cliEffort(value: unknown, label: string): string {
+  if (!isCliArgumentValue(value)) throw invalid(`${label} must be ${CLI_ARGUMENT_RULE}.`);
+  return value;
+}
+
+function exactKeys(value: unknown, allowed: readonly string[], required: readonly string[], label: string): Record<string, unknown> {
+  if (!isRecord(value)) throw invalid(`${label} must be an object.`);
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) throw invalid(`${label}.${key} is not a field the AIBoard home keeps.`);
+  for (const key of required) if (!Object.hasOwn(value, key)) throw invalid(`${label} needs ${required.join(", ")}.`);
+  return value;
+}
+
+function cliModels(value: unknown, label: string): Array<{ id: string | null; reasoningEffort?: string }> {
+  if (!Array.isArray(value) || value.length > CLI_WORKER_MODELS_MAX) throw invalid(`${label} must be a list of at most ${CLI_WORKER_MODELS_MAX} models.`);
+  const seen = new Set<string>();
+  return value.map((item, index) => {
+    const at = `${label}[${index}]`;
+    const entry = exactKeys(item, ["id", "reasoningEffort"], ["id"], at);
+    const model = {
+      id: cliModelId(entry.id, `${at}.id`),
+      ...(entry.reasoningEffort !== undefined ? { reasoningEffort: cliEffort(entry.reasoningEffort, `${at}.reasoningEffort`) } : {}),
+    };
+    // One entry per model: the runtime id is <providerId>:<model or "default">, so a second effort of
+    // the same model would name the same runtime and one of them would be silently lost.
+    const key = model.id ?? ""; // ids are never empty, so "" is the CLI default
+    if (seen.has(key)) throw invalid(`${at} repeats a model already in the list; a model takes one effort.`);
+    seen.add(key);
+    return model;
+  });
+}
+
+function cliLastTest(value: unknown, label: string): Record<string, unknown> {
+  const entry = exactKeys(value, ["at", "cliVersion", "modelId", "outcome", "resetsAt", "message"], ["at", "cliVersion", "modelId", "outcome"], label);
+  if (!isCliVersion(entry.cliVersion)) throw invalid(`${label}.cliVersion must be a version such as 0.167.1.`);
+  if (!(CLI_TEST_OUTCOMES as readonly unknown[]).includes(entry.outcome)) throw invalid(`${label}.outcome must be one of ${CLI_TEST_OUTCOMES.join(", ")}.`);
+  const result: Record<string, unknown> = {
+    at: timestamp(entry.at, `${label}.at`),
+    cliVersion: entry.cliVersion,
+    modelId: cliModelId(entry.modelId, `${label}.modelId`),
+    outcome: entry.outcome,
+  };
+  if (entry.resetsAt !== undefined) result.resetsAt = timestamp(entry.resetsAt, `${label}.resetsAt`);
+  if (entry.message !== undefined) {
+    const message = typeof entry.message === "string" ? entry.message.replace(/\r\n?/g, "\n") : undefined;
+    if (message === undefined || message.length > CLI_TEST_MESSAGE_MAX || CONTROL_CHARACTERS_BUT_LINES.test(message)) {
+      throw invalid(`${label}.message must be text of at most ${CLI_TEST_MESSAGE_MAX} characters.`);
+    }
+    // Saved scrubbed whatever the writer sent: a CLI's message can quote a token or the account's e-mail.
+    result.message = scrubCliMessage(message);
+  }
+  return result;
+}
+
+/**
+ * The fields of one CLI's entry. None holds a secret, and an op naming any other field is refused, so
+ * a key can never be saved here. The optional fields take null in an op to remove them.
+ */
+const CLI_WORKER_FIELD_VALIDATORS: Readonly<Record<string, (value: unknown, label: string) => unknown>> = {
+  enabled: (value, label) => { if (typeof value !== "boolean") throw invalid(`${label} must be true or false.`); return value; },
+  executablePath: (value, label) => {
+    if (value === null) return null;
+    if (typeof value !== "string" || value.length === 0 || value.length > 4096 || CONTROL_CHARACTERS.test(value) || !(win32.isAbsolute(value) || posix.isAbsolute(value))) {
+      throw invalid(`${label} must be an absolute path, or null to look the CLI up on PATH.`);
+    }
+    return value;
+  },
+  models: cliModels,
+  maxMinutesPerAttempt: (value, label) => {
+    if (value === null) return null;
+    if (!isCliAttemptMinutes(value)) throw invalid(`${label} must be a whole number of minutes from 5 to 240, or null for the default.`);
+    return value;
+  },
+  consentedAt: (value, label) => (value === null ? null : timestamp(value, label)),
+  lastTest: (value, label) => (value === null ? null : cliLastTest(value, label)),
+};
+/** The fields of a `cliWorkers.<providerId>` entry the home keeps. There is no secret among them. */
+export const CLI_WORKER_HOME_FIELDS: readonly string[] = Object.freeze(Object.keys(CLI_WORKER_FIELD_VALIDATORS));
+
 function secretValue(value: unknown, label: string): string {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "secret")) throw invalid(`${label} takes {"secret": "..."} only.`);
   const secret = value.secret;
@@ -992,6 +1116,25 @@ function applyConfigOp(config: AiboardHomeConfigV1, section: Section, op: HomeOp
       config.settings[section.field] = jsonObject(map, `settings.${section.field}`);
       return;
     }
+    case "cliWorker": {
+      const workers = isRecord(config.cliWorkers) ? config.cliWorkers : {};
+      const existing = Object.hasOwn(workers, section.id) && isRecord(workers[section.id]) ? workers[section.id] as Record<string, unknown> : undefined;
+      if (op.op === "remove" || (op.op === "set" && op.value === null)) {
+        delete workers[section.id];
+        config.cliWorkers = workers;
+        return;
+      }
+      const fields = validatedFields(op.value, CLI_WORKER_FIELD_VALIDATORS, label);
+      // set: the named fields over the defaults; merge: over the entry as saved. Fields a newer writer added stay.
+      const base = { enabled: false, models: [] as unknown[], ...(op.op === "merge" && existing ? pickFields(existing, CLI_WORKER_HOME_FIELDS) : {}) };
+      const known: Record<string, unknown> = { ...base, ...fields };
+      for (const key of CLI_WORKER_HOME_FIELDS) if (known[key] === null) delete known[key];
+      // The merged entry is checked whole, so a field saved by hand outside the rules never rides along.
+      const next: Record<string, unknown> = { ...unknownFields(existing, CLI_WORKER_HOME_FIELDS), ...validatedFields(known, CLI_WORKER_FIELD_VALIDATORS, label) };
+      (workers as Record<string, unknown>)[section.id] = next;
+      config.cliWorkers = workers;
+      return;
+    }
     default:
       throw invalid(`${label} is not a settings section.`);
   }
@@ -1013,6 +1156,8 @@ function sectionValue(config: AiboardHomeConfigV1, credentials: AiboardHomeCrede
       const map = config.settings[section.field];
       return isRecord(map) && Object.hasOwn(map, section.entry) ? clone(map[section.entry]) : null;
     }
+    case "cliWorker":
+      return isRecord(config.cliWorkers) && Object.hasOwn(config.cliWorkers, section.id) ? clone(config.cliWorkers[section.id] ?? null) : null;
     case "credential":
     case "credentialRemoteMcp": {
       if (!credentials) return { hasKey: null };
