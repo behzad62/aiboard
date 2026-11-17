@@ -1,4 +1,5 @@
 import type { Discussion, ReasoningEffort } from "@/lib/db/schema";
+import { isCliRuntimeId } from "@/runner-v2/src/cli-crew-policy";
 
 /** One model in one Build role, with the reasoning effort it runs that role at. */
 export interface BuildCrewMember {
@@ -120,7 +121,8 @@ export function buildCrewModelIds(crew: BuildCrew): string[] {
 /**
  * One runner runtime per (model, reasoning effort). A model's first effort keeps the plain model id
  * (so existing runs and provider configs stay addressable); another effort of the same model gets
- * `model#effort`. The runner compares models, not runtime ids, for reviewer independence.
+ * `model#effort`. The runner compares models, not runtime ids, for reviewer independence. A CLI worker is never
+ * a verifier candidate (CLI workers plan §3.13): the Runner refuses a crew that lists one.
  */
 export function selectBuildCrewRuntimes(crew: BuildCrew): BuildCrewRuntimes {
   const runtimes: BuildCrewRuntime[] = [];
@@ -143,7 +145,7 @@ export function selectBuildCrewRuntimes(crew: BuildCrew): BuildCrewRuntimes {
     architectRuntimeId,
     reviewerRuntimeId,
     workerRuntimeIds: workerRuntimeIds.length > 0 ? workerRuntimeIds : [architectRuntimeId],
-    verifierRuntimeIds: runtimes.map((runtime) => runtime.runtimeId),
+    verifierRuntimeIds: runtimes.map((runtime) => runtime.runtimeId).filter((runtimeId) => !isCliRuntimeId(runtimeId)),
   };
 }
 

@@ -2,6 +2,7 @@ import type {
   ProviderFailure,
   ProviderHealthRegistry,
 } from "./provider-health.js";
+import { isUnresolvedCliModelIdentity } from "./cli-crew-policy.js";
 import {
   canonicalModelIdentity,
   type ReviewerIndependence,
@@ -13,6 +14,11 @@ export interface AgentRuntimeCandidate {
   modelId: string;
   capabilities: string[];
   priority: number;
+  /**
+   * A CLI worker (CLI workers plan §3.13): chosen only by selectWorker. The Architect and verifier routers keep
+   * it as a candidate, so a change it authored still counts for verifier independence, but never select it.
+   */
+  workerOnly?: boolean;
 }
 
 export interface WorkerHandoffPackage {
@@ -93,6 +99,12 @@ export interface RuntimeRouterOptions {
    * not author the change, even if it shares the Architect's model (recorded fresh_context).
    */
   preferredVerifierRuntimeId?: string;
+  /**
+   * Whether a driver can run a `workerOnly` (CLI) candidate. Until CW5 registers the CLI worker branch it is
+   * false, and selectWorker and failover skip CLI candidates: a mixed crew goes on with its API workers and a
+   * CLI-only crew gets the ordinary no-healthy-worker pause, instead of an assignment no driver can run.
+   */
+  cliWorkerDriver?: boolean;
   onDecision?: (decision: RuntimeRouterDecision) => void;
 }
 
@@ -108,9 +120,11 @@ export class RuntimeRouter {
   private readonly health: ProviderHealthRegistry;
   private readonly onDecision?: RuntimeRouterOptions["onDecision"];
   private readonly preferredVerifierRuntimeId?: string;
+  private readonly cliWorkerDriver: boolean;
 
   constructor(options: RuntimeRouterOptions) {
     this.health = options.health;
+    this.cliWorkerDriver = options.cliWorkerDriver === true;
     this.onDecision = options.onDecision;
     this.preferredVerifierRuntimeId = options.preferredVerifierRuntimeId;
     this.candidates = options.candidates
@@ -139,7 +153,7 @@ export class RuntimeRouter {
   ): WorkerSelection {
     const required = unique(requiredCapabilities);
     const eligible = this.eligible(required).filter(
-      (candidate) => !excludedRuntimeIds.has(candidate.runtimeId)
+      (candidate) => !excludedRuntimeIds.has(candidate.runtimeId) && (this.cliWorkerDriver || !candidate.workerOnly)
     );
     const preferred = eligible.filter((candidate) => !preference.demoted?.has(candidate.runtimeId));
     const pool = preferred.length > 0 ? preferred : eligible;
@@ -198,7 +212,7 @@ export class RuntimeRouter {
     return {
       status: "user_selection_required",
       candidates: this.eligible(required)
-        .filter((candidate) => !excludedRuntimeIds.has(candidate.runtimeId))
+        .filter((candidate) => !candidate.workerOnly && !excludedRuntimeIds.has(candidate.runtimeId))
         .map(cloneCandidate),
       requiredCapabilities: required,
     };
@@ -220,16 +234,20 @@ export class RuntimeRouter {
       canonicalModelIdentity(architect.modelId),
     ]);
     const authorModelIdentities = new Set<string>();
+    // CW4: a CLI author on its default model or an alias wrote with a model no id here can be compared with.
+    let unresolvedAuthor = false;
     for (const runtimeId of new Set(input.acceptedChangeAuthorRuntimeIds)) {
       const author = this.byId.get(runtimeId);
       if (!author) {
         throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
       }
+      if (author.workerOnly && isUnresolvedCliModelIdentity(author.modelId)) unresolvedAuthor = true;
       excludedModelIdentities.add(canonicalModelIdentity(author.modelId));
       authorModelIdentities.add(canonicalModelIdentity(author.modelId));
     }
     const eligibleAllowed = this.eligible(required).filter(
       (candidate) =>
+        !candidate.workerOnly &&
         allowedRuntimeIds.has(candidate.runtimeId) &&
         !input.excludedRuntimeIds?.has(candidate.runtimeId),
     );
@@ -253,7 +271,7 @@ export class RuntimeRouter {
     return {
       status: "assigned",
       runtime: cloneCandidate(runtime),
-      independence: excludedModelIdentities.has(canonicalModelIdentity(runtime.modelId))
+      independence: unresolvedAuthor || excludedModelIdentities.has(canonicalModelIdentity(runtime.modelId))
         ? "fresh_context"
         : "distinct_model",
     };
@@ -264,6 +282,9 @@ export class RuntimeRouter {
     requiredCapabilities: readonly string[]
   ): AgentRuntimeCandidate {
     const runtime = this.requireRuntime(runtimeId);
+    if (runtime.workerOnly) {
+      throw new Error(`Runtime ${runtimeId} is a CLI worker and cannot be the Architect.`);
+    }
     const required = unique(requiredCapabilities);
     if (!hasCapabilities(runtime, required)) {
       throw new Error(

@@ -7,6 +7,8 @@ import test from "node:test";
 import { BuildRuntime } from "../src/build-runtime.js";
 import { withBuildCrew, type NativeBuildSpec } from "../src/build-spec.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
+import { selectRuntimeCandidates } from "../src/native-build-factory.js";
+import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -59,7 +61,16 @@ interface Fixture {
   close(): Promise<void>;
 }
 
-async function fixture(options: { refuseCrew?: string; closeFailures?: number } = {}): Promise<Fixture> {
+/**
+ * `configs`: run the Runner's own config check, as runner-start.ts's validateCrewSpec and the factory's create do
+ * (`selectRuntimeCandidates(providerConfigs.load(), spec)`), with these provider configs.
+ */
+async function fixture(options: {
+  refuseCrew?: string;
+  closeFailures?: number;
+  configs?: readonly RunnerProviderConfig[];
+  saved?: readonly NativeBuildSpec[];
+} = {}): Promise<Fixture> {
   let closeFailures = options.closeFailures ?? 0;
   const root = mkdtempSync(join(tmpdir(), "aiboard-crew-change-"));
   const schedulerPath = join(root, "scheduler.sqlite");
@@ -71,7 +82,7 @@ async function fixture(options: { refuseCrew?: string; closeFailures?: number } 
   seed.append({ runId: spec.runId, type: "architect.handoff_required", occurredAt: "2026-10-25T00:00:02.000Z", actor: { role: "runner", id: "runtime-router" }, idempotencyKey: "architect:handoff", payload: { reason: "fetch failed", requiredCapabilities: ["code"], candidateRuntimeIds: ["deepseek:flash"] } });
   seed.close();
   const savedSpecs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
-  savedSpecs.save(spec);
+  for (const saved of options.saved ?? [spec]) savedSpecs.save(saved);
   savedSpecs.close();
   const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
   const created: NativeBuildSpec[] = [];
@@ -79,9 +90,11 @@ async function fixture(options: { refuseCrew?: string; closeFailures?: number } 
   const manager = new NativeBuildManager({
     specs,
     validateCrewSpec: (next) => {
+      if (options.configs) selectRuntimeCandidates(options.configs, next);
       if (options.refuseCrew && next.workerRuntimeIds.includes(options.refuseCrew)) throw new Error(`Provider runtime ${options.refuseCrew} is not configured.`);
     },
     createRuntime: async (current) => {
+      if (options.configs) selectRuntimeCandidates(options.configs, current);
       created.push(current);
       scheduler = new SqliteSchedulerStore(schedulerPath, { evidenceStore });
       const runtime = new BuildRuntime({
@@ -256,6 +269,58 @@ test("the kernel accepts a crew change only from the owner of a paused run", asy
       () => store.append({ runId: spec.runId, type: "run.crew_changed", occurredAt: "2026-10-25T00:00:04.000Z", actor: { role: "user", id: "local-user" }, idempotencyKey: "crew:running", payload }),
       /only while the run is paused/,
     );
+  } finally {
+    await f.close();
+  }
+});
+
+const configured = (runtimeId: string, transport: RunnerProviderConfig["transport"] = "openai-compatible"): RunnerProviderConfig => {
+  const [providerId, modelId] = runtimeId.split(":") as [string, string];
+  return transport === "cli"
+    ? { runtimeId, providerId, modelId, transport, secret: "", capabilities: ["*"], priority: 2, billingBasis: "account_not_metered" }
+    : { runtimeId, providerId, modelId, transport, baseUrl: "http://127.0.0.1:9", secret: "unused", capabilities: ["code"], priority: 1 };
+};
+const crewConfigs = [
+  ...["deepseek:flash", "openrouter:mimo", "openai:architect", "openai:worker-a", "openai:worker-b", "openai:reviewer"].map((id) => configured(id)),
+  configured("claude-code:default", "cli"),
+  configured("agy:default", "cli"),
+];
+
+test("CW4 a crew change that breaks a CLI rule is refused before the spec is saved", async () => {
+  const f = await fixture({ configs: crewConfigs, saved: [{ ...spec, permissionProfile: "project" }] });
+  try {
+    // A CLI as the reviewer (and so a verifier), whatever the access level.
+    await assert.rejects(
+      f.manager.changeCrew(spec.runId, { ...newCrew, verifierRuntimeIds: ["openrouter:mimo", "agy:default"], reviewerRuntimeId: "agy:default" }, "crew:cli-reviewer"),
+      (error: Error & { code?: string }) => error.code === "cli_runtime_role_refused",
+    );
+    // A CLI worker added to a Build under project access.
+    await assert.rejects(
+      f.manager.changeCrew(spec.runId, { ...newCrew, workerRuntimeIds: ["openai:worker-a", "claude-code:default"] }, "crew:cli-worker"),
+      (error: Error & { code?: string }) => error.code === "cli_workers_require_full_access",
+    );
+    const saved = f.specs.get(spec.runId);
+    assert.deepEqual(saved.workerRuntimeIds, spec.workerRuntimeIds, "the stored spec is unchanged");
+    assert.equal(saved.reviewerRuntimeId, undefined);
+    assert.equal(f.manager.events(spec.runId).some((event) => event.type === "run.crew_changed"), false);
+    assert.equal(f.created.length, 1, "no runtime was rebuilt");
+  } finally {
+    await f.close();
+  }
+});
+
+test("CW4 a spec saved before CW4 with a CLI verifier is a runtime_construction recovery failure, and startup goes on", async () => {
+  const cliVerifier: NativeBuildSpec = {
+    ...spec, runId: "run_cli_verifier", idempotencyKey: "build-spec:run_cli_verifier",
+    workerRuntimeIds: ["deepseek:flash", "claude-code:default"], verifierRuntimeIds: ["deepseek:flash", "claude-code:default"],
+  };
+  const f = await fixture({ configs: crewConfigs, saved: [spec, cliVerifier] });
+  try {
+    const recovered = await f.manager.recover();
+    assert.deepEqual(recovered.failures.map((failure) => [failure.runId, failure.stage]), [["run_cli_verifier", "runtime_construction"]]);
+    assert.equal((recovered.failures[0]!.error as { code?: string }).code, "cli_runtime_role_refused");
+    assert.deepEqual(f.created.map((created) => created.runId), [spec.runId], "the other Build recovered");
+    assert.equal(f.manager.projection(spec.runId).runId, spec.runId);
   } finally {
     await f.close();
   }

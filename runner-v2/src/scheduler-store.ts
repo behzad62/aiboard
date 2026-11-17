@@ -191,6 +191,7 @@ import {
   type PlanningEventType,
   type PlanningProjection,
 } from "./planning-projection.js";
+import { parseCliWorkersChecked, type CliWorkersChecked } from "./cli-worker-crew.js";
 import {
   parseEnvironmentInventory,
   VERIFICATION_GATE_PAUSE_REASONS,
@@ -327,6 +328,7 @@ export type SchedulerEventType =
   | "answer.review_recorded"
   | "answer.review_unavailable"
   | "environment.inventory_recorded"
+  | "cli_workers.checked"
   | "run.browsing_configured"
   | PlanningEventType;
 
@@ -1293,6 +1295,12 @@ export interface SchedulerProjection {
    * decide anything. Absent on every run recorded before VF1.
    */
   environmentInventory?: EnvironmentInventoryProjection;
+  /**
+   * CW4: the latest free checks of the crew's CLI workers (before planning, and again after each resume).
+   * A CLI that failed is also recorded unhealthy through `provider.health_changed`. Absent on a run with no
+   * CLI worker.
+   */
+  cliWorkersChecked?: CliWorkersChecked & { sequence: number; recordedAt: string };
   /**
    * VF7b: recorded once, before planning, by a run that browses through the
    * Playwright CLI the Runner ships: it registers no `browser.*` tools. Absent
@@ -2423,6 +2431,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    // CW4: the crew's CLI free checks, recorded with the inventory; health changes follow as their own events.
+    (event.type === "cli_workers.checked" && event.actor.role === "runner") ||
     isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
@@ -2532,6 +2542,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     // VF1: a Runner fact about this machine; it never advances the run.
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
+    // CW4: the crew's CLI free checks, recorded with the inventory; health changes follow as their own events.
+    (event.type === "cli_workers.checked" && event.actor.role === "runner") ||
     isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
@@ -5324,6 +5336,17 @@ export function reduceSchedulerEvent(
         sequence: event.sequence,
         recordedAt: event.occurredAt,
       };
+      break;
+    }
+    case "cli_workers.checked": {
+      // CW4: facts only; the health the checks found is recorded as provider.health_changed events.
+      if (event.actor.role !== "runner" || event.actor.id !== "build-runtime") {
+        throw new Error("Only the build runtime may record CLI worker checks.");
+      }
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record CLI worker checks.");
+      }
+      next.cliWorkersChecked = { ...parseCliWorkersChecked(event.payload), sequence: event.sequence, recordedAt: event.occurredAt };
       break;
     }
     case "cleanup.checked": {

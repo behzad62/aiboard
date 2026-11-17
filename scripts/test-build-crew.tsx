@@ -42,6 +42,19 @@ assert.match(getModelDisplayName("deepseek:flash#low"), /· low reasoning$/);
 assert.deepEqual(buildCrewModelIds(crew), ["deepseek:flash", "openrouter:mimo"]);
 
 // No workers: the Architect's runtime implements; no reviewer: none is preferred.
+// CW4: a CLI worker is a worker, never a verifier candidate; the API runtimes stay in order.
+const withCli = selectBuildCrewRuntimes({
+  architect: { modelId: "openai:sol", reasoningEffort: "high" },
+  reviewer: { modelId: "google:gemini", reasoningEffort: "default" },
+  workers: [
+    { modelId: "claude-code:default", reasoningEffort: "default" },
+    { modelId: "deepseek:flash", reasoningEffort: "default" },
+    { modelId: "agy:gemini-3-pro", reasoningEffort: "default" },
+  ],
+});
+assert.deepEqual(withCli.workerRuntimeIds, ["claude-code:default", "deepseek:flash", "agy:gemini-3-pro"]);
+assert.deepEqual(withCli.verifierRuntimeIds, ["openai:sol", "google:gemini", "deepseek:flash"]);
+
 const solo = selectBuildCrewRuntimes({ architect: { modelId: "a:x", reasoningEffort: "default" }, reviewer: null, workers: [] });
 assert.deepEqual(solo.workerRuntimeIds, ["a:x"]);
 assert.equal(solo.reviewerRuntimeId, null);

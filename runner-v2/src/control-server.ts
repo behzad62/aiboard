@@ -57,6 +57,8 @@ import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./proces
 import { activeLiveModelOutput, recentLiveModelOutput, subscribeLiveModelOutput } from "./live-model-output.js";
 import type { LocalPairing } from "./local-pairing.js";
 import { LocalAgentsUnavailableError } from "./local-agents-availability.js";
+import { assertCliCrewRules, CLI_RUNTIME_ROLE_REFUSED, CliCrewRuleError } from "./cli-worker-crew.js";
+import { isCliRuntimeId } from "./cli-crew-policy.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
 import { AiboardHomeError, type AiboardHomeLocation } from "./aiboard-home-paths.js";
 import { applyHomeBatch, keyHint, readAiboardHome, type AiboardHomeSnapshot, type HomeOp } from "./aiboard-home-store.js";
@@ -664,6 +666,17 @@ export class ControlServer {
         if (!git.available) {
           throw new HttpError(412, git.code, git.reason);
         }
+        // CW4: a crew that breaks a CLI rule is refused before the run is created, so a retry with a fixed crew or
+        // access level does not land on a run recorded with the refused one (the factory checks again).
+        if (body.build && this.providerConfigs) {
+          assertCliCrewRules(this.providerConfigs.load(), {
+            architectRuntimeId: body.build.architectRuntimeId,
+            ...(body.build.reviewerRuntimeId !== undefined ? { reviewerRuntimeId: body.build.reviewerRuntimeId } : {}),
+            workerRuntimeIds: body.build.workerRuntimeIds,
+            verifierRuntimeIds: body.build.verifierRuntimeIds,
+            permissionProfile: body.permissionProfile,
+          });
+        }
         let projection = this.supervisor.createRun(body);
         if (!projection.baselineRevision) {
           try {
@@ -1104,9 +1117,12 @@ export class ControlServer {
           body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId)) ||
           !Array.isArray(body.verifierRuntimeIds) || body.verifierRuntimeIds.length < 1 ||
           body.verifierRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId) || runtimeId !== runtimeId.trim()) ||
-          new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length ||
-          (body.reviewerRuntimeId !== undefined && (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId)))
+          new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
         ) invalidBody();
+        refuseCliReviewer(body.reviewerRuntimeId);
+        if (body.reviewerRuntimeId !== undefined && (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId))) {
+          invalidBody();
+        }
         const builds = this.requireBuilds();
         if (!builds.changeCrew) throw new HttpError(409, "unsupported", "This runner cannot change a Build's models.");
         sendJson(
@@ -1997,6 +2013,7 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
   ) invalidBody();
   if (typeof body.alwaysRequireIndependentVerifier !== "boolean") invalidBody();
+  refuseCliReviewer(body.reviewerRuntimeId);
   if (
     body.reviewerRuntimeId !== undefined &&
     (!isNonEmptyString(body.reviewerRuntimeId) || !body.verifierRuntimeIds.includes(body.reviewerRuntimeId))
@@ -2092,6 +2109,16 @@ function assertExactBodyKeys(body: unknown, expected: string[]): asserts body is
   if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
   const allowed = new Set(expected);
   if (Object.keys(body).some((key) => !allowed.has(key))) invalidBody();
+}
+
+/**
+ * CW4: a CLI reviewer is refused with its code before the reviewer-in-verifiers check, since the web leaves CLI
+ * runtimes out of the verifier list and a CLI reviewer would otherwise get a generic invalid body.
+ */
+function refuseCliReviewer(reviewerRuntimeId: unknown): void {
+  if (isNonEmptyString(reviewerRuntimeId) && isCliRuntimeId(reviewerRuntimeId)) {
+    throw new CliCrewRuleError(CLI_RUNTIME_ROLE_REFUSED, `${reviewerRuntimeId} is a CLI worker and cannot be the reviewer: CLI runtimes are workers only.`, reviewerRuntimeId);
+  }
 }
 
 function invalidBody(): never {
@@ -2195,6 +2222,8 @@ function toHttpError(error: unknown): HttpError {
   if (error instanceof PushedConfigError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof AiboardHomeError) return new HttpError(HOME_ERROR_STATUS[error.code] ?? 422, error.code, homeErrorMessage(error));
   if (error instanceof LocalAgentsUnavailableError) return new HttpError(error.status, error.code, error.message);
+  // CW4: a Build start or crew change refused by a CLI crew rule, with its code and reason.
+  if (error instanceof CliCrewRuleError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ExtensionManagementError || error instanceof ChatSessionError) return new HttpError(error.status, error.code, error.message);
   if (error instanceof ProcessRecoveryError) {
     if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);

@@ -440,3 +440,77 @@ test("provider failures are classified from transport metadata before routing", 
   );
   assert.equal(classifyProviderFailure(new Error("socket reset")).kind, "transient");
 });
+
+test("CW4 a CLI worker (workerOnly) takes tasks but is never offered as Architect or chosen as verifier", () => {
+  const health = new ProviderHealthRegistry();
+  const cli: AgentRuntimeCandidate = {
+    runtimeId: "claude-code:default",
+    providerId: "claude-code",
+    modelId: "default",
+    capabilities: ["*"],
+    priority: 0,
+    workerOnly: true,
+  };
+  const router = new RuntimeRouter({ candidates: [cli, ...runtimes], health, preferredVerifierRuntimeId: cli.runtimeId, cliWorkerDriver: true });
+  // With a CLI driver, a worker like any other: the highest-priority healthy match.
+  assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, "claude-code:default");
+  // Never in an Architect handoff offer, and refused when named.
+  assert.deepEqual(
+    router.selectArchitectHandoff(["code"]).candidates.map((candidate) => candidate.runtimeId),
+    ["openai:gpt-code", "anthropic:claude-code"],
+  );
+  assert.throws(() => router.confirmArchitectHandoff("claude-code:default", ["code"]), /CLI worker and cannot be the Architect/);
+  // Never a verifier, even as the preferred Reviewer and listed as a candidate; its own change still counts
+  // as an author's, so the verifier is independent of it.
+  const verifier = router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["claude-code:default", "openai:gpt-code", "anthropic:claude-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: ["claude-code:default"],
+  });
+  assert.equal(verifier.runtime?.runtimeId, "anthropic:claude-code");
+  // Its model is the CLI's default, which no API model id can be compared with: never distinct_model.
+  assert.equal(verifier.status === "assigned" && verifier.independence, "fresh_context");
+  for (const modelId of ["opus", "Sonnet", "haiku"]) {
+    const alias = new RuntimeRouter({ candidates: [{ ...cli, runtimeId: `claude-code:${modelId}`, modelId }, ...runtimes], health: new ProviderHealthRegistry() });
+    const selected = alias.selectVerifier({ requiredCapabilities: ["code"], candidateRuntimeIds: ["anthropic:claude-code"], architectRuntimeId: "openai:gpt-code", acceptedChangeAuthorRuntimeIds: [`claude-code:${modelId}`] });
+    assert.equal(selected.status === "assigned" && selected.independence, "fresh_context", modelId);
+  }
+  // A CLI on a named model is compared like any author: a different model is distinct.
+  const named = new RuntimeRouter({ candidates: [{ ...cli, runtimeId: "codex-cli:gpt-6-codex", providerId: "codex-cli", modelId: "gpt-6-codex" }, ...runtimes], health: new ProviderHealthRegistry() });
+  const distinct = named.selectVerifier({ requiredCapabilities: ["code"], candidateRuntimeIds: ["anthropic:claude-code"], architectRuntimeId: "openai:gpt-code", acceptedChangeAuthorRuntimeIds: ["codex-cli:gpt-6-codex"] });
+  assert.equal(distinct.status === "assigned" && distinct.independence, "distinct_model");
+  assert.equal(
+    router.selectVerifier({
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["claude-code:default"],
+      architectRuntimeId: "openai:gpt-code",
+      acceptedChangeAuthorRuntimeIds: [],
+    }).status,
+    "unavailable",
+  );
+  // A cooled-down CLI is skipped like any worker.
+  router.recordFailure("claude-code:default", { kind: "authentication", message: "Claude Code is not logged in." });
+  assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, "openai:gpt-code");
+});
+
+test("CW4 until a CLI driver is registered, CLI workers are never assigned: a mixed crew uses its API workers, a CLI-only crew pauses", () => {
+  const cli: AgentRuntimeCandidate = { runtimeId: "agy:default", providerId: "agy", modelId: "default", capabilities: ["*"], priority: 0, workerOnly: true };
+  const mixed = new RuntimeRouter({ candidates: [cli, ...runtimes], health: new ProviderHealthRegistry() });
+  assert.equal(mixed.selectWorker(["code"]).runtime?.runtimeId, "openai:gpt-code");
+  assert.equal(mixed.selectWorker(["code"], new Set(), { affinity: ["agy:default"] }).runtime?.runtimeId, "openai:gpt-code", "affinity never reaches it");
+  // An API worker failing over never lands on the CLI.
+  const handoff: WorkerHandoffPackage = { runId: "run", taskId: "task", sessionId: "session", attempt: 1, checkpointArtifactHash: "hash", workspacePath: "/w" };
+  const failover = mixed.routeWorkerFailure({
+    currentRuntimeId: "openai:gpt-code",
+    requiredCapabilities: ["code"],
+    failure: { kind: "usage_limit", message: "Usage limit reached" },
+    handoff,
+  });
+  assert.equal(failover.runtime?.runtimeId, "anthropic:claude-code");
+  const onlyCli = new RuntimeRouter({ candidates: [cli, runtimes[0]!], health: new ProviderHealthRegistry() });
+  assert.equal(onlyCli.routeWorkerFailure({ currentRuntimeId: "openai:gpt-code", requiredCapabilities: ["code"], failure: { kind: "usage_limit", message: "Usage limit reached" }, handoff }).status, "unavailable");
+  // A CLI-only crew: the ordinary, resolvable no-healthy-worker pause.
+  const cliOnly = new RuntimeRouter({ candidates: [cli], health: new ProviderHealthRegistry() });
+  assert.deepEqual(cliOnly.selectWorker(["code"]), { status: "unavailable", reason: "no_healthy_capability_match", requiredCapabilities: ["code"] });
+});
