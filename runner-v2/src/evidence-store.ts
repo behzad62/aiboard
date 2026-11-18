@@ -107,7 +107,7 @@ export function evidenceFactSummary(fact: EvidenceFact): string {
       // T10 (M7): name the check (label), the argv, and the true outcome so
       // the Architect can tell a test run from a lint run without
       // re-inspection. Timeouts and signals are not "exited null".
-      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}${commandOutputsSummary(fact)}`;
+      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}${commandOutputsSummary(fact)}${fact.source === RUNNER_RERUN_OF_CLI_CLAIM ? "; the Runner's re-run of a CLI worker's check" : ""}`;
     case "browser_snapshot":
       return `browser snapshot "${fact.title}" at ${fact.url}`;
     case "browser_screenshot":

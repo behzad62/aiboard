@@ -5,19 +5,20 @@
  * attempt's failure after it. No real CLI is started and no prompt is sent. Part 1 is cli-worker-evidence.test.ts.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe, type TestContext } from "node:test";
 
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
-import { CLI_CHECKS_FAILING, CLI_CHECKS_UNSUPPORTED, createCliCheckRerunner } from "../src/cli-worker-evidence.js";
-import { runCliWorkerAttempt, type CliCheckRerunner, type CliProcessLauncher, type CliWorkerOwner } from "../src/cli-worker-runtime.js";
+import { CLI_CHECKS_FAILING, CLI_CHECKS_RERUN_FAILED, CLI_CHECKS_UNSUPPORTED, createCliCheckRerunner } from "../src/cli-worker-evidence.js";
+import { cliWorkerStateFolder, runCliWorkerAttempt, type CliCheckRerunner, type CliProcessLauncher, type CliWorkerOwner } from "../src/cli-worker-runtime.js";
 import { captureWorkingTreeIdentity, restoreWorkingTree } from "../src/command-evidence-identity.js";
 import { RUNNER_RERUN_OF_CLI_CLAIM, type CommandEvidenceFact } from "../src/evidence-store.js";
 import type { RunGitExecutionContext } from "../src/git-run-context.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+import { isProcessStopUnprovenError } from "../src/process-stop-proof.js";
 import { ChildCliLauncher, policyGit } from "./support/cli-worker-fixture.js";
-import { CLI_RUNTIME_TEST_CONCURRENCY, harness, claudeStream, records, CLAUDE_SESSION, RUN, TASK, WORKER, type Harness } from "./support/cli-worker-runtime-harness.js";
+import { CLI_RUNTIME_TEST_CONCURRENCY, harness, claudeStream, records, CLAUDE_SESSION, RUN, SESSION, TASK, WORKER, type Harness } from "./support/cli-worker-runtime-harness.js";
 import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
@@ -96,6 +97,18 @@ function realRerunner(t: TestContext, h: Harness, inProcess = false): CliCheckRe
     captureTree: (cwd) => captureWorkingTreeIdentity(cwd, indexRoot, runGitAsync),
     restoreTree: (cwd, treeId) => restoreWorkingTree(cwd, indexRoot, policyGit, treeId),
   });
+}
+
+/** Claude Code's stream with no session id: a run whose session cannot be resumed. */
+let noSessionStreams = 0;
+function claudeStreamWithoutSession(h: Harness, structured: Record<string, unknown>): string {
+  const path = join(h.root, "fake", `claude-no-session-${++noSessionStreams}.jsonl`);
+  const lines = [
+    { type: "system", subtype: "init", model: "claude-sonnet-test" },
+    { type: "result", subtype: "success", is_error: false, structured_output: structured, result: "", usage: { input_tokens: 10, output_tokens: 5 } },
+  ];
+  writeFileSync(path, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  return path;
 }
 
 function stdinOf(path: string): string {
@@ -193,5 +206,121 @@ describe("CW6 loop: re-runs, the fix round and its failures", { concurrency: CLI
     assert.equal(result.type === "settled" && result.outcome.type, "failed", JSON.stringify(result));
     assert.match(JSON.stringify(result), new RegExp(`${CLI_CHECKS_FAILING}: after its fix round.*value check .*exit 1`));
     assert.equal(launcher.starts.length, 2);
+  });
+
+  test("a re-run whose stop is not proven keeps its classification and the CLI's tree; the next entry restores it and re-runs, starting no CLI", async (t) => {
+    const h = await harness(t, "evidence-restart");
+    const launcher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] });
+    // The first entry's re-run changes a file, and its processes are not proven gone (a Runner restart leaves the same).
+    const unproven: CliCheckRerunner = async (input) => {
+      writeFileSync(join(input.workspace.path, "value.txt"), "changed by a re-run\n");
+      throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+    };
+    const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(h.state, "tree-index"), policyGit, treeId);
+    await assert.rejects(runCliWorkerAttempt(h.deps(launcher, { rerunChecks: unproven, restoreTree }), h.input()), (error: unknown) => isProcessStopUnprovenError(error));
+    const pending = join(cliWorkerStateFolder(h.state, RUN, SESSION), "reruns-pending.json");
+    assert.ok(existsSync(pending), "the tree the CLI left stays persisted");
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: realRerunner(t, h, true), restoreTree }), h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(launcher.starts.length, 1, "no CLI is started again");
+    assert.equal(readFileSync(join(h.workspace.path, "value.txt"), "utf8"), "two\n", "the re-run's change was restored before the re-runs");
+    assert.equal(existsSync(pending), false);
+    if (result.type === "submitted") assert.deepEqual([...result.changeSet.changedPaths], ["value.txt"]);
+  });
+
+  test("any other re-runner failure fails the attempt as cli_checks_rerun_failed and submits nothing", async (t) => {
+    const h = await harness(t, "evidence-rerun-failed");
+    const launcher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] });
+    const throwing: CliCheckRerunner = async () => { throw new Error("the tree index could not be written"); };
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: throwing }), h.input());
+    assert.equal(result.type === "settled" && result.outcome.type, "failed", JSON.stringify(result));
+    assert.match(JSON.stringify(result), new RegExp(`${CLI_CHECKS_RERUN_FAILED}: the tree index could not be written`));
+    assert.equal(existsSync(join(cliWorkerStateFolder(h.state, RUN, SESSION), "reruns-pending.json")), false);
+    assert.notEqual((await h.sessions.load(SESSION)).status, "submitted");
+  });
+
+  test("a Runner that stops before the fix round's launch runs it on its next entry, resuming the CLI's session with the fix round", async (t) => {
+    const h = await harness(t, "evidence-fix-restart");
+    const fixed = join(h.root, "fake", "fixed.json");
+    // The first launcher has no second run: the fix round's launch throws, as a Runner that stopped there would leave it.
+    const first = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+    ]);
+    await assert.rejects(runCliWorkerAttempt(h.deps(first, { rerunChecks: realRerunner(t, h, true) }), h.input()), /launched more often/);
+    const second = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), record: fixed, actions: [{ write: "value.txt", content: "two\n" }] }),
+    ]);
+    const result = await runCliWorkerAttempt(h.deps(second, { rerunChecks: realRerunner(t, h, true) }), h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.ok(argvOf(fixed).includes("--resume"), JSON.stringify(argvOf(fixed)));
+    assert.match(stdinOf(fixed), /Fix round: the Runner's re-runs of your checks[\s\S]*value is three/);
+    assert.doesNotMatch(stdinOf(fixed), /Change value\.txt to two\./, "the resumed session already has the task");
+  });
+
+  test("a CLI session that cannot be resumed gets the task again before its fix round", async (t) => {
+    const h = await harness(t, "evidence-no-resume");
+    const second = join(h.root, "fake", "no-resume.json");
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStreamWithoutSession(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStreamWithoutSession(h, doneWith([valueCheck("two")])), record: second, actions: [{ write: "value.txt", content: "two\n" }] }),
+    ]);
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: realRerunner(t, h, true) }), h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(argvOf(second).includes("--resume"), false, JSON.stringify(argvOf(second)));
+    assert.match(stdinOf(second), /Change value\.txt to two\.[\s\S]*Fix round: the Runner's re-runs of your checks/);
+  });
+
+  test("a fix round stays pending through a question: the run after the answer gets it, and its done has no fix round left", async (t) => {
+    const h = await harness(t, "evidence-fix-question");
+    const third = join(h.root, "fake", "after-answer.json");
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([], { outcome: "needs_decision", question: "Should value.txt hold two or three?" })) }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), record: third }),
+    ]);
+    const deps = h.deps(launcher, { rerunChecks: realRerunner(t, h, true) });
+    const asked = await runCliWorkerAttempt(deps, h.input());
+    assert.equal(asked.type, "guidance", JSON.stringify(asked));
+    // The Architect answered; the attempt goes on with the answer in its context.
+    const result = await runCliWorkerAttempt(deps, h.input({ contextText: "Change value.txt to two.\n\nThe Architect answered: two." }));
+    assert.equal(result.type === "settled" && result.outcome.type, "failed", JSON.stringify(result));
+    assert.match(JSON.stringify(result), new RegExp(`${CLI_CHECKS_FAILING}: after its fix round`));
+    assert.equal(launcher.starts.length, 3, "no second fix round");
+    assert.ok(argvOf(third).includes("--resume"));
+    assert.match(stdinOf(third), /The Architect answered: two\.[\s\S]*Fix round: the Runner's re-runs of your checks/);
+  });
+
+  test("the fix round runs inside the attempt's deadline: a deadline already past fails the attempt before its launch", async (t) => {
+    const h = await harness(t, "evidence-fix-deadline");
+    let offset = 0;
+    const rerunner = realRerunner(t, h, true);
+    // The re-runs take the rest of the first run's 60 s limit (the harness's attemptLimitMs).
+    const slow: CliCheckRerunner = async (input) => {
+      const out = await rerunner(input);
+      offset += 120_000;
+      return out;
+    };
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+    ]);
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: slow, now: () => Date.now() + offset }), h.input());
+    assert.equal(result.type === "settled" && result.outcome.type, "failed", JSON.stringify(result));
+    assert.match(JSON.stringify(result), /cli_attempt_deadline: Claude Code reached its time limit for one attempt before its fix round/);
+    assert.equal(launcher.starts.length, 1);
+  });
+
+  test("a re-run that still fails after the fix round while every criterion is supported is submitted as a known defect", async (t) => {
+    const h = await harness(t, "evidence-known-defect");
+    const checks = [valueCheck("two"), { ...valueCheck("four", null), label: "an unlinked check" }];
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith(checks)), actions: [{ write: "value.txt", content: "two\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith(checks)) }),
+    ]);
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: realRerunner(t, h, true) }), h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(launcher.starts.length, 2, "the failure got its fix round first");
+    if (result.type !== "submitted") return;
+    assert.ok(result.changeSet.unresolvedConcerns.some((concern) => /^Known defect: the Runner's re-run of an unlinked check .* still fails after Claude Code's fix round \(exit 1/.test(concern)),
+      JSON.stringify(result.changeSet.unresolvedConcerns));
   });
 });

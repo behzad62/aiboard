@@ -19,6 +19,7 @@ import {
 } from "./one-shot-command-executor.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { recordValidationEvidenceSegment } from "./validation-budget.js";
+import { isProcessStopUnprovenError } from "./process-stop-proof.js";
 import {
   captureCommandOutputs,
   COMMAND_OUTPUT_LIMITS,
@@ -306,8 +307,9 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           isError: false,
         };
       } catch (error) {
+        // An unproven process stop keeps its classification as a code (CW6's re-runs pause on it, cli-worker-evidence.ts).
         return failure(
-          stableExecutionErrorCode(error) ?? "evidence_command_failed",
+          (isProcessStopUnprovenError(error) ? "process_cleanup_unverified" : stableExecutionErrorCode(error)) ?? "evidence_command_failed",
           error instanceof Error ? error.message : String(error)
         );
       }

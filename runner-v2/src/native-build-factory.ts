@@ -1383,6 +1383,7 @@ export class NativeBuildFactory {
                 host: await this.cliWorkerLaunchHost(),
                 stateDirectory: this.options.stateDirectory,
                 captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
+                restoreTree: (cwd: string, treeId: string) => restoreWorkingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd, treeId),
                 // CW6 (§3.6): the Runner's re-runs of the checks a CLI reported, as that worker, through run_evidence_command.
                 rerunChecks: createCliCheckRerunner({
                   git: gitContext,

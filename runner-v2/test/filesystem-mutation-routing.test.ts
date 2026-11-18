@@ -88,7 +88,8 @@ const privateOwners = new Set([
   // Reviewed 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw5.md): a CLI worker session's folder
   // state/cli-workers/<run>/<session> from Runner ids, holding the result schema, Codex's -o file (removed before each
   // launch) and the Runner's exclusive (wx) digested result record of each CLI run. CW6 (…-2026-11-18-cw6.md): plus
-  // run-<n>.fix.json, the fix round's prompt for the next run, in the same folder.
+  // fix-round.json (the attempt's pending fix round) and reruns-pending.json (the tree the CLI left, while its re-runs
+  // run), in the same folder.
   "cli-worker-runtime.ts",
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.

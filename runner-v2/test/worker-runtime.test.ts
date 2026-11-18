@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,7 +14,11 @@ import type {
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
-import { captureGitBaseline, fixtureGitContext } from "./support/git-fixture.js";
+import { asyncFixtureGitContext, captureGitBaseline, fixtureGitContext, runGitAsync } from "./support/git-fixture.js";
+import { createCliCheckRerunner } from "../src/cli-worker-evidence.js";
+import { captureWorkingTreeIdentity, restoreWorkingTree } from "../src/command-evidence-identity.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
+import { policyGit } from "./support/cli-worker-fixture.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
@@ -846,8 +850,8 @@ function fixtureLanguageProvider(): LanguageIntelligenceProvider {
   };
 }
 
-test("CW6: the shared submit takes a Runner re-run of a CLI's claim as the assigned worker's evidence, never another worker's or attempt's", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-cli-rerun-"));
+test("CW6: the shared submit takes the re-runner's record of a CLI's claim as the assigned worker's evidence, never another worker's or attempt's", async (t) => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-worker-cli-rerun-")));
   const project = join(root, "project");
   const state = join(root, "state");
   mkdirSync(project);
@@ -865,29 +869,53 @@ test("CW6: the shared submit takes a Runner re-run of a CLI's claim as the assig
   const workspaces = new WorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId: "run_cli_rerun", baselineRevision: baseline.revision });
   const workspace = await workspaces.createTaskWorkspace("task_cli_rerun");
   writeFileSync(join(workspace.path, "value.txt"), "two\n");
-  const output = await artifacts.put(Buffer.from("ok"), "text/plain", "re-run stdout");
-  const rerun = (actorId: string, attempt: number, key: string) => evidenceStore.record({
-    runId: "run_cli_rerun", taskId: "task_cli_rerun", actor: { role: "worker", id: actorId }, attempt,
-    createdAt: "2026-11-18T00:00:01.000Z", idempotencyKey: key,
-    fact: {
-      kind: "command", label: "value check", command: "node", args: ["--test"], cwd: workspace.path,
-      startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:01.000Z", exitCode: 0, signal: null,
-      timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: output.hash, stderrArtifactHash: output.hash,
-      source: RUNNER_RERUN_OF_CLI_CLAIM,
+  // The CLI's reported check, run by the production re-runner on a one-shot executor that runs no process.
+  const execution: OneShotCommandExecutor = {
+    async execute() {
+      const now = new Date().toISOString();
+      return {
+        process: {
+          logicalProcessId: "cli-rerun", outcome: "exited", exitCode: 0, finishedAt: now,
+          output: [
+            { stream: "stdout", tail: "ok", totalBytes: 2, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+          ],
+          cleanup: { state: "verified_empty", verifiedAt: now },
+        },
+        enforcement: "unconfined_explicit_full",
+        disclosure: "unconfined_explicit_full",
+      } as Awaited<ReturnType<OneShotCommandExecutor["execute"]>>;
     },
+  };
+  const indexRoot = join(state, "tree-index");
+  const capture = (cwd: string) => captureWorkingTreeIdentity(cwd, indexRoot, runGitAsync);
+  const rerunner = createCliCheckRerunner({
+    git: { ...asyncFixtureGitContext("full", execution), workingTreeForCall: (_context, cwd) => capture(cwd) },
+    evidenceStore, artifacts, execution, ledger, permissionProfile: "full",
+    captureTree: capture,
+    restoreTree: (cwd, treeId) => restoreWorkingTree(cwd, indexRoot, policyGit, treeId),
   });
-  const context = workerSubmissionContext({
-    git: fixtureGitContext(), runId: "run_cli_rerun", sessionId: "session_cli_rerun", taskId: "task_cli_rerun", actorId: "worker_cli", attempt: 2,
-    acceptanceCriteria: [{ id: "value", text: "value.txt holds two." }],
-    workspace, workspaceManager: workspaces, artifacts, ledger, evidenceStore,
+  const criteria = [{ id: "value", text: "value.txt holds two." }];
+  const context = (actorId: string, attempt: number) => workerSubmissionContext({
+    git: fixtureGitContext(), runId: "run_cli_rerun", sessionId: `session_${actorId}_${attempt}`, taskId: "task_cli_rerun", actorId, attempt,
+    acceptanceCriteria: criteria, workspace, workspaceManager: workspaces, artifacts, ledger, evidenceStore,
   });
-  const submit = (evidenceId: string) => submitWorkerTask(context, {
+  const rerunAs = async (actorId: string, attempt: number) => (await rerunner({
+    owner: { runId: "run_cli_rerun", sessionId: `session_${actorId}_${attempt}`, actor: { role: "worker", id: actorId } },
+    workspace, taskId: "task_cli_rerun", attempt, browserUnavailable: false, submission: context(actorId, attempt),
+    result: { outcome: "done", summary: "Changed the value.", checks: [{ label: "value check", executable: "node", args: ["--test"], criterionIds: ["value"] }], notRun: [], concerns: [] },
+  })).criterionEvidenceLinks;
+  const submit = (links: Awaited<ReturnType<typeof rerunAs>>) => submitWorkerTask(context("worker_cli", 2), {
     summary: "Claude Code worker reports: changed the value", readiness: "ready_for_architect_review", unresolvedConcerns: [],
-    criterionEvidenceLinks: [{ criterionId: "value", evidenceId, artifactHashes: [output.hash] }],
+    criterionEvidenceLinks: links.map((link) => ({ ...link, attempt: 2 })),
   });
-  await assert.rejects(submit(rerun("worker_other", 2, "other").id), /belongs outside the assigned worker/);
-  await assert.rejects(submit(rerun("worker_cli", 1, "earlier").id), /stale for attempt 2/);
-  const changeSet = await submit(rerun("worker_cli", 2, "current").id);
+  await assert.rejects(submit(await rerunAs("worker_other", 2)), /belongs outside the assigned worker/);
+  await assert.rejects(submit(await rerunAs("worker_cli", 1)), /stale for attempt 2/);
+  const links = await rerunAs("worker_cli", 2);
+  const record = evidenceStore.getByIds({ runId: "run_cli_rerun", taskId: "task_cli_rerun", ids: [links[0]!.evidenceId] })[0]!;
+  assert.equal(record.fact.kind === "command" && record.fact.source, RUNNER_RERUN_OF_CLI_CLAIM);
+  const changeSet = await submit(links);
   assert.deepEqual([...changeSet.changedPaths], ["value.txt"]);
   assert.equal(changeSet.criterionEvidenceLinks?.[0]?.attempt, 2);
+  assert.equal(changeSet.criterionEvidenceLinks?.[0]?.evidenceId, record.id);
 });
