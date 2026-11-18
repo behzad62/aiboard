@@ -186,12 +186,28 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
     ["CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW", "EXTENDED_STARTUPINFO_PRESENT"],
     "CreateProcess must not request CREATE_BREAKAWAY_FROM_JOB",
   );
-  // The only process attribute keeps a packaged root's descendants in the Job (DISABLE_PROCESS_TREE); never the
-  // breakaway-enabling values.
+  // Two process attributes, and only these: the desktop app policy keeps a packaged root's descendants in the Job
+  // (DISABLE_PROCESS_TREE; never the breakaway-enabling values), and the Job list creates the root inside the Job.
   assert.match(jobHost, /PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;/);
   assert.doesNotMatch(jobHost, /DESKTOP_APP_BREAKAWAY_ENABLE|DESKTOP_APP_BREAKAWAY_OVERRIDE/);
   assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteInt32\(policy, ([^)]+)\)/g)].map((match) => match[1]),
     ["PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE"]);
+  assert.match(jobHost, /PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;/);
+  assert.deepEqual([...jobHost.matchAll(/UpdateProcThreadAttribute\(attributeList, 0, new IntPtr\(([A-Z_]+)\)/g)].map((match) => match[1]),
+    ["PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY", "PROC_THREAD_ATTRIBUTE_JOB_LIST"]);
+  assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteIntPtr\(jobs, ([^)]+)\)/g)].map((match) => match[1]), ["job"], "the Job list names this Job only");
+  // The Job list is left out only for an app execution alias (Windows refuses it for a packaged program), or the
+  // stricter-only test fault that takes that Assign path; any other root (a plain symbolic link included) is created
+  // inside the Job.
+  assert.deepEqual([...jobHost.matchAll(/bool useJobList = ([^;]+);/g)].map((match) => match[1]),
+    ["!ForceAssignPath && !appExecLink"]);
+  assert.match(jobHost, /IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;/);
+  assert.deepEqual([...jobHost.matchAll(/ForceAssignPath = ([^;]+);/g)].map((match) => match[1]),
+    ["injectedFault == \"assign_path_exit_after_create\""]);
+  // On the Assign path the suspended root's exact identity is written before the Assign.
+  const assignPath = /EmitAssignPending\(eventPath, processInfo\.dwProcessId, CreationTime\(processInfo\.hProcess\)\);[\s\S]*?AssignProcessToJobObject\(job, processInfo\.hProcess\)/;
+  assert.match(jobHost, assignPath);
+  assert.equal([...jobHost.matchAll(/AssignProcessToJobObject\(job, /g)].length, 1, "one Assign, after the exact identity");
 });function sourceCodeFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);

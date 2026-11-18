@@ -37,8 +37,15 @@ let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
 let settled = false;
-// The launcher aborted this start (abortStartup): the workload's output has no reader.
+// A stop was requested before the host reported its workload started (the launcher aborted the start, or failed a
+// claimed spare's start): the workload's output has no reader.
 let startupAborted = false;
+// The host reported its workload started (its started line).
+let reportedStarted = false;
+// The Assign path's suspended root (assign_pending: pid and creation time), until the host reports started. If the
+// host dies first, that exact process is ended here (endPendingRoot), never a process by its pid alone.
+let pendingRoot = null;
+let pendingRootEnd;
 let backendFailure;
 const retainedOutput = [];
 const outputOffsets = { stdout: 0, stderr: 0 };
@@ -559,6 +566,26 @@ function launchWindowsJob() {
   }
   backend.once("error", (error) => startupFailed(error));
   backend.once("exit", () => {
+    if (config.interactive) {
+      pollInteractiveJobEvents();
+      // A host that ended before its started line: its launcher stops waiting at once on this terminal, unproven
+      // status (the stop recorded later, if proven, replaces it).
+      if (!reportedStarted && !settled && !spareUnclaimed) {
+        status.status = "exited_unknown";
+        status.error = "The Windows Job host exited before it reported that its workload started.";
+        persistStatus();
+      }
+      // The Assign path's root may still live outside the Job: the empty proof waits until that exact process is gone.
+      if (pendingRoot && !reportedStarted) {
+        const root = pendingRoot;
+        pendingRootEnd = endPendingRoot(root).then((ended) => {
+          if (!ended) return;
+          status.jobEmptyProof = true;
+          tryMarkStopped();
+        });
+        return;
+      }
+    }
     // Process exit closes the Job host's kill-on-close handle even if bounded
     // retained output keeps stdio pending. That is the exact empty proof.
     status.jobEmptyProof = true;
@@ -673,7 +700,12 @@ function tryMarkStopped() {
   // An aborted start: its launcher gave up before the workload was reported started, so nobody reads its output. The
   // Job is empty and both streams ended; bytes held for a reader that will never come are dropped, never a reason to
   // leave the stop unrecorded.
-  if (startupAborted) retainedOutput.length = 0;
+  if (startupAborted && retainedOutput.length > 0) {
+    retainedOutput.length = 0;
+    // The launcher reads these counts (and the discard) to settle the record's own output offsets.
+    status.outputDiscarded = true;
+    publishRetainedOutputStatus();
+  }
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
       status.status = "exited_unknown";
@@ -724,7 +756,13 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "started") {
+    pendingRoot = null;
     markRunning(event.pid);
+    return;
+  }
+  if (event.type === "assign_pending") {
+    if (Number.isSafeInteger(event.pid) && event.pid > 0 && typeof event.creationTime === "string" && /^[1-9][0-9]{0,19}$/.test(event.creationTime))
+      pendingRoot = { pid: event.pid, creationTime: event.creationTime };
     return;
   }
   if (event.type === "root_exited") {
@@ -758,6 +796,7 @@ function handleJobEvent(line) {
 }
 
 function markRunning(pid) {
+  reportedStarted = true;
   status.childPid = pid ?? 0;
   status.status = "running";
   status.error = null;
@@ -799,11 +838,12 @@ function startupFailed(error) {
 async function stopOwnedTree(signal, requestedDeadline) {
   if (status.status === "stopped") return;
   stopping = true;
+  if (!reportedStarted) startupAborted = true;
   const deadlineMs = Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, requestedDeadline || config.stopDeadlineMs || MAX_STOP_DEADLINE_MS));
   if (config.interactive) {
     // The interactive host dedicates its stdin to the child. Its exact process
     // exit closes the kill-on-close Job handle; the exit listener records proof.
-    if (!status.jobEmptyProof && !interactiveTerminationRequested) {
+    if (!status.jobEmptyProof && !interactiveTerminationRequested && backend.exitCode === null && backend.signalCode === null) {
       interactiveTerminationRequested = true;
       status.terminationRequested = true;
       persistStatus();
@@ -845,6 +885,9 @@ async function abortStartup(message) {
       // stop before acknowledging, so the aborted launch's record ends stopped with proof, never `starting`. Bounded by
       // the stop deadline; a host that outlives it leaves the record unproven, as before.
       if (config.interactive) await waitForExit(Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, config.stopDeadlineMs || MAX_STOP_DEADLINE_MS)));
+      // An Assign-path root being ended by its exact identity finishes before this supervisor exits (its own children
+      // end with it).
+      if (pendingRootEnd) await pendingRootEnd;
     } else {
       stopping = true;
       settled = true;
@@ -857,6 +900,32 @@ async function abortStartup(message) {
   } finally {
     server.close(() => process.exit(0));
   }
+}
+
+/**
+ * Ends the Assign path's suspended root after its host died before assigning it: exactly the process with this pid
+ * AND this creation time (a reused pid names another process and is left alone). True when that process is gone.
+ * Bounded; any failure leaves the stop unproven.
+ */
+async function endPendingRoot(root) {
+  const script = `$p = Get-Process -Id ${root.pid} -ErrorAction SilentlyContinue; ` +
+    `if ($null -eq $p) { 'gone'; exit 0 }; ` +
+    `if ($p.StartTime.ToFileTimeUtc() -ne ${root.creationTime}) { 'gone'; exit 0 }; ` +
+    `$p.Kill(); if ($p.WaitForExit(10000)) { 'gone' } else { 'alive' }`;
+  return await new Promise((resolvePromise) => {
+    let output = "";
+    let child;
+    try {
+      child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      resolvePromise(false);
+      return;
+    }
+    const timer = setTimeout(() => { child.kill(); resolvePromise(false); }, 30_000);
+    child.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
+    child.once("error", () => { clearTimeout(timer); resolvePromise(false); });
+    child.once("close", (code) => { clearTimeout(timer); resolvePromise(code === 0 && output.trim() === "gone"); });
+  });
 }
 
 async function waitForExit(timeoutMs) {

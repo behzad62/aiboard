@@ -112,12 +112,18 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     request = assertWindowsBatchSemantics(request, this.windowsBatchArgv);
     const sessionId = request.intent.sessionId ?? request.intent.invocationId;
-    const bind = (record: { readonly processId: string; readonly startedAt: string }) => {
+    // A started workload's binding holds its writer fence and control lane from here on. A failed start's binding holds
+    // neither: its caller may never bind it (a cancelled call's record can be blocked first), so nothing here would
+    // ever release them; any later effect on it re-attests the exact record before it gets a lane (ensureLane) and
+    // claims its fence through the host (claimFence).
+    const bind = (record: { readonly processId: string; readonly startedAt: string }, hold: boolean) => {
       const opaqueIdentity: JobOpaqueIdentity = { processId: record.processId, runId: request.intent.runId, sessionId, startedAt: record.startedAt, fence: { ...request.fence } };
       const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
       const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
-      this.writerFences.set(identity.processId, { ...request.fence });
-      this.registerLane(identity);
+      if (hold) {
+        this.writerFences.set(identity.processId, { ...request.fence });
+        this.registerLane(identity);
+      }
       return {
         opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
         birthFingerprint: { observedAt: record.startedAt, discriminator: birthDiscriminator },
@@ -135,15 +141,16 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
         environment: { ...request.environment },
         interactive: true,
         fence: { ...request.fence },
+        ...(request.signal ? { signal: request.signal } : {}),
       });
     } catch (error) {
       // A start that failed after its record existed: the exact record goes back with the failure, with no root pid,
       // so the caller settles it through reconcile, verify-empty and release like any other binding.
       if (error instanceof WindowsJobStartFailedError)
-        throw new ProcessLaunchFailedWithIdentityError(error.message, bind(error.startRecord), { cause: error });
+        throw new ProcessLaunchFailedWithIdentityError(error.message, bind(error.startRecord, false), { cause: error });
       throw error;
     }
-    return { ...bind(snapshot), rootPid: snapshot.pid };
+    return { ...bind(snapshot, true), rootPid: snapshot.pid };
   }
   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);

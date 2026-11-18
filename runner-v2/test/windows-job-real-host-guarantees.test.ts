@@ -675,13 +675,17 @@ test(
         timeoutMs: 20_000,
         context: call.context,
       });
-      outcome = `${result.process.outcome}/${result.process.cleanup.state}`;
+      outcome = `${result.process.outcome}/${result.process.cleanup.state}/${result.process.cleanup.detail ?? ""}`;
     } catch (error) {
       outcome = `threw:${error instanceof Error ? error.message : String(error)}`;
     }
-    // Tight form: any unrelated throw must not pass as a launch proof refusal.
-    assert.match(outcome, /launch was not proven|launch_not_proven|launch_failed/i, `launch must fail closed, got: ${outcome}`);
-    assert.doesNotMatch(outcome, /\/verified_empty/, `failed launch must not prove empty: ${outcome}`);
+    // Tight form: any unrelated throw must not pass as a launch proof refusal. The Job host creates its record before
+    // CreateProcess fails, so the failed start names that exact record: the call keeps it blocked for cleanup (the
+    // run's close settles it on the backend's proof), with the start's own failure in the detail, never as success,
+    // "nothing to clean up" or a proven-empty process.
+    assert.match(outcome, /^(threw:.*(launch was not proven|launch_not_proven|launch_failed)|cleanup_failed\/failed\/.*not found.*aiboard-px2t-missing-executable-xyz)/i,
+      `launch must fail closed, got: ${outcome}`);
+    assert.doesNotMatch(outcome, /\/(verified_empty|not_required)\//, `failed launch must not prove empty or skip cleanup: ${outcome}`);
     assert.ok(
       recordCount(h) - recordsBefore <= 1,
       "a failed launch must not accumulate live Job state",

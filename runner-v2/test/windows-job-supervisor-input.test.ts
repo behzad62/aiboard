@@ -30,6 +30,9 @@ for (const interactive of [true, false]) test(`Windows Job supervisor retains ex
   const context = { spawn: () => backend, dirname, join, fileURLToPath, Buffer,
     config: { interactive }, backend: undefined, backendInput: undefined, status,
     settled: false, backendFailure: undefined, interactiveStdoutEnded: false, interactiveStderrEnded: false,
+    // The host reported its workload started; no Assign-path root is pending.
+    reportedStarted: true, spareUnclaimed: false, pendingRoot: null, pendingRootEnd: undefined,
+    persistStatus: () => undefined, endPendingRoot: async () => false,
     setInterval: () => 0, jobEventTimer: undefined, createInterface: () => new EventEmitter(),
     drainInteractiveOutput: () => undefined, pollInteractiveJobEvents: () => undefined,
     handleJobEvent: () => undefined, appendFileSync: () => undefined,

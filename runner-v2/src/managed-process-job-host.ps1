@@ -22,6 +22,14 @@ public static class ManagedProcessJobHost
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const int PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY = 0x00020012;
     private const int PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
+    private const uint IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;
+    private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
+    private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    private const uint FILE_SHARE_DELETE_FOR_REPARSE = 0x00000004;
+    // Stricter-only test fault (assign_path_exit_after_create): the launch takes the Assign path, as an app execution
+    // alias does. One launch per host, so a static is enough.
+    private static bool ForceAssignPath;
     private const int PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint FILE_APPEND_DATA = 0x00000004;
@@ -176,6 +184,23 @@ public static class ManagedProcessJobHost
     private static extern bool TerminateProcess(IntPtr process, uint exitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenReparsePoint(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flags,
+        IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(IntPtr device, uint code, IntPtr inBuffer, uint inSize,
+        IntPtr outBuffer, uint outSize, out uint returned, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(IntPtr thread);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -260,12 +285,11 @@ public static class ManagedProcessJobHost
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
                 environmentBlock, cwd, startup, job, out contained, out processInfo))
                 ThrowWin32("CreateProcess");
+            // Only the interactive host (every production launch) takes the Assign path: it writes the suspended root's
+            // exact identity first, so its supervisor can end that process if this host dies before the Assign. Here a
+            // root created outside the Job is refused; the finally terminates it.
             if (!contained)
-            {
-                if (!AssignProcessToJobObject(job, processInfo.hProcess))
-                    ThrowWin32("AssignProcessToJobObject");
-                contained = true;
-            }
+                throw new InvalidOperationException("The root was created outside the Job; only the interactive host assigns such a root.");
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
@@ -375,21 +399,55 @@ public static class ManagedProcessJobHost
         out bool inJob,
         out PROCESS_INFORMATION processInfo)
     {
-        // An app execution alias (a reparse point, such as a Store program's alias under WindowsApps) is activated by
-        // the system in a way that refuses the Job attribute (ERROR_ACCESS_DENIED), and after that refusal the Job
-        // refuses the retried root as well. Such a root is created as before, still suspended, and assigned right after.
-        bool alias = false;
-        try { alias = launch.Application != null && (File.GetAttributes(launch.Application) & FileAttributes.ReparsePoint) != 0; }
-        catch (Exception) { alias = false; }
+        // An app execution alias (IO_REPARSE_TAG_APPEXECLINK, such as python3.exe or pwsh.exe under WindowsApps) names a
+        // packaged program, and Windows refuses the Job attribute for it (ERROR_ACCESS_DENIED), both through the alias
+        // and at the program the alias names (measured 2026-11-19 with Store pwsh 7.7.0). After that refusal the Job
+        // refuses the retried root as well. So such a root takes the Assign path: created suspended, its exact identity
+        // reported, then assigned. Any other reparse point (a plain symbolic link) keeps the Job attribute.
+        bool appExecLink = launch.Application != null && IsAppExecLink(launch.Application);
+        bool useJobList = !ForceAssignPath && !appExecLink;
         bool triedJobList;
         if (CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
-            job, !alias, out triedJobList, out inJob, out processInfo))
+            job, useJobList, out triedJobList, out inJob, out processInfo))
             return true;
         if (!triedJobList) return false;
         // Any other refusal with the root inside the Job: created as before. If the Job then refuses the root, the
         // launch fails and the suspended root is terminated (the callers' finally), never left outside the Job.
         return CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
             job, false, out triedJobList, out inJob, out processInfo);
+    }
+
+    // Whether the path is an app execution alias: its reparse tag is IO_REPARSE_TAG_APPEXECLINK. A path whose reparse
+    // data cannot be read is not treated as one (its create with the Job attribute is then refused and fails closed).
+    private static bool IsAppExecLink(string path)
+    {
+        IntPtr handle = OpenReparsePoint(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE_FOR_REPARSE,
+            IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return false;
+        const int size = 16 * 1024;
+        IntPtr buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            uint returned;
+            if (!DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, IntPtr.Zero, 0, buffer, (uint)size, out returned, IntPtr.Zero) ||
+                returned < 8)
+                return false;
+            return unchecked((uint)Marshal.ReadInt32(buffer, 0)) == IO_REPARSE_TAG_APPEXECLINK;
+        }
+        catch (Exception) { return false; }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+            CloseHandle(handle);
+        }
+    }
+
+    // A created process's creation time (FILETIME ticks): with its pid, the exact identity of that process.
+    private static long CreationTime(IntPtr process)
+    {
+        long creation, exit, kernel, user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) ThrowWin32("GetProcessTimes");
+        return creation;
     }
 
     private static bool CreateSuspended(
@@ -497,7 +555,8 @@ public static class ManagedProcessJobHost
         try
         {
             // Stricter-only test fault: a host that takes longer to start than its launcher waits (a loaded host).
-            if (injectedFault == "slow_start" || injectedFault == "slow_start_late_close") Thread.Sleep(30000);
+            if (injectedFault == "slow_start_late_close") Thread.Sleep(30000);
+            ForceAssignPath = injectedFault == "assign_path_exit_after_create";
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
@@ -540,6 +599,13 @@ public static class ManagedProcessJobHost
             }
             if (!contained)
             {
+                // The Assign path: the suspended root lives outside the Job until it is assigned. Its exact identity
+                // (pid and creation time) is written first, so the supervisor can end exactly that process if this
+                // host dies before the Assign (a write that fails throws, and the finally terminates the root).
+                EmitAssignPending(eventPath, processInfo.dwProcessId, CreationTime(processInfo.hProcess));
+                // Stricter-only test fault: the host dies in that window, as a kill of the host would.
+                if (injectedFault == "assign_path_exit_after_create")
+                    System.Diagnostics.Process.GetCurrentProcess().Kill();
                 if (!AssignProcessToJobObject(job, processInfo.hProcess))
                     ThrowWin32("AssignProcessToJobObject");
                 contained = true;
@@ -548,6 +614,9 @@ public static class ManagedProcessJobHost
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
             processInfo.hThread = IntPtr.Zero;
+            // Stricter-only test fault: the workload runs (and may write output) while its started line is late, as on a
+            // loaded host; a launcher that gives up meanwhile aborts a start whose workload already ran.
+            if (injectedFault == "late_started_line") Thread.Sleep(30000);
             EmitLsp(eventPath, "started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
 
             bool rootExited = false;
@@ -915,6 +984,15 @@ public static class ManagedProcessJobHost
             ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
             ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}");
         Console.Out.Flush();
+    }
+
+    // The Assign path's exact identity of the suspended root. The creation time is a string: FILETIME ticks exceed the
+    // integers a JSON reader keeps exactly.
+    private static void EmitAssignPending(string eventPath, uint pid, long creationTime)
+    {
+        if (String.IsNullOrWhiteSpace(eventPath)) throw new InvalidOperationException("The Assign path needs an event file.");
+        File.AppendAllText(eventPath, "{\"type\":\"assign_pending\",\"pid\":" + pid + ",\"creationTime\":\"" + creationTime + "\"}" +
+            Environment.NewLine, new UTF8Encoding(false));
     }
 
     private static void EmitLsp(string eventPath, string type, uint pid, uint? exitCode, uint active, string error)

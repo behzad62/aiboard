@@ -127,6 +127,11 @@ export interface ProcessLaunchRequest {
   readonly environment: Readonly<Record<string, string>>;
   readonly outputOwnerId: string;
   readonly fence: ProcessEffectFence;
+  /**
+   * Cancels a launch still waiting for its workload to start (a stop or cancellation of the call). A backend that
+   * honours it fails the launch like any other failed start, with the exact identity it created, if any.
+   */
+  readonly signal?: AbortSignal;
 }
 export interface ProcessBackend {
   probe(fence?: ProcessEffectFence): Promise<unknown>;

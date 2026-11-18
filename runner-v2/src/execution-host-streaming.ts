@@ -158,7 +158,7 @@ export function createExecutionHostStreamingGraph(
       },
     },
     host: {
-      launch: async ({ launchId, claims, lease }) => {
+      launch: async ({ launchId, claims, lease, signal }) => {
         const context = exactPendingContext(pending, launchId, claims);
         const selection = selections.get(lease.leaseId);
         if (!selection) throw new Error("Exact streaming isolation selection is unavailable.");
@@ -193,6 +193,7 @@ export function createExecutionHostStreamingGraph(
             environment: context.environment,
             outputOwnerId: `streaming-output:${launchId}`,
             fence,
+            ...(signal ? { signal } : {}),
           });
         } catch (error) {
           // A failed launch that names the exact backend identity it created: that binding is kept for this error, so

@@ -1,13 +1,17 @@
 // A Job host's start, and a start the launcher gives up on (PR CI: cli-worker-processes failed when a loaded host had
 // not reported startup within the former fixed 5 s, and the aborted start never settled):
-// - the start wait ends at once when the supervisor is already gone, instead of waiting out its ceiling (any host);
+// - the start wait ends at once when the supervisor is already gone, or when the call is cancelled (any host);
 // - a start aborted by its launcher records the host's exit as its stop, so the run closes with its stop proven and no
-//   process left (the real Job host, Windows only, with a stricter-only fault that makes the host start slowly);
-// - a host that dies right after it created the root, before it resumed it, leaves no process: the root was created
-//   inside the Job (PROC_THREAD_ATTRIBUTE_JOB_LIST), so the Job's kill-on-close ends it (Windows only).
+//   process left, also when its workload already wrote output and when the start claimed a pre-started spare;
+// - one-shot process.run keeps such a start's exact record for cleanup instead of recording "nothing to clean up";
+// - a host that dies right after it created the root, before it resumed it, leaves no process: inside the Job
+//   (PROC_THREAD_ATTRIBUTE_JOB_LIST) the Job's kill-on-close ends it; on the Assign path the supervisor ends that exact
+//   process, and the launch fails at once instead of waiting out its ceiling.
+// Windows cases use stricter-only faults in the real Job host and end the start wait once the supervisor is listening
+// (the Job host's test seam for its ceiling, or the call's own cancellation for process.run), never on a fixed deadline.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -25,8 +29,8 @@ import { createWindowsJobProcessHost, waitForSupervisor, type WindowsJobInjected
 
 const WINDOWS = process.platform === "win32";
 const ownRoot = mkdtempSync(join(tmpdir(), `aiboard-start-abort-${randomUUID().slice(0, 8)}-`));
-// Best effort: the run whose Job host died keeps its stores open by design (its close refuses), so on Windows its
-// folder can stay locked until this process exits.
+// Best effort: a run whose close refuses keeps its stores open by design, so on Windows its folder can stay locked
+// until this process exits.
 after(() => { try { rmSync(ownRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* see above */ } });
 
 // The host's process facts are injected, not probed (the probe alone takes seconds on Windows).
@@ -45,86 +49,205 @@ async function waitUntil(condition: () => boolean, timeoutMs: number): Promise<b
   return condition();
 }
 
-/** Each process folder's supervisor statuses (last line) and Job events under one Job host state directory. */
-function jobFolders(jobHost: string): { status: Record<string, unknown>; events: string }[] {
+interface JobFolder { readonly name: string; readonly status: Record<string, unknown>; readonly events: string; readonly stdoutBytes: number }
+/** Each process folder's last supervisor status, Job events and raw stdout length under one Job host state directory. */
+function jobFolders(jobHost: string): JobFolder[] {
   if (!existsSync(jobHost)) return [];
   return readdirSync(jobHost, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("process_")).map((entry) => {
     const folder = join(jobHost, entry.name);
-    const lines = existsSync(join(folder, "supervisor.jsonl")) ? readFileSync(join(folder, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean) : [];
-    return { status: lines.length ? JSON.parse(lines.at(-1)!) as Record<string, unknown> : {}, events: existsSync(join(folder, "job-events.jsonl")) ? readFileSync(join(folder, "job-events.jsonl"), "utf8") : "" };
+    const read = (name: string) => (existsSync(join(folder, name)) ? readFileSync(join(folder, name), "utf8") : "");
+    const lines = read("supervisor.jsonl").split(/\r?\n/).filter(Boolean);
+    let status: Record<string, unknown> = {};
+    try { status = lines.length ? JSON.parse(lines.at(-1)!) as Record<string, unknown> : {}; } catch { /* a line being written */ }
+    return { name: entry.name, status, events: read("job-events.jsonl"), stdoutBytes: existsSync(join(folder, "stdout.log")) ? statSync(join(folder, "stdout.log")).size : 0 };
   });
 }
 
-test("the start wait ends at once when the supervisor is already gone, without waiting out its ceiling", async () => {
+test("the start wait ends at once when the supervisor is already gone or the call is cancelled, without waiting out its ceiling", async () => {
   const folder = join(ownRoot, "gone");
   mkdirSync(folder, { recursive: true });
   const statusPath = join(folder, "supervisor.jsonl");
+  const supervisor = { protocol: "aiboard-managed-process/v1", token: "t", statusPath, supervisorPid: 4242, port: 0 } as const;
   writeFileSync(statusPath, JSON.stringify({ protocol: "aiboard-managed-process/v1", processId: "p", supervisorPid: 4242, port: 1, status: "starting" }) + "\n");
-  const started = Date.now();
-  await assert.rejects(waitForSupervisor({ protocol: "aiboard-managed-process/v1", token: "t", statusPath, supervisorPid: 4242, port: 0 }, "p", 600_000, () => false),
-    /exited before it reported startup/);
+  let started = Date.now();
+  await assert.rejects(waitForSupervisor({ ...supervisor }, "p", 600_000, () => false), /exited before it reported startup/);
   assert.ok(Date.now() - started < 5_000, `it ended in ${Date.now() - started} ms`);
+  // Cancellation ends the wait too, while the supervisor lives.
+  const cancel = new AbortController();
+  started = Date.now();
+  setTimeout(() => cancel.abort(), 50);
+  await assert.rejects(waitForSupervisor({ ...supervisor }, "p", 600_000, () => true, cancel.signal),
+    (error: unknown) => (error as { code?: unknown }).code === "process_start_cancelled");
+  assert.ok(Date.now() - started < 5_000, `the cancelled wait ended in ${Date.now() - started} ms`);
   // A supervisor that wrote its terminal status before it exited is read once more, and that status is the answer.
   writeFileSync(statusPath, JSON.stringify({ protocol: "aiboard-managed-process/v1", processId: "p", supervisorPid: 4242, port: 1, status: "stopped", error: "failed" }) + "\n");
-  const status = await waitForSupervisor({ protocol: "aiboard-managed-process/v1", token: "t", statusPath, supervisorPid: 4242, port: 0 }, "p", 600_000, () => false);
+  const status = await waitForSupervisor({ ...supervisor }, "p", 600_000, () => false);
   assert.equal(status.status, "stopped");
 });
 
-async function withRun<T>(name: string, fault: WindowsJobInjectedLaunchFault, startDeadlineMs: number | undefined,
-  body: (input: { invoke: (tool: string, args: Record<string, unknown>) => Promise<{ isError?: boolean; content: unknown[] }>; jobHost: string; project: string }) => Promise<T>): Promise<{ value: T; closeError: unknown; jobHost: string }> {
+type Invoke = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ isError?: boolean; content: unknown[] }>;
+async function withRun<T>(name: string, fault: WindowsJobInjectedLaunchFault, options: { readonly spare?: boolean; readonly startWaitSignal?: AbortSignal },
+  body: (input: { invoke: Invoke; jobHost: string; project: string }) => Promise<T>): Promise<{ value: T; closeError: unknown; jobHost: string }> {
   const root = join(ownRoot, name);
   const project = join(root, "project"), state = join(root, "state"), jobHost = join(state, "job-host");
   mkdirSync(project, { recursive: true });
   mkdirSync(state, { recursive: true });
   const artifacts = new ArtifactStore(join(state, "artifacts"));
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS,
-    windowsJobHost: createWindowsJobProcessHost({ stateDirectory: jobHost, injectedLaunchFault: fault, ...(startDeadlineMs ? { startDeadlineMs } : {}) }) });
-  const run = await host.bindRun({ runId: `start-abort-${name}`, permissionProfile: "full", capabilityContract: { digest: "a".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
+  const jobService = createWindowsJobProcessHost({ stateDirectory: jobHost, injectedLaunchFault: fault, ...(options.spare ? { spare: { keepWarm: false } } : {}),
+    ...(options.startWaitSignal ? { startWaitSignal: options.startWaitSignal } : {}) });
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts, ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS, windowsJobHost: jobService });
+  const runId = `start-abort-${name}`;
+  const run = await host.bindRun({ runId, permissionProfile: "full", capabilityContract: { digest: "a".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
   const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants, artifacts, maxInlineOutputBytes: 64 * 1024 });
   for (const tool of createProcessTools({ execution: run.commandExecution, support: processRunSupport(run.managedProcesses, artifacts) })) broker.register(tool);
   for (const tool of createManagedProcessTools(run.managedProcesses)) broker.register(tool);
   let sequence = 0;
-  const invoke = (tool: string, args: Record<string, unknown>) => broker.invoke({ type: "tool_call", callId: `call-${++sequence}`, name: tool, arguments: args },
-    { runId: run.runId, sessionId: "agent", actor: { role: "worker", id: "worker" }, workspacePath: project });
+  const invoke: Invoke = (tool, args, signal) => broker.invoke({ type: "tool_call", callId: `call-${++sequence}`, name: tool, arguments: args },
+    { runId: run.runId, sessionId: "agent", actor: { role: "worker", id: "worker" }, workspacePath: project, ...(signal ? { signal } : {}) });
   let value: T;
   let closeError: unknown = null;
-  try { value = await body({ invoke, jobHost, project }); }
-  finally {
-    // The host closes even when the run's close refuses, so it lets go of its stores and the folder can be removed.
+  try {
+    if (options.spare) {
+      assert.ok(jobService.prestartSpare, "the Job host pre-starts spares");
+      // A spare serves the session it was started for: the tool calls' own session.
+      await jobService.prestartSpare({ runId: run.runId, sessionId: "agent" });
+    }
+    value = await body({ invoke, jobHost, project });
+  } finally {
+    // The host closes even when the run's close refuses, so it lets go of what it can.
     try { await run.close(); } catch (error) { closeError = error; }
     try { await host.close(); } catch (error) { closeError ??= error; }
   }
   return { value, closeError, jobHost };
 }
 
-test("a start its launcher gives up on records the host's exit, so the run closes with its stop proven and no process left", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
-  // The host sleeps before it creates anything; the launcher waits 1.5 s, then aborts the start. The host's close then
-  // reaches its supervisor a second late, so the abort must wait for it to record the stop.
-  const { value: started, closeError, jobHost: slowJobHost } = await withRun("slow", "slow_start_late_close", 1_500, async ({ invoke, jobHost, project }) => {
-    const marker = join(project, "ran.txt");
-    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran")`] });
+/**
+ * The Job host's start wait ends, as its ceiling would, once the condition holds: the launcher gives up on the start
+ * while the call itself stays live (a cancelled streaming call is answered at once and not followed).
+ */
+function giveUpWhen(condition: (folder: JobFolder) => boolean): { readonly signal: AbortSignal; arm(jobHost: string): void } {
+  const controller = new AbortController();
+  return { signal: controller.signal, arm: (jobHost) => { void waitUntil(() => jobFolders(jobHost).some(condition), 60_000).then(() => controller.abort()); } };
+}
+/** Aborts the call once the condition holds for a Job folder (the supervisor is listening, the workload wrote). */
+function abortWhen(jobHost: string, condition: (folder: JobFolder) => boolean): AbortController {
+  const controller = new AbortController();
+  void waitUntil(() => jobFolders(jobHost).some(condition), 60_000).then(() => controller.abort());
+  return controller;
+}
+const listening = (folder: JobFolder) => Number(folder.status.port) > 0 && folder.events.includes('"type":"helper"');
+/**
+ * A cancelled call returns at once; its launch then aborts the start and records the stop. Waits for that (every
+ * record's supervisor stopped and gone) before the test reads the record or closes the run.
+ */
+async function abortedStartSettled(jobHost: string): Promise<JobFolder[]> {
+  await waitUntil(() => {
     const folders = jobFolders(jobHost);
-    return { result, folders, ran: existsSync(marker) };
-  });
+    return folders.length > 0 && folders.every((folder) => folder.status.status === "stopped" && !alive(Number(folder.status.supervisorPid)));
+  }, 30_000);
+  return jobFolders(jobHost);
+}
+
+async function assertAbortedStartSettled(started: { result: { isError?: boolean; content: unknown[] }; folders: JobFolder[] }, closeError: unknown, jobHost: string): Promise<void> {
   assert.equal(started.result.isError, true, JSON.stringify(started.result.content));
-  assert.equal(started.ran, false, "the aborted start never ran its workload");
   assert.equal(started.folders.length, 1, JSON.stringify(started.folders));
   const status = started.folders[0]!.status;
   assert.equal(status.status, "stopped", `the aborted start's stop is recorded: ${JSON.stringify(status)}`);
   assert.equal(status.jobEmptyProof, true, JSON.stringify(status));
   assert.equal(status.terminationRequested, true, JSON.stringify(status));
+  assert.equal(status.retainedOutputChunks, 0, JSON.stringify(status));
+  assert.equal(status.retainedOutputBytes, 0, JSON.stringify(status));
   assert.ok(Number.isSafeInteger(status.supervisorPid) && await waitUntil(() => !alive(status.supervisorPid as number), 10_000), "its supervisor exited");
   assert.equal(closeError, null, `the run closes with the aborted start's cleanup certified: ${inspect(closeError, { depth: 8 })}`);
-  assert.deepEqual(jobFolders(slowJobHost), [], "the aborted start's exact Job record was released through its binding");
+  assert.deepEqual(jobFolders(jobHost), [], "the aborted start's exact Job record was released through its binding");
+}
+
+test("a start its caller cancels records the host's exit, so the run closes with its stop proven and no process left", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  // The host sleeps before it creates anything, and its close reaches its supervisor a second late, so the abort must
+  // wait for it to record the stop.
+  const giveUp = giveUpWhen(listening);
+  const { value: started, closeError, jobHost } = await withRun("slow", "slow_start_late_close", { startWaitSignal: giveUp.signal }, async ({ invoke, jobHost, project }) => {
+    const marker = join(project, "ran.txt");
+    giveUp.arm(jobHost);
+    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran")`] });
+    const folders = await abortedStartSettled(jobHost);
+    assert.equal(existsSync(marker), false, "the aborted start never ran its workload");
+    return { result, folders };
+  });
+  await assertAbortedStartSettled(started, closeError, jobHost);
 });
 
-test("a host that dies right after it created the root, before resuming it, leaves no process", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+test("an aborted start whose workload already wrote output drops that output and still settles", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const giveUp = giveUpWhen((folder) => folder.stdoutBytes >= 24);
+  const { value: started, closeError, jobHost } = await withRun("wrote", "late_started_line", { startWaitSignal: giveUp.signal }, async ({ invoke, jobHost }) => {
+    giveUp.arm(jobHost);
+    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(24)); setTimeout(() => {}, 60000)`] });
+    return { result, folders: await abortedStartSettled(jobHost) };
+  });
+  assert.equal(started.folders[0]?.status.outputDiscarded, true, JSON.stringify(started.folders[0]?.status));
+  await assertAbortedStartSettled(started, closeError, jobHost);
+});
+
+test("a claimed spare's aborted start is stopped through its supervisor and settles the same way", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
+  const giveUp = giveUpWhen((folder) => folder.status.claimed === true && folder.stdoutBytes >= 24);
+  const { value: started, closeError, jobHost } = await withRun("spare", "late_started_line", { spare: true, startWaitSignal: giveUp.signal }, async ({ invoke, jobHost }) => {
+    giveUp.arm(jobHost);
+    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(24)); setTimeout(() => {}, 60000)`] });
+    return { result, folders: await abortedStartSettled(jobHost) };
+  });
+  assert.equal(started.folders[0]?.status.claimed, true, "the start claimed the pre-started spare");
+  await assertAbortedStartSettled(started, closeError, jobHost);
+});
+
+test("one-shot process.run cancelled during its start stops that exact record like any stopped process", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
+  const { value: ran, closeError, jobHost } = await withRun("run-cancel", "slow_start_late_close", {}, async ({ invoke, jobHost }) => {
+    const cancel = abortWhen(jobHost, listening);
+    const result = await invoke("process.run", { command: process.execPath, args: ["-e", ""] }, cancel.signal);
+    return { result, folders: await abortedStartSettled(jobHost) };
+  });
+  const content = JSON.stringify(ran.result.content);
+  assert.doesNotMatch(content, /not_required/, "a start with an exact record is never 'nothing to clean up'");
+  assert.match(content, /"cancelled":true/, content);
+  await assertAbortedStartSettled(ran, closeError, jobHost);
+});
+
+test("one-shot process.run whose start failed keeps its exact record blocked for cleanup, and the run's close settles it only on proven emptiness", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
+  // The launcher gives up on the start (its ceiling, through the test seam) while the call stays live.
+  const giveUp = giveUpWhen(listening);
+  const { value: ran, closeError, jobHost } = await withRun("run-failed", "slow_start_late_close", { startWaitSignal: giveUp.signal }, async ({ invoke, jobHost }) => {
+    giveUp.arm(jobHost);
+    const result = await invoke("process.run", { command: process.execPath, args: ["-e", ""] });
+    return { result, folders: await abortedStartSettled(jobHost) };
+  });
+  const content = JSON.stringify(ran.result.content);
+  assert.equal(ran.result.isError, true, content);
+  assert.doesNotMatch(content, /not_required/, "a start with an exact record is never 'nothing to clean up'");
+  assert.match(content, /cleanup_blocked/, content);
+  // The close re-attests the bound record and releases it only because the stop was recorded with the Job empty.
+  await assertAbortedStartSettled(ran, closeError, jobHost);
+});
+
+test("a host that dies right after it created the root inside the Job, before resuming it, leaves no process", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
   // Only the root's death is claimed here: the host that owned the Job died, so whether its stop is proven is not.
-  const { value: observed } = await withRun("created", "host_exit_after_create", undefined, async ({ invoke, jobHost }) => {
+  const { value: observed } = await withRun("created", "host_exit_after_create", {}, async ({ invoke, jobHost }) => {
     const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
     const created = jobFolders(jobHost).map((folder) => /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1]).find(Boolean);
     return { result, pid: created ? Number(created) : 0 };
   });
   assert.ok(observed.pid > 0, `the host reported the root it created: ${JSON.stringify(observed.result.content)}`);
   assert.ok(await waitUntil(() => !alive(observed.pid), 10_000), `the suspended root ${observed.pid} died with the host's Job`);
+});
+
+test("on the Assign path, a host that dies before the Assign fails the launch at once and its exact suspended root is ended", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const { value: observed } = await withRun("assign", "assign_path_exit_after_create", {}, async ({ invoke, jobHost }) => {
+    const started = Date.now();
+    const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
+    const elapsedMs = Date.now() - started;
+    const pending = jobFolders(jobHost).map((folder) => /"type":"assign_pending","pid":(\d+),"creationTime":"(\d+)"/.exec(folder.events)?.[1]).find(Boolean);
+    return { result, elapsedMs, pid: pending ? Number(pending) : 0 };
+  });
+  assert.equal(observed.result.isError, true, JSON.stringify(observed.result.content));
+  assert.ok(observed.pid > 0, `the host reported the suspended root's exact identity: ${JSON.stringify(observed.result.content)}`);
+  assert.ok(observed.elapsedMs < 45_000, `the launch failed on the host's exit, not the start ceiling: ${observed.elapsedMs} ms`);
+  assert.ok(await waitUntil(() => !alive(observed.pid), 15_000), `the suspended root ${observed.pid} outside the Job was ended`);
 });
