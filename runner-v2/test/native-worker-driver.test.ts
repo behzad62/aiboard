@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
@@ -36,6 +36,11 @@ import {
 } from "../src/worker-identity.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import { emptyProjectionForTest } from "./support/projection-fixtures.js";
+import { captureWorkingTreeIdentity } from "../src/command-evidence-identity.js";
+import { CliWorkerOwners, type CliWorkerRuntimeDeps } from "../src/cli-worker-runtime.js";
+import { runGit } from "./support/git-fixture.js";
+import { FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliScenario } from "./support/fake-cli.js";
+import { ChildCliLauncher, cliDoneResult, writeClaudeStream } from "./support/cli-worker-fixture.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -1000,3 +1005,163 @@ function expectedEvidenceId(
 function emptyArtifactHash(): string {
   return createHash("sha256").update(Buffer.alloc(0)).digest("hex");
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// CW5: the driver's CLI branch (docs/plans/2026-11-14-cli-workers.md §3.5, §3.11), with the fake CLI as a child.
+
+async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean } = {}) {
+  // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
+  // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
+  // Registered before anything can throw (the worktree, the stores), so a failed setup still removes the folder.
+  const closers: Array<() => void> = [];
+  t.after(() => {
+    for (const close of closers.reverse()) close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const fake = join(root, "fake");
+  mkdirSync(project);
+  mkdirSync(state);
+  mkdirSync(fake);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: "run_1" });
+  const workspaces = new WorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId: "run_1", baselineRevision: baseline.revision });
+  const workspace = await workspaces.createTaskWorkspace("task_a");
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  closers.push(() => { sessions.close(); ledger.close(); scheduler.close(); evidence.close(); memory.close(); });
+  seedRunningTask(scheduler);
+  const { structured = cliDoneResult(), working, ...rest } = scenario;
+  const stdout = writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
+  const launcher = new ChildCliLauncher(writeFakeCliScenario(fake, { cli: "claude-code", stdout, ...rest }));
+  const cli: AgentRuntimeCandidate = { runtimeId: "claude-code:default", providerId: "claude-code", modelId: "sonnet", capabilities: ["code"], priority: 1, workerOnly: true };
+  const api: AgentRuntimeCandidate = { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 2 };
+  const health = new ProviderHealthRegistry();
+  const apiModel = new ScriptedModel([]);
+  // The owner folder's browser as the post-stop check reads it. In production the stop that really ends the owner's
+  // processes is the managed service's closeAgent (retryStop runs it first), and its observer records the browser:
+  // with `escapeOnStop` armed, that stop is where the escape appears.
+  let browser: "exited" | "escaped" = "exited";
+  let escapeOnStop = false;
+  const closes: string[] = [];
+  const managedProcesses = {
+    closeAgent: async (owner: { sessionId: string }) => { closes.push(owner.sessionId); if (escapeOnStop) browser = "escaped"; },
+    listRun: async () => [],
+  } as unknown as ManagedProcessService;
+  const owners = new CliWorkerOwners();
+  const runtime: CliWorkerRuntimeDeps = {
+    schedulerStore: scheduler, sessions, workspaceManager: workspaces, launcher,
+    settings: async () => ({ executable: { status: "found", path: process.execPath, source: "home", form: "exe" }, attemptLimitMs: 60_000, argsPrefix: [FAKE_CLI_SCRIPT] }),
+    host: { platform: "win32", isRoot: false, jobContainment: "verified", windowsBatchArgv: "verified" },
+    stateDirectory: state, owners, readWaitMs: 50,
+    captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
+    browser: { checkAfterStop: async () => browser },
+    rerunChecks: async ({ attempt }) => {
+      const output = await artifacts.put(new Uint8Array(0), "text/plain", "check output");
+      const record = evidence.record({
+        runId: "run_1", taskId: "task_a", actor: { role: "worker", id: "worker_task_a_1" }, attempt, createdAt: "2026-11-18T00:00:01.000Z",
+        idempotencyKey: `evidence:cli:${attempt}`,
+        fact: {
+          kind: "command", label: "node --test", command: "node", args: ["--test"], cwd: ".",
+          startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:01.000Z", exitCode: 0, signal: null,
+          timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: output.hash, stderrArtifactHash: output.hash,
+        },
+      });
+      return { criterionEvidenceLinks: [{ criterionId: "value", evidenceId: record.id, artifactHashes: [output.hash] }], notRun: [] };
+    },
+  };
+  const driver = (runtimeOverrides: Partial<CliWorkerRuntimeDeps> = {}, cliWorkerDriver = true) => new NativeWorkerDriver({
+    schedulerStore: scheduler,
+    router: new RuntimeRouter({ candidates: [cli, api], health, cliWorkerDriver }),
+    health,
+    candidates: [cli, api],
+    models: new Map([[api.runtimeId, apiModel]]),
+    permissionProfile: "full",
+    workspaceManager: workspaces,
+    artifacts,
+    ledger,
+    sessions,
+    evidenceStore: evidence,
+    skillCatalog: new SkillCatalog({ projectRoot: project }),
+    memoryStore: memory,
+    projectId: "project_1",
+    projectRoot: project,
+    execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    managedProcesses,
+    cliWorkers: { runtimes: new Map([[cli.runtimeId, { runtimeId: cli.runtimeId, providerId: "claude-code", model: "sonnet" }]]), runtime: { ...runtime, ...runtimeOverrides } },
+  });
+  const assignment = { runId: "run_1", task: rebuildTask(scheduler), attempt: 1, workerId: "worker_task_a_1", workspacePath: workspace.path };
+  return { driver, assignment, launcher, health, apiModel, owners, scheduler, setBrowser: (status: "exited" | "escaped") => { browser = status; }, armEscapeOnStop: (armed: boolean) => { escapeOnStop = armed; }, closes };
+}
+
+test("CW5: a mixed crew assigns the task to the CLI worker, whose done result is submitted", async (t) => {
+  const fixture = await cliDriverFixture(t, "mixed", { actions: [{ write: "value.txt", content: "two\n" }] });
+  const outcome = await fixture.driver().run(fixture.assignment);
+  assert.equal(outcome.type, "submitted", JSON.stringify(outcome));
+  assert.equal(fixture.launcher.starts.length, 1);
+  assert.equal(fixture.apiModel.requests.length, 0);
+  assert.equal(fixture.health.get("claude-code").status, "healthy");
+  const assignmentEvent = fixture.scheduler.readRun("run_1").find((event) => event.type === "worker.runtime_assigned");
+  assert.equal((assignmentEvent?.payload as { runtimeId?: string } | undefined)?.runtimeId, "claude-code:default");
+});
+
+test("CW5 §3.7: the same attempt run again finds the worktree its CLI left detached or on another branch: a coded failure", async (t) => {
+  for (const [label, leave] of [["detached", ["checkout", "-q", "--detach"]], ["other_branch", ["checkout", "-q", "-b", "cli-branch"]]] as const) {
+    const fixture = await cliDriverFixture(t, `reentry-${label}`);
+    fixture.launcher.stopFailures = 1;
+    const driver = fixture.driver();
+    const first = await driver.run(fixture.assignment);
+    assert.deepEqual((first as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_collect_pending:task_a" });
+    // What the CLI left before its stop was proven: the worktree off its task branch.
+    await runGit({ cwd: fixture.assignment.workspacePath, args: [...leave] });
+    await driver.retryStop(fixture.assignment);
+    // The Resume: the workspace is refused as before (createTaskWorkspace), and the CLI worker's failure is coded.
+    const again = await driver.run(fixture.assignment);
+    assert.equal(again.type, "failed", JSON.stringify(again));
+    assert.match((again as { reason: string }).reason, new RegExp(`^cli_history_rewritten:${label}: `));
+    assert.equal(fixture.launcher.starts.length, 1, "no CLI is started in it");
+  }
+});
+
+test("CW5: case 1 fails the attempt and leaves the CLI's health untouched", async (t) => {
+  const fixture = await cliDriverFixture(t, "case1");
+  const before = fixture.health.snapshot();
+  const outcome = await fixture.driver({ host: { platform: "win32", isRoot: false, jobContainment: "partial" } }).run(fixture.assignment);
+  assert.deepEqual(outcome, { type: "failed", reason: "process_launch_unproven:job_containment_unverified" });
+  assert.deepEqual(fixture.health.snapshot(), before, "no success or failure is recorded for the CLI");
+  assert.equal(fixture.launcher.starts.length, 0);
+  assert.equal(fixture.apiModel.requests.length, 0, "case 1 never fails over");
+});
+
+test("CW5: an unproven stop keeps the collect pending, and retryStop proves the owner's stop with its browser record", async (t) => {
+  const fixture = await cliDriverFixture(t, "retry-stop");
+  fixture.launcher.stopFailures = 1;
+  const driver = fixture.driver();
+  const outcome = await driver.run(fixture.assignment);
+  assert.equal(outcome.type, "stop_unproven", JSON.stringify(outcome));
+  assert.deepEqual((outcome as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_collect_pending:task_a" });
+  const owner = { runId: "run_1", sessionId: "worker:run_1:task_a:1" };
+  assert.equal(fixture.owners.has(owner), true);
+  // The browser escapes at the generic stop retryStop runs first: the CLI's check runs after it and must see it.
+  fixture.armEscapeOnStop(true);
+  const before = fixture.closes.length;
+  await assert.rejects(driver.retryStop(fixture.assignment), /the browser the CLI's session ran is still running/);
+  assert.ok(fixture.closes.length > before, "the managed stop ran before the browser check");
+  assert.equal(fixture.owners.has(owner), true);
+  // A known escape is never cleared by a later stop alone: still running, still unproven.
+  fixture.armEscapeOnStop(false);
+  await assert.rejects(driver.retryStop(fixture.assignment), /still running/);
+  fixture.setBrowser("exited");
+  await driver.retryStop(fixture.assignment);
+  assert.equal(fixture.owners.has(owner), false);
+  // The proven retry lets the next run collect the result without starting the CLI again.
+  const collected = await driver.run(fixture.assignment);
+  assert.equal(collected.type, "submitted", JSON.stringify(collected));
+  assert.equal(fixture.launcher.starts.length, 1);
+});

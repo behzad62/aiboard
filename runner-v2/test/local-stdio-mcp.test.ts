@@ -11,7 +11,8 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import { createChildEnvironmentFactory } from "../src/child-environment.js";
+import { LOCAL_MCP_DEPTH_LIMIT, createChildEnvironmentFactory } from "../src/child-environment.js";
+import { CliWorkerOwners } from "../src/cli-worker-runtime.js";
 import { ControlServer } from "../src/control-server.js";
 import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
 import { openLauncherMcpSession } from "../src/launcher-ipc.js";
@@ -185,6 +186,20 @@ test("recursion depth is reserved, signed requests reject the limit, and tokens 
   const prepared = environments.prepare({ ambient: {}, explicitOverrides: { AIBOARD_MCP_DEPTH: "0" } });
   assert.equal(environments.withChildEnvironment(prepared.capability, (environment) => environment.AIBOARD_MCP_DEPTH), "2");
   issued.revoke(); await sessions.close();
+});
+
+test("CW5: every process of a CLI worker's owner reaches the local MCP door at its depth limit and is refused", async () => {
+  const owners = new CliWorkerOwners();
+  const owner = { runId: "run_cli", sessionId: "worker:run_cli:task_a:1" };
+  owners.register(owner);
+  // The Runner's own children are at depth 1; the CLI's owner is raised to the limit, whatever the caller passes.
+  const environments = createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error("unused"); } }, mcpChildDepth: 1, processEnvironment: owners.environmentFor });
+  const prepared = environments.prepare({ ambient: {}, explicitOverrides: { AIBOARD_MCP_DEPTH: "0" }, ...owner });
+  const environment = environments.withChildEnvironment(prepared.capability, (values) => ({ ...values }));
+  assert.equal(environment.AIBOARD_MCP_DEPTH, String(LOCAL_MCP_DEPTH_LIMIT));
+  await assert.rejects(runLauncher(["mcp", "serve", "--stdio"], { environment }), /local_mcp_recursion_limit/);
+  const other = environments.prepare({ ambient: {}, runId: owner.runId, sessionId: "worker:run_cli:task_b:1" });
+  assert.equal(environments.withChildEnvironment(other.capability, (values) => values.AIBOARD_MCP_DEPTH), "1", "an API worker's processes keep the Runner's depth");
 });
 
 test("the local route refuses Origin and wrong Host without CORS", async () => {

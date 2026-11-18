@@ -124,6 +124,10 @@ test("Git policy allows only narrowly enumerated caller Git environment and reje
     });
     assert.equal(accepted.environment.GIT_AUTHOR_NAME, "A");
     assert.equal(accepted.environment.GIT_INDEX_FILE?.endsWith("isolated.index"), true);
+    // CW5: optional locks may only be turned off (`--no-optional-locks` is a global option, which the policy refuses).
+    assert.equal((await prepare(root, ["status"], { GIT_OPTIONAL_LOCKS: "0" })).environment.GIT_OPTIONAL_LOCKS, "0");
+    await rejectsPolicy(() => prepare(root, ["status"], { GIT_OPTIONAL_LOCKS: "1" }));
+    await rejectsPolicy(() => prepare(root, ["--no-optional-locks", "status"]));
   });
 });
 

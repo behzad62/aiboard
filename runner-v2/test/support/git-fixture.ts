@@ -4,7 +4,7 @@ import { createExecutionGrantAuthority } from "../../src/execution-grants.js";
  * use real Git against their own temporary repositories; separate native host
  * tests exercise the actual runtime/grants/containment/output path.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -36,11 +36,54 @@ export async function runGitBytes(options: GitCommandOptions): Promise<GitBinary
     throw new GitCommandError("command_failed", `git ${options.args.join(" ")} failed: ${stderr}`, { exitCode: result.status, stdout: stdout.toString("utf8"), stderr });
   return { exitCode: result.status, stdout, stderr };
 }
+/**
+ * The same fixture Git as runGitBytes (the same temp-folder rule, environment, config and checks), run as an async
+ * child, so callers that start Git calls together (Promise.all) overlap them and the event loop keeps running.
+ */
+export async function runGitBytesAsync(options: GitCommandOptions): Promise<GitBinaryCommandResult> {
+  const cwd = realpathSync.native(resolve(options.cwd));
+  const inside = relative(realpathSync.native(tmpdir()), cwd);
+  if (!isAbsolute(options.cwd) || inside === ".." || inside.startsWith("..\\") || inside.startsWith("../") || isAbsolute(inside))
+    throw new Error("Fixture Git may operate only in its explicit temporary repository.");
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE"])
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_TERMINAL_PROMPT: "0", GIT_AUTHOR_NAME: "Runner fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Runner fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" }, options.env);
+  const limit = options.maxOutputBytes ?? 4 * 1024 * 1024;
+  const { status, stdout, stderr } = await new Promise<{ status: number | null; stdout: Buffer; stderr: string }>((resolveRun, reject) => {
+    const child = spawn("git", ["-c", "core.hooksPath=", "-c", "core.fsmonitor=false", "-c", "credential.helper=", ...options.args],
+      { cwd, env, windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const out: Buffer[] = []; const err: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    child.once("error", (error) => reject(new GitCommandError("git_unavailable", `Finite Git fixture did not join: ${error.message}`)));
+    child.once("close", (code, signal) => {
+      if (signal || code === null) reject(new GitCommandError("git_unavailable", `Finite Git fixture did not join: ${signal ?? "unknown"}`));
+      else resolveRun({ status: code, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString("utf8") });
+    });
+  });
+  if (stdout.length + Buffer.byteLength(stderr) > limit)
+    throw new GitCommandError("output_limit", "Fixture output exceeded the caller bound after exact child completion.");
+  if (status !== 0 && !options.allowFailure)
+    throw new GitCommandError("command_failed", `git ${options.args.join(" ")} failed: ${stderr}`, { exitCode: status!, stdout: stdout.toString("utf8"), stderr });
+  return { exitCode: status!, stdout, stderr };
+}
+export async function runGitAsync(options: GitCommandOptions): Promise<GitCommandResult> {
+  const result = await runGitBytesAsync(options); return { ...result, stdout: result.stdout.toString("utf8") };
+}
 export async function runGit(options: GitCommandOptions): Promise<GitCommandResult> {
   const result = await runGitBytes(options); return { ...result, stdout: result.stdout.toString("utf8") };
 }
 export const fixtureGitRunner: GitCommandRunner = Object.freeze({ run: runGit, runBytes: runGitBytes });
-export function fixtureGitContext(profile: PermissionProfile = "full", execution?: OneShotCommandExecutor): RunGitExecutionContext {
+export const asyncFixtureGitRunner: GitCommandRunner = Object.freeze({ run: runGitAsync, runBytes: runGitBytesAsync });
+/** fixtureGitContext over the async fixture Git (runGitAsync), for suites whose Git calls should overlap. */
+export function asyncFixtureGitContext(profile: PermissionProfile = "full", execution?: OneShotCommandExecutor): RunGitExecutionContext {
+  return fixtureGitContext(profile, execution, asyncFixtureGitRunner);
+}
+export function fixtureGitContext(profile: PermissionProfile = "full", execution?: OneShotCommandExecutor, runner: GitCommandRunner = fixtureGitRunner): RunGitExecutionContext {
+  const fixtureGitRunner = runner;
   return { permissionProfile: profile, forCall: () => fixtureGitRunner, lifecycle: () => fixtureGitRunner, current: () => fixtureGitRunner,
     withCall: (_context, operation) => operation(),
     executeForCall: async (context, request) => {
