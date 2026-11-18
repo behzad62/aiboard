@@ -13,7 +13,7 @@ import { ADOPTED_CLEANUP_BLOCKER_MESSAGES, HOST_CLEANUP_FAILURE_MESSAGES, HOST_L
 import { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
 import { createProtocolEvidenceTee, type EvidenceSpoolSink } from "./protocol-evidence-tee.js";
 import { createStreamingOutputController, type StreamingOutputMetadata, type StreamingOutputStream } from "./streaming-output-controller.js";
-import { BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, type BackpressuredOutputAcknowledgement, type BackpressuredOutputMetadata, type BackpressuredOutputSettlement, type InteractiveProcessChannel } from "./interactive-process-channel.js";
+import { BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, InteractiveInputRefusedError, type BackpressuredOutputAcknowledgement, type BackpressuredOutputMetadata, type BackpressuredOutputSettlement, type InteractiveProcessChannel } from "./interactive-process-channel.js";
 
 export type StreamingProcessSessionErrorCode = "lossless_output_unavailable" | "launch_failed" | "handshake_refused" | "cleanup_blocked" | "cancelled";
 export class StreamingProcessSessionError extends Error { constructor(readonly code: StreamingProcessSessionErrorCode, message: string, options?: ErrorOptions) { super(message, options); this.name = "StreamingProcessSessionError"; } }
@@ -93,7 +93,7 @@ export interface StreamingHandshakeControl {
 type OutputController = ReturnType<typeof createStreamingOutputController>;
 type FinalizedEvidence = Awaited<ReturnType<ReturnType<typeof createProtocolEvidenceTee>["finalize"]>>;
 interface AttachmentEvidence { readonly tee: ReturnType<typeof createProtocolEvidenceTee>; finalizing?: Promise<FinalizedEvidence>; finalizedEvidence?: FinalizedEvidence; cleanup?: Promise<void> }
-interface PrivateAttachment { terminalMonitor?: Promise<void>; onTerminal?: (observation: StreamingTerminalObservation) => void; terminal?: StreamingTerminalObservation; terminalDelivered?: boolean; gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; readonly evidenceWaiters: Set<() => void>; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
+interface PrivateAttachment { terminalMonitor?: Promise<void>; onTerminal?: (observation: StreamingTerminalObservation) => void; terminal?: StreamingTerminalObservation; terminalDelivered?: boolean; gracefulProtocolSettlement?: Promise<void>; gracefulInputClose?: Promise<"acknowledged" | "failed">; readonly channel: FakeStreamingChannel; readonly output: OutputController; readonly evidence: AttachmentEvidence; readonly outputOwnerId: string; readonly outputFencingToken: number; readonly onPreAdoptionFailure?: (error: unknown) => Promise<void>; unsubscribe: () => void; unobserve: () => void; readonly evidenceWaiters: Set<() => void>; closed: boolean; detached: boolean; cleanupRelinquished: boolean; nextWriteSequence: number; writeTail: Promise<void>; inputStopped: boolean; drainAbort: AbortController; intakeTail: Promise<void>; intakeCount: number; closing?: Promise<FinalizedEvidence>; takeover?: Promise<void>; settling?: Promise<void>; outputSettlement?: { deadlineAt: number; promise: Promise<BackpressuredOutputSettlement> }; finalizedEvidence?: FinalizedEvidence; failure?: unknown }
 interface AdoptedCleanupContext { ownerId: string; fencingToken: number; live?: PrivateAttachment; cleanup?: PrivateAttachment; detachChannel?: FakeStreamingChannel; detachSettlement?: Promise<BackpressuredOutputSettlement>; detachOutputFailed?: boolean; control?: AdoptedBackendControl; evidenceContinuable: boolean; retainedCount: number }
 interface AdoptedCleanupRun {
   readonly ownerId: string;
@@ -558,14 +558,25 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         catch { throw runnerSessionError("launch_failed", "Streaming output delivery failed."); }
       },
     });
-    const attachment: PrivateAttachment = { channel, output, evidence, outputOwnerId: ownerId, outputFencingToken: fencingToken, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, evidenceWaiters, closed: false, detached: false, cleanupRelinquished: false, nextWriteSequence: 1, writeTail: Promise.resolve(), intakeTail: Promise.resolve(), intakeCount: 0 };
+    const attachment: PrivateAttachment = { channel, output, evidence, outputOwnerId: ownerId, outputFencingToken: fencingToken, onPreAdoptionFailure, unsubscribe: () => undefined, unobserve: () => undefined, evidenceWaiters, closed: false, detached: false, cleanupRelinquished: false, nextWriteSequence: 1, writeTail: Promise.resolve(), inputStopped: false, drainAbort: new AbortController(), intakeTail: Promise.resolve(), intakeCount: 0 };
     return attachment;
+  };
+  /**
+   * Ends the drain wait of every write already admitted (each ends with an unknown outcome, as at its own deadline);
+   * later writes get a fresh signal. Stop, close and graceful shutdown call it before joining the write tail, so none
+   * of them waits for a reader that is slow to drain. Admission is never cancelled.
+   */
+  const abandonDrains = (attachment: PrivateAttachment) => {
+    const abandoned = attachment.drainAbort;
+    attachment.drainAbort = new AbortController();
+    abandoned.abort();
   };
   const writeAttachment = async (
     attachment: PrivateAttachment,
     payload: Uint8Array,
     timeoutMs: number,
     assertCurrent?: () => void,
+    signal?: AbortSignal,
   ): Promise<void> => {
     const channel = attachment.channel as Partial<InteractiveProcessChannel>;
     if (typeof channel.write !== "function") throw runnerSessionError("launch_failed", "Streaming channel input is unavailable.");
@@ -573,15 +584,28 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       throw runnerSessionError("launch_failed", "Streaming write timeout is invalid.");
     }
     const bytes = new Uint8Array(payload);
-    const sequence = attachment.nextWriteSequence++;
     const operation = attachment.writeTail.then(async () => {
       assertCurrent?.();
-      await channel.write!({
-        sequence,
-        byteLength: bytes.byteLength,
-        digest: createHash("sha256").update(bytes).digest("hex"),
-        timeoutMs,
-      }, bytes);
+      // Once the session is stopping or closing, or the caller already gave up, nothing is admitted.
+      if (attachment.inputStopped) throw new InteractiveInputRefusedError("Streaming input is closed: the session is stopping.");
+      if (signal?.aborted) throw new InteractiveInputRefusedError("The write was cancelled before it was sent.");
+      // Writes run one at a time on this tail, so the sequence is taken here and handed back when the channel
+      // refused the write before admission; any other ending spends it, as the channel does.
+      const sequence = attachment.nextWriteSequence++;
+      // The drain wait ends at the session's abandonment (taken now, at admission) or the caller's own cancellation.
+      const drain = attachment.drainAbort.signal;
+      try {
+        await channel.write!({
+          sequence,
+          byteLength: bytes.byteLength,
+          digest: createHash("sha256").update(bytes).digest("hex"),
+          timeoutMs,
+          signal: signal ? AbortSignal.any([drain, signal]) : drain,
+        }, bytes);
+      } catch (error) {
+        if (error instanceof InteractiveInputRefusedError && attachment.nextWriteSequence === sequence + 1) attachment.nextWriteSequence = sequence;
+        throw error;
+      }
     });
     attachment.writeTail = operation.catch(() => undefined);
     await operation;
@@ -738,6 +762,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     if (attachment.closing) return await attachment.closing;
     attachment.closing = (async () => {
     const errors: unknown[] = [];
+    // A write still waiting for its reader to drain ends now (unknown outcome); it never holds the close.
+    // Permanent: the attachment is ending, so no later write is admitted even if this close is retried.
+    attachment.inputStopped = true; abandonDrains(attachment);
     try { await attachment.writeTail; } catch (error) { errors.push(error); }
     try { attachment.unsubscribe(); } catch (error) { errors.push(error); }
     try { attachment.unobserve(); } catch (error) { errors.push(error); }
@@ -759,6 +786,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     const takeover = (async () => {
       const errors: unknown[] = [];
       if (!attachment.cleanupRelinquished) {
+        // Stop never waits for a slow reader: a write still waiting for its drain ends now with an unknown
+        // outcome, as at its own deadline, and only then is the write tail joined. A write that passed its admission
+        // check before this point may still be admitted; the join below waits for it. Permanent, even if the takeover
+        // fails and is retried: the live attachment is being relinquished.
+        attachment.inputStopped = true; abandonDrains(attachment);
         try { await attachment.writeTail; } catch (error) { errors.push(error); }
         // Stop new intake, then reject pending family acknowledgements without
         // poisoning their durable checkpoint. Intake itself awaits those ACKs;
@@ -1545,7 +1577,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             sessionId: request.sessionId,
             retainOwnership: (timeoutMs) => { renewOwnedSessionLease(request.sessionId, clock().getTime() + timeoutMs, facadeFence); },
             assert: (authorization, expected) => options.sessions.assertOperationAuthorization(authorization, expected),
-            write: (payload, timeoutMs, assertCurrent) => writeAttachment(attachment!, payload, timeoutMs, assertCurrent),
+            write: (payload, timeoutMs, assertCurrent, signal) => writeAttachment(attachment!, payload, timeoutMs, assertCurrent, signal),
             waitForOutput: (signal) => attachment!.output.waitForPending(signal),
             deliver: (authorization, expected, deliver, assertCurrent) => attachment!.output.deliverForRequest(authorization, expected, deliver, assertCurrent),
           });
@@ -1575,9 +1607,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             assertion: OperationAuthorizationAssertion,
             payload: Uint8Array,
             timeoutMs: number,
+            /** The caller's cancellation: it ends this write's drain wait (unknown outcome), never its admission. */
+            signal?: AbortSignal,
           ) => {
             options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "write" });
-            await writeAttachment(attachment!, payload, timeoutMs);
+            await writeAttachment(attachment!, payload, timeoutMs, undefined, signal);
           },
           /** Ordered end-of-input under one exact current write/close_input authorization. */
           closeInput: async (
@@ -1669,6 +1703,8 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         if (!Number.isSafeInteger(graceMs) || graceMs < 1) throw runnerSessionError("cleanup_blocked", "Graceful protocol bound is invalid.");
         renewOwnedSessionLease(input.sessionId, deadlineAt, record);
         attachment.gracefulProtocolSettlement ??= (async () => {
+          // A request write still draining ends now; the shutdown protocol's own writes are still admitted.
+          abandonDrains(attachment);
           await attachment.writeTail;
           const abort = new AbortController(); let open = true; let writes = 0;
           const deliveries = new Set<Promise<unknown>>();
@@ -1718,6 +1754,7 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
           if (channel.closeInput && channel.waitForTerminal) {
             renewOwnedSessionLease(input.sessionId, deadlineAt, record);
             attachment.gracefulInputClose ??= (async () => {
+              abandonDrains(attachment);
               await attachment.writeTail;
               try { await channel.closeInput!(); return "acknowledged" as const; }
               catch { return "failed" as const; }

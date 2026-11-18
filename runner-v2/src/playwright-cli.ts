@@ -65,6 +65,15 @@ export const PLAYWRIGHT_CLI_OWNER_VARIABLES = Object.freeze([
 /** How long Chrome gets to leave on its own after the stop (it quits on DevTools-pipe EOF within 0.25 s, spike §5). */
 export const POSIX_BROWSER_EXIT_GRACE_MS = 2_000;
 
+/**
+ * CW8: the AIBoard skill file for browsing with the Playwright CLI, by its absolute path in this Runner install
+ * (`runner-v2/skills/playwright-cli/SKILL.md`, shipped in the release bundle beside `src`). A CLI worker's preamble
+ * points to it.
+ */
+export function playwrightCliSkillPath(): string {
+  return fileURLToPath(new URL("../skills/playwright-cli/SKILL.md", import.meta.url));
+}
+
 export function isPlaywrightCliBrowser(value: unknown): value is PlaywrightCliBrowser {
   return typeof value === "string" && (PLAYWRIGHT_CLI_BROWSERS as readonly string[]).includes(value);
 }
@@ -385,6 +394,14 @@ export class PlaywrightCliSessions {
 
   isEnabled(runId: string): boolean {
     return this.runs.has(runId);
+  }
+
+  /**
+   * CW8: the browser the run's tool inventory recorded for the Playwright CLI, null when it recorded none, undefined
+   * for a run that does not browse through the Playwright CLI (a run from before VF7b).
+   */
+  browserFor(runId: string): PlaywrightCliBrowser | null | undefined {
+    return this.runs.get(runId)?.browser;
   }
 
   /** The owner's own folder: registry, temp folder (Chrome's profile), Linux XDG config and the daemon's config. */

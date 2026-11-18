@@ -11,10 +11,12 @@
  * - An executable the Runner's lookup does not find (VF2) is `not_run: tool_missing`, never a failure.
  * - A `playwright-cli` check is not run when the CLI ran without a browser (§3.11 case 3).
  * - Each re-run's timeout is the task's remaining validation budget, at least one minute and at most ten. A re-run the
- *   budget cut short is `not_run: validation_budget_spent`, never a failure; its record is kept and linked.
+ *   budget cut short is `not_run: validation_budget_spent`, never a failure, and never support: its criterion gets the
+ *   fix round, and after it is submitted as not verified by the Runner, linked to the timed-out record.
  * - Files a re-run changed are restored right after it, so every check runs on, and the Runner submits, the tree the
  *   CLI left. A pass supports a criterion only when its record proves it ran on that tree.
- * - A re-run whose processes are not proven gone throws a classified error (process-stop-proof.ts), never a result.
+ * - A re-run whose processes are not proven gone (its cleanup not verified, or a broker `tool_timeout`) throws a
+ *   classified error (process-stop-proof.ts), never a result; the CLI loop holds the attempt (`cli_reruns_pending`).
  *
  * Which gaps send the CLI into its one fix round (CWD-3), and which fail the attempt, is `cliCheckDecision`, which the
  * CLI loop (cli-worker-runtime.ts) applies.
@@ -37,6 +39,7 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import { PLAYWRIGHT_CLI_OUTPUT_FOLDER } from "./playwright-cli.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
@@ -228,10 +231,18 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
         } catch (error) {
           throw new CliCheckRerunError(`The re-run of ${base.label} changed the worktree's files and they could not be restored: ${error instanceof Error ? error.message : String(error)}`);
         }
-        for (const path of paths) restored.add(path);
-        rerun.changedFiles = paths;
-        rerun.supports = false;
-        if (rerun.status === "passed") rerun.detail = `passed, but it changed ${paths.length} file(s), so it supports nothing`;
+        // CW8's browser output folder holds what a browser check keeps (a screenshot named in its `outputs`, already an
+        // artifact): restored like any file, but not a change to the CLI's work.
+        const work = paths.filter((path) => !isBrowserOutputPath(path));
+        for (const path of work) restored.add(path);
+        if (work.length > 0) {
+          rerun.changedFiles = work;
+          rerun.supports = false;
+          if (rerun.status === "passed") rerun.detail = `passed, but it changed ${work.length} file(s), so it supports nothing`;
+        } else if (rerun.status === "passed" && rerun.evidenceId && ranOnTreeBesideOutputs(options.evidenceStore, owner.runId, taskId, rerun.evidenceId, before)) {
+          rerun.supports = true;
+          rerun.detail = "exit 0";
+        }
       }
       reruns.push(rerun);
     }
@@ -244,8 +255,26 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
   };
 }
 
-/** The tool error codes that leave a command's processes unproven gone (stableExecutionErrorCode, evidence-tools.ts). */
-const STOP_UNPROVEN_CODES = new Set(["process_cleanup_unverified", "outcome_unknown", "cleanup_blocked"]);
+/** A path in the Playwright CLI output folder (CW8, playwright-cli.ts), as Git names it. */
+function isBrowserOutputPath(path: string): boolean {
+  return path === PLAYWRIGHT_CLI_OUTPUT_FOLDER || path.startsWith(`${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/`);
+}
+
+/**
+ * A re-run whose only change was to the browser output folder: its record proves it began on the tree the CLI left
+ * (the tree changed during the command, from that tree), and the restore proved nothing else changed.
+ */
+function ranOnTreeBesideOutputs(store: EvidenceStore, runId: string, taskId: string, evidenceId: string, treeBefore: string): boolean {
+  const fact = store.getByIds({ runId, taskId, ids: [evidenceId] })[0]?.fact;
+  const identity = fact?.kind === "command" ? fact.workingTreeIdentity : undefined;
+  return identity?.status === "unknown" && identity.reason === "tree_changed_during_command" && identity.capturedTreeId === treeBefore;
+}
+
+/**
+ * The tool error codes that leave a command's processes unproven gone (stableExecutionErrorCode, evidence-tools.ts),
+ * and the broker's `tool_timeout`: the broker stopped waiting for the execution, which may still be running.
+ */
+const STOP_UNPROVEN_CODES = new Set(["process_cleanup_unverified", "outcome_unknown", "cleanup_blocked", "tool_timeout"]);
 
 /** A re-run whose processes are not proven gone: classified as an unproven stop (process-stop-proof.ts). */
 export class CliRerunStopUnprovenError extends Error {
@@ -330,9 +359,9 @@ function budgetRecord(rerun: CliCheckRerun): boolean {
 }
 
 /**
- * Each criterion's link: the first supporting re-run the CLI linked to it; failing that, and when no linked re-run
- * failed, the record of a linked re-run the budget cut short (§3.6), so the budget alone never fails the attempt.
- * Unknown criterion ids are left out.
+ * Each criterion's link: the first supporting re-run the CLI linked to it. Only a supporting pass is linked here; a
+ * re-run the budget cut short is linked only by `cliCheckDecision`, after the fix round, as not verified. Unknown
+ * criterion ids are left out.
  */
 export function cliCheckEvidenceLinks(
   criteria: readonly AcceptanceCriterion[] | undefined,
@@ -343,9 +372,8 @@ export function cliCheckEvidenceLinks(
   if (!criteria) return [];
   const links: CriterionEvidenceLink[] = [];
   for (const criterion of criteria) {
-    const linked = reruns.filter((candidate) => candidate.criterionIds.includes(criterion.id));
-    const rerun = linked.find((candidate) => candidate.supports === true && candidate.evidenceId && candidate.artifactHashes?.length) ??
-      (linked.some((candidate) => candidate.status === "failed") ? undefined : linked.find(budgetRecord));
+    const rerun = reruns.find((candidate) => candidate.criterionIds.includes(criterion.id) && candidate.supports === true &&
+      candidate.evidenceId && candidate.artifactHashes?.length);
     if (rerun) links.push({ criterionId: criterion.id, evidenceId: rerun.evidenceId!, artifactHashes: [...rerun.artifactHashes!], taskId, attempt });
   }
   return links;
@@ -353,18 +381,18 @@ export function cliCheckEvidenceLinks(
 
 export interface CliCheckGaps {
   /**
-   * Criteria with no supporting re-run and no budget-cut record; with no criteria, the task itself. `failing`: a
-   * failed re-run is linked to it.
+   * Criteria with no linked supporting re-run; with no criteria, the task itself. `failing`: a failed re-run is linked
+   * to it. `budgetCut`: the record of a linked re-run the validation budget cut short, when no linked re-run failed.
    */
-  unsupported: { id: string; text: string; failing: boolean }[];
+  unsupported: { id: string; text: string; failing: boolean; budgetCut?: CliCheckRerun }[];
   /** Every re-run that failed, linked to a criterion or not. */
   failing: CliCheckRerun[];
 }
 
 /**
  * §3.6: what keeps a CLI's `done` from being submitted: a criterion with no linked supporting re-run, or any re-run
- * that failed. A check that was not run (a missing tool, a shell line) is never a failure; it leaves its criteria
- * unsupported unless another re-run supports them. A criterion whose linked re-run the budget cut short is no gap.
+ * that failed. A check that was not run (a missing tool, a shell line, a re-run the budget cut short) is never a
+ * failure; it leaves its criteria unsupported unless another re-run supports them.
  */
 export function cliCheckGaps(
   criteria: readonly AcceptanceCriterion[] | undefined,
@@ -372,17 +400,21 @@ export function cliCheckGaps(
 ): CliCheckGaps {
   const reruns = rerun.reruns ?? [];
   const failing = reruns.filter((candidate) => candidate.status === "failed");
+  const budgetCut = (linked: readonly CliCheckRerun[]) =>
+    linked.some((candidate) => candidate.status === "failed") ? {} : (() => {
+      const record = linked.find(budgetRecord);
+      return record ? { budgetCut: record } : {};
+    })();
   if (!criteria) {
-    const covered = reruns.some((candidate) => candidate.supports === true) || (failing.length === 0 && reruns.some(budgetRecord));
-    return { unsupported: covered ? [] : [{ id: "task", text: "at least one check of the task's work", failing: failing.length > 0 }], failing };
+    if (reruns.some((candidate) => candidate.supports === true)) return { unsupported: [], failing };
+    return { unsupported: [{ id: "task", text: "at least one check of the task's work", failing: failing.length > 0, ...budgetCut(reruns) }], failing };
   }
   const linked = new Set(rerun.criterionEvidenceLinks.map((link) => link.criterionId));
   return {
-    unsupported: criteria.filter((criterion) => !linked.has(criterion.id)).map((criterion) => ({
-      id: criterion.id,
-      text: criterion.text,
-      failing: failing.some((candidate) => candidate.criterionIds.includes(criterion.id)),
-    })),
+    unsupported: criteria.filter((criterion) => !linked.has(criterion.id)).map((criterion) => {
+      const named = reruns.filter((candidate) => candidate.criterionIds.includes(criterion.id));
+      return { id: criterion.id, text: criterion.text, failing: named.some((candidate) => candidate.status === "failed"), ...budgetCut(named) };
+    }),
     failing,
   };
 }
@@ -392,26 +424,44 @@ export function hasCliCheckGaps(gaps: CliCheckGaps): boolean {
 }
 
 export type CliCheckDecision =
-  | { type: "submit"; knownDefects: CliCheckRerun[] }
+  | {
+    type: "submit";
+    /** The criteria's links: the supporting re-runs, plus a not-verified criterion's budget-cut record. */
+    criterionEvidenceLinks: CriterionEvidenceLink[];
+    /** Re-runs that still fail after the fix round while no criterion depends on them alone. */
+    knownDefects: CliCheckRerun[];
+    /** Criteria (or the task) the Runner could not verify: their re-runs the budget cut short, even after the fix round. */
+    notVerified: { id: string; text: string; rerun: CliCheckRerun }[];
+  }
   | { type: "fix_round"; gaps: CliCheckGaps }
   | { type: "fail"; reason: string };
 
 /**
- * §3.6 and CWD-3: a gap gives the CLI one fix round. After it, a criterion without support fails the attempt
- * (`cli_checks_failing` when a failed re-run is linked to it, else `cli_checks_unsupported`). A re-run that still fails
- * while every criterion is supported is submitted as a known defect, never a failed attempt.
+ * §3.6 and CWD-3: any gap gives the CLI one fix round, a criterion whose re-run the budget cut short included. After
+ * it, a criterion without support fails the attempt (`cli_checks_failing` when a failed re-run is linked to it, else
+ * `cli_checks_unsupported`), unless its linked re-run was cut short by the budget: the work is then submitted with the
+ * criterion named as not verified by the Runner (its link is the timed-out record, never a pass), so the budget alone
+ * never fails the attempt. A re-run that still fails while no criterion depends on it is a known defect.
  */
 export function cliCheckDecision(
   name: string,
   criteria: readonly AcceptanceCriterion[] | undefined,
   rerun: { criterionEvidenceLinks: readonly CriterionEvidenceLink[]; reruns?: readonly CliCheckRerun[] },
   fixRoundUsed: boolean,
+  link: { taskId: string; attempt: number },
 ): CliCheckDecision {
   const gaps = cliCheckGaps(criteria, rerun);
-  if (!hasCliCheckGaps(gaps)) return { type: "submit", knownDefects: [] };
+  const links = [...rerun.criterionEvidenceLinks];
+  if (!hasCliCheckGaps(gaps)) return { type: "submit", criterionEvidenceLinks: links, knownDefects: [], notVerified: [] };
   if (!fixRoundUsed) return { type: "fix_round", gaps };
-  if (gaps.unsupported.length === 0) return { type: "submit", knownDefects: gaps.failing };
-  return { type: "fail", reason: cliCheckGapFailure(name, gaps) };
+  const blocking = gaps.unsupported.filter((criterion) => !criterion.budgetCut);
+  if (blocking.length > 0) return { type: "fail", reason: cliCheckGapFailure(name, { unsupported: blocking, failing: gaps.failing }) };
+  const notVerified = gaps.unsupported.map((criterion) => ({ id: criterion.id, text: criterion.text, rerun: criterion.budgetCut! }));
+  for (const entry of notVerified) {
+    if (!criteria) continue;
+    links.push({ criterionId: entry.id, evidenceId: entry.rerun.evidenceId!, artifactHashes: [...entry.rerun.artifactHashes!], taskId: link.taskId, attempt: link.attempt });
+  }
+  return { type: "submit", criterionEvidenceLinks: links, knownDefects: gaps.failing, notVerified };
 }
 
 /** The attempt's failure when a criterion is still unsupported after the fix round (§3.6). */
@@ -432,7 +482,7 @@ export function cliCheckGapFailure(name: string, gaps: CliCheckGaps): string {
  * The fix round's prompt (§3.5 step 1, §3.6): the re-run results and the missing criteria, for the CLI's resumed
  * session. The CLI loop wraps it in the worker rules (buildCliWorkerPrompt).
  */
-export function cliFixRoundPrompt(input: { name: string; gaps: CliCheckGaps; reruns: readonly CliCheckRerun[]; restoredPaths: readonly string[] }): string {
+export function cliFixRoundPrompt(input: { name: string; gaps: CliCheckGaps; reruns: readonly CliCheckRerun[] }): string {
   const lines = [
     "## Fix round: the Runner's re-runs of your checks",
     `AIBoard re-ran the checks you reported, in this worktree as you left it. Only these re-runs count as evidence. Your work is not submitted yet: this is your one fix round.`,
@@ -457,6 +507,9 @@ export function cliFixRoundPrompt(input: { name: string; gaps: CliCheckGaps; rer
   if (input.reruns.some((rerun) => rerun.notRunReason === "shell_line")) {
     lines.push("", "Some checks were shell lines (&&, pipes, redirection, or a shell given a command string) and were not run. Report each check as one program and its arguments.");
   }
+  if (input.reruns.some((rerun) => rerun.notRunReason === "validation_budget_spent")) {
+    lines.push("", "A check the task's validation budget cut short supports nothing: report a narrower check that finishes quickly (a single test file, not the whole suite).");
+  }
   if (input.reruns.some((rerun) => rerun.notRunReason === "tool_missing")) {
     lines.push("", "A check whose program is not installed on this PC was not run. That is not a failure, but it supports nothing: support its criteria with a check this PC can run.");
   }
@@ -473,17 +526,26 @@ function indent(text: string): string {
 }
 
 const SHELL_OPERATOR = /^(?:&&|\|\||\||;|&|>|>>|<|<<|<<<|[12]>|[12]>>|2>&1|1>&2|&>|&>>)$/;
-const SHELL_PROGRAMS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "cmd", "powershell", "pwsh"]);
-/** PowerShell's parameters that take a value; PowerShell accepts any prefix of a name (`powershell -?`). */
+/** Shells whose `-c` (in any flag group) runs a command string. */
+const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"]);
+/** Programs that always run what they are given through a shell. */
+const SHELL_RUNNERS = new Set(["wsl"]);
+/** Programs that run their arguments as another program: the check is judged by that program. */
+const WRAPPERS = new Set(["env", "busybox"]);
+/**
+ * PowerShell's parameters that take a value, by the names and prefixes PowerShell accepts without ambiguity
+ * (`powershell -?`, `pwsh -?`). An ambiguous short prefix (`-i` is Interactive in pwsh) is not listed, so its next
+ * argument stays an argument: skipping a value wrongly could hide a command string.
+ */
 const POWERSHELL_VALUE_PARAMETERS = ["executionpolicy", "ep", "ex", "version", "psconsolefile", "windowstyle", "outputformat", "of",
-  "inputformat", "if", "configurationname", "settingsfile", "workingdirectory", "wd", "custompipename"];
+  "inputformat", "if", "configurationname", "configurationfile", "settingsfile", "workingdirectory", "wd", "custompipename"];
 
 /**
  * Why a reported check is a shell line, which the Runner does not run (§3.6): its executable holds a command line, an
- * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string. Undefined when the
- * check is one program and its arguments.
+ * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string, also through
+ * `env`, `busybox` or `wsl`. Undefined when the check is one program and its arguments.
  */
-export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "args">): string | undefined {
+export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "args">, depth = 0): string | undefined {
   const executable = check.executable.trim();
   // An absolute path may hold spaces and parentheses (C:\Program Files (x86)\…); a bare name holds neither.
   if (isAbsolute(executable) ? /[|;<>`]|&&/.test(executable) : /\s/.test(executable) || /[&|;<>`$()]/.test(executable)) {
@@ -494,26 +556,40 @@ export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "
   const operator = check.args.find((arg) => SHELL_OPERATOR.test(arg.trim()) || /^[12]>/.test(arg.trim()));
   if (operator !== undefined) return `the argument ${JSON.stringify(operator.slice(0, 20))} is a shell operator`;
   const program = programName(executable);
-  if (!SHELL_PROGRAMS.has(program)) return undefined;
   const given = `${program} is given a command string`;
+  if (SHELL_RUNNERS.has(program)) return `${program} runs its arguments through a shell`;
+  if (WRAPPERS.has(program)) {
+    // env's options and NAME=value assignments, then the program it runs; `env -S` splits a string itself.
+    const args = check.args.map((arg) => arg.trim());
+    if (program === "env" && args.some((arg) => /^-[a-zA-Z]*S|^--split-string/.test(arg))) return "env splits a command string";
+    const inner = args.findIndex((arg) => !arg.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
+    if (inner < 0 || depth >= 4) return undefined;
+    return cliCheckShellLine({ executable: args[inner]!, args: args.slice(inner + 1) }, depth + 1);
+  }
   if (program === "cmd") return check.args.some((arg) => /^\/[ck]/i.test(arg.trim())) ? given : undefined;
   if (program === "powershell" || program === "pwsh") return powershellCommand(program, check.args) ? given : undefined;
-  return check.args.some((arg) => /^-[a-z]*c[a-z]*$/i.test(arg.trim()) || /^--command(?:=|$)/i.test(arg.trim())) ? given : undefined;
+  if (POSIX_SHELLS.has(program)) {
+    return check.args.some((arg) => /^-[a-z]*c[a-z]*$/i.test(arg.trim()) || /^--command(?:=|$)/i.test(arg.trim())) ? given : undefined;
+  }
+  return undefined;
 }
 
 /**
- * PowerShell runs a command string under `-Command`, `-EncodedCommand`, `-CommandWithArgs` or any prefix of them, and
- * Windows PowerShell also under its first positional argument (pwsh's is `-File`, a script file).
+ * PowerShell runs a command string under `-Command`, `-EncodedCommand`, `-CommandWithArgs` or any prefix of them,
+ * wherever it appears, and Windows PowerShell also under its first positional argument (pwsh's is `-File`, a script).
  */
 function powershellCommand(program: "powershell" | "pwsh", args: readonly string[]): boolean {
+  const flags = args.map((arg) => /^(?:--?|\/)([a-z]+)(:.*)?$/i.exec(arg.trim()));
+  const isCommand = (name: string) => "command".startsWith(name) || "commandwithargs".startsWith(name) || name === "cwa" ||
+    "encodedcommand".startsWith(name) || name === "ec";
+  if (flags.some((flag) => flag && isCommand(flag[1]!.toLowerCase()))) return true;
+  if (program !== "powershell") return false;
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!.trim();
-    const flag = /^(?:--?|\/)([a-z]+)(:.*)?$/i.exec(arg);
-    if (!flag) return program === "powershell";
+    const flag = flags[index];
+    if (!flag) return true;
     const name = flag[1]!.toLowerCase();
-    if ("command".startsWith(name) || "commandwithargs".startsWith(name) || name === "cwa" || "encodedcommand".startsWith(name) || name === "ec") return true;
     if ("file".startsWith(name)) return false;
-    if (flag[2] === undefined && POWERSHELL_VALUE_PARAMETERS.some((parameter) => parameter.startsWith(name))) index += 1;
+    if (flag[2] === undefined && POWERSHELL_VALUE_PARAMETERS.some((parameter) => parameter === name || (name.length >= 3 && parameter.startsWith(name)))) index += 1;
   }
   return false;
 }

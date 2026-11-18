@@ -231,7 +231,8 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
     const timeout = execution.requests[1]!.timeoutMs;
     assert.ok(timeout <= 120_000 && timeout > CLI_RERUN_MIN_TIMEOUT_MS, String(timeout));
     // The budget is spent (the reviewer's P4): each re-run still gets a minute, so it leaves a record. One that times out
-    // there is not run, never a failure; its record is linked, so the budget alone never fails the attempt.
+    // there is not run, never a failure, and never support: its criterion gets the fix round, and after it is submitted
+    // as not verified, linked to the timed-out record, so the budget alone never fails the attempt.
     const spent = await rerun(r, rerunner, [
       check("node", ["slow.js"], { criterionIds: ["value"] }),
       check("node", ["--test"], { criterionIds: ["docs"] }),
@@ -240,11 +241,17 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
     assert.deepEqual(spent.reruns?.map((entry) => [entry.status, entry.notRunReason ?? ""]), [["not_run", "validation_budget_spent"], ["passed", ""]]);
     assert.match(spent.reruns?.[0]?.detail ?? "", /validation budget left it 60 s.*not a failure/);
     assert.ok(spent.reruns?.[0]?.evidenceId);
-    assert.deepEqual(spent.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]),
-      [["value", spent.reruns![0]!.evidenceId], ["docs", spent.reruns![1]!.evidenceId]]);
+    assert.deepEqual(spent.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]), [["docs", spent.reruns![1]!.evidenceId]]);
     const gaps = cliCheckGaps(CRITERIA, spent);
-    assert.equal(gaps.failing.length + gaps.unsupported.length, 0);
-    assert.deepEqual(cliCheckDecision("Claude Code", CRITERIA, spent, false), { type: "submit", knownDefects: [] });
+    assert.deepEqual(gaps.unsupported.map((criterion) => [criterion.id, criterion.failing, criterion.budgetCut?.evidenceId]), [["value", false, spent.reruns![0]!.evidenceId]]);
+    assert.equal(cliCheckDecision("Claude Code", CRITERIA, spent, false, { taskId: "task_e", attempt: 1 }).type, "fix_round");
+    const after = cliCheckDecision("Claude Code", CRITERIA, spent, true, { taskId: "task_e", attempt: 1 });
+    assert.equal(after.type, "submit");
+    if (after.type === "submit") {
+      assert.deepEqual(after.notVerified.map((entry) => entry.id), ["value"]);
+      assert.deepEqual(after.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]),
+        [["docs", spent.reruns![1]!.evidenceId], ["value", spent.reruns![0]!.evidenceId]]);
+    }
     assert.ok(spent.notRun.some((entry) => /validation budget/.test(entry.why)), "the Architect is told");
   });
 
@@ -282,6 +289,10 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["powershell", ["-enc", "ZQBjAGgAbwA="]], ["powershell.exe", ["-EncodedCommand", "ZQBjAGgAbwA="]], ["pwsh", ["-ec", "ZQBjAGgAbwA="]],
       // Windows PowerShell's first positional argument is a command string.
       ["powershell", ["npm test"]], ["powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "npm test"]],
+      // The re-check's misses: -i is Interactive (no value), a value parameter before -c, wrappers and other shells.
+      ["pwsh", ["-i", "-c", "x"]], ["pwsh", ["-ConfigurationFile", "f.pssc", "-c", "x"]], ["csh", ["-c", "x"]], ["tcsh", ["-fc", "x"]],
+      ["env", ["bash", "-c", "x"]], ["env", ["-i", "FOO=1", "sh", "-c", "x"]], ["env", ["-S", "npm test"]], ["/usr/bin/env", ["zsh", "-c", "x"]],
+      ["busybox", ["sh", "-c", "x"]], ["wsl", ["npm", "test"]], ["wsl.exe", ["-e", "npm", "test"]],
     ] as Array<[string, string[]]>) {
       assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
     }
@@ -290,7 +301,7 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["bash", ["scripts/check.sh"]], ["npx", ["semver", "-r", ">=1.2.3", "1.2.4"]], ["npm", [">out.txt"]], ["grep", ["|tee", "file"]],
       ["pwsh", ["-NoProfile", "-File", "check.ps1"]], ["powershell", ["-ExecutionPolicy", "Bypass", "-File", "check.ps1"]],
       // pwsh's first positional argument is a script file, not a command string.
-      ["pwsh", ["check.ps1"]],
+      ["pwsh", ["check.ps1"]], ["env", ["FOO=1", "node", "--test"]], ["busybox", ["ls", "-la"]],
       ["npx", ["tsx", "--test", "test/a.test.ts"]], ["git", ["diff", "--stat"]],
       [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
     ] as Array<[string, string[]]>) {
@@ -401,7 +412,7 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
     assert.deepEqual(gaps.unsupported.map((criterion) => [criterion.id, criterion.failing]), [["value", true], ["docs", false]]);
     assert.equal(readFileSync(join(r.workspace.path, "value.txt"), "utf8"), "three\n");
     assert.equal(await r.tree(), tree);
-    const prompt = cliFixRoundPrompt({ name: "Claude Code", gaps, reruns: out.reruns ?? [], restoredPaths: out.restoredPaths ?? [] });
+    const prompt = cliFixRoundPrompt({ name: "Claude Code", gaps, reruns: out.reruns ?? [] });
     assert.match(prompt, /It changed files, which the Runner put back as you left them: value\.txt/);
     assert.match(prompt, /A check that changes files \(a formatter, a code generator, an install\) supports nothing/);
   });
@@ -442,23 +453,70 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ...(status === "passed" ? { supports: true, evidenceId: `ev-${criterionIds.join("-")}`, artifactHashes: [hash] } : {}), ...extra,
     });
     const decide = (reruns: CliCheckRerun[], fixRoundUsed: boolean) =>
-      cliCheckDecision("Claude Code", CRITERIA, { criterionEvidenceLinks: cliCheckEvidenceLinks(CRITERIA, reruns, "task_e", 1), reruns }, fixRoundUsed);
+      cliCheckDecision("Claude Code", CRITERIA, { criterionEvidenceLinks: cliCheckEvidenceLinks(CRITERIA, reruns, "task_e", 1), reruns }, fixRoundUsed, { taskId: "task_e", attempt: 1 });
     const value = make("passed", ["value"]), docs = make("passed", ["docs"]);
-    assert.deepEqual(decide([value, docs], false), { type: "submit", knownDefects: [] });
+    const links = (...reruns: CliCheckRerun[]) => cliCheckEvidenceLinks(CRITERIA, reruns, "task_e", 1);
+    assert.deepEqual(decide([value, docs], false), { type: "submit", criterionEvidenceLinks: links(value, docs), knownDefects: [], notVerified: [] });
     // The coordinator's call: a failed re-run linked to no criterion, or to a supported one, gets the fix round; after
     // it, with every criterion supported, the work is submitted with the failure as a known defect.
     for (const failing of [make("failed", []), make("failed", ["value"])]) {
       assert.equal(decide([value, failing, docs], false).type, "fix_round");
-      assert.deepEqual(decide([value, failing, docs], true), { type: "submit", knownDefects: [failing] });
+      assert.deepEqual(decide([value, failing, docs], true), { type: "submit", criterionEvidenceLinks: links(value, docs), knownDefects: [failing], notVerified: [] });
     }
     const failedValue = decide([make("failed", ["value"]), docs], true);
     assert.equal(failedValue.type, "fail");
     assert.match(failedValue.type === "fail" ? failedValue.reason : "", new RegExp(`^${CLI_CHECKS_FAILING}: .*value: value.txt holds two.*exit 1`));
     const unsupported = decide([docs], true);
     assert.match(unsupported.type === "fail" ? unsupported.reason : "", new RegExp(`^${CLI_CHECKS_UNSUPPORTED}: .*value`));
-    // A criterion whose linked re-run the budget cut short is no gap; with a failed re-run linked to it, it is.
+    // The re-check's A: a criterion whose linked re-run the budget cut short is a gap until the fix round, and after it
+    // is submitted as not verified, linked to the timed-out record; with a failed re-run linked to it, it fails.
     const budget = make("not_run", ["value"], { notRunReason: "validation_budget_spent", evidenceId: "ev-budget", artifactHashes: [hash] });
-    assert.deepEqual(decide([budget, docs], false), { type: "submit", knownDefects: [] });
+    assert.equal(decide([budget, docs], false).type, "fix_round");
+    const cut = decide([budget, docs], true);
+    assert.equal(cut.type, "submit");
+    if (cut.type === "submit") {
+      assert.deepEqual(cut.notVerified.map((entry) => [entry.id, entry.rerun.evidenceId]), [["value", "ev-budget"]]);
+      assert.deepEqual(cut.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]), [["docs", "ev-docs"], ["value", "ev-budget"]]);
+    }
     assert.equal(decide([budget, make("failed", ["value"]), docs], true).type, "fail");
+    // With no criteria, a budget-cut re-run alone is the task's gap until the fix round, then not verified.
+    const task = (fixRoundUsed: boolean) => cliCheckDecision("Claude Code", undefined, { criterionEvidenceLinks: [], reruns: [{ ...budget, criterionIds: [] }] }, fixRoundUsed, { taskId: "task_e", attempt: 1 });
+    assert.equal(task(false).type, "fix_round");
+    assert.deepEqual((task(true) as { notVerified?: Array<{ id: string }> }).notVerified?.map((entry) => entry.id), ["task"]);
+  });
+
+  test("a pass whose record cannot prove the tree it ran on supports nothing", async (t) => {
+    // The re-check's item 1: without a working-tree capture for the call, the record's identity is unknown.
+    const r = await repo(t);
+    const execution = scriptedExecution([{ exitCode: 0 }]);
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution, { git: asyncFixtureGitContext("full", execution) })),
+      [check("node", ["--test"], { criterionIds: ["value"] })]);
+    const fact = r.evidence.list({ runId: OWNER.runId, taskId: "task_e" })[0]!.fact as CommandEvidenceFact;
+    assert.equal(fact.workingTreeIdentity?.status, "unknown");
+    assert.deepEqual(out.reruns?.map((entry) => [entry.status, entry.supports]), [["passed", false]]);
+    assert.match(out.reruns?.[0]?.detail ?? "", /could not prove it ran on the files the CLI left/);
+    assert.deepEqual(out.criterionEvidenceLinks, []);
+    assert.deepEqual(cliCheckGaps(CRITERIA, out).unsupported.map((criterion) => criterion.id), ["value", "docs"]);
+  });
+
+  test("a hang the CLI introduced, cut short by the budget's default, gets the fix round and is never a pass", async (t) => {
+    // The re-check's probe: the default budget (600 s, the cap), 2 s of it already recorded, then a test that hangs.
+    const r = await repo(t);
+    recordValidationEvidenceSegment(r.budget, {
+      runId: OWNER.runId, taskId: "task_e", sessionId: "earlier", callId: "call_1",
+      startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:02.000Z",
+    });
+    const execution = scriptedExecution([{ timedOut: true }, { exitCode: 0 }]);
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution, { budgetLedger: r.budget })), [
+      check("node", ["--test", "hangs.test.js"], { criterionIds: ["value"] }),
+      check("node", ["--test", "docs.test.js"], { criterionIds: ["docs"] }),
+    ]);
+    assert.ok(execution.requests[0]!.timeoutMs < CLI_RERUN_TIMEOUT_CAP_MS);
+    assert.equal(out.reruns?.[0]?.notRunReason, "validation_budget_spent");
+    assert.deepEqual(out.criterionEvidenceLinks.map((link) => link.criterionId), ["docs"], "a timeout is never a criterion's support");
+    const first = cliCheckDecision("Claude Code", CRITERIA, out, false, { taskId: "task_e", attempt: 1 });
+    assert.equal(first.type, "fix_round");
+    assert.match(first.type === "fix_round" ? cliFixRoundPrompt({ name: "Claude Code", gaps: first.gaps, reruns: out.reruns ?? [] }) : "",
+      /cut short supports nothing: report a narrower check/);
   });
 });

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { createWindowsJobProcessChannelProvider, WINDOWS_JOB_DRAIN_REATTEST_MAX_MS, type WindowsJobChannelAuthority } from "../src/windows-job-process-channel.js";
+import { WindowsJobHostError, WindowsJobInputRefusedError, WindowsJobInputUnacknowledgedError } from "../src/windows-job-process-host.js";
+import { InteractiveInputRefusedError } from "../src/interactive-process-channel.js";
 import type { BackpressuredOutputSettlement } from "../src/interactive-process-channel.js";
 import type { ProcessBackendBinding } from "../src/process-backend.js";
 
@@ -196,13 +198,48 @@ test("a Job terminal wait that drains without re-attesting still refuses a stale
   } finally { await f.channel.detach(); }
 });
 
+test("a Job channel write hands the host its whole-write bound and the session's stop signal", async () => {
+  const f = await fixture();
+  try {
+    const payload = Buffer.from("prompt");
+    const stopping = new AbortController();
+    await f.channel.write({ sequence: 1, byteLength: payload.byteLength, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 45_000, signal: stopping.signal }, payload);
+    assert.equal(f.state.writes.length, 1);
+    assert.equal(f.state.writes[0]!.timeoutMs, 45_000, "the host waits for the drain up to the caller's bound, not its own control deadline");
+    assert.equal(f.state.writes[0]!.signal, stopping.signal);
+  } finally { await f.channel.detach(); }
+});
+
+test("a Job write the host admitted but could not acknowledge spends its sequence; one refused before admission does not", async () => {
+  const f = await fixture();
+  const send = async (sequence: number, text: string) => {
+    const payload = Buffer.from(text);
+    return await f.channel.write({ sequence, byteLength: payload.byteLength, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 1000 }, payload);
+  };
+  try {
+    f.state.writeError = new WindowsJobHostError("process_control_unavailable", "Windows Job writer fence is stale.");
+    await assert.rejects(send(1, "refused"), /fence is stale/);
+    f.state.writeError = new WindowsJobInputUnacknowledgedError("Windows Job input was not drained by the reader within 1000 ms.");
+    await assert.rejects(send(1, "admitted"), /not drained/);
+    f.state.writeError = undefined;
+    // The refused write left sequence 1 unspent, so the admitted one took it; the next write takes 2, as the host expects.
+    await assert.rejects(send(1, "again"), /metadata is invalid/);
+    // A certain refusal before admission (the supervisor's 409) is typed and leaves sequence 2 unspent.
+    f.state.writeError = new WindowsJobInputRefusedError("Windows Job input was refused before admission: input_pending");
+    await assert.rejects(send(2, "while-draining"), (error: unknown) => error instanceof InteractiveInputRefusedError);
+    f.state.writeError = undefined;
+    assert.deepEqual(await send(2, "next"), { acknowledged: true, sequence: 2 });
+    assert.deepEqual(f.state.writes.map((write) => write.sequence), [1, 1, 2, 2]);
+  } finally { await f.channel.detach(); }
+});
+
 async function settle(channel: unknown, deadlineAt: number): Promise<BackpressuredOutputSettlement> {
   const candidate = channel as { settleBackpressuredOutput?: (deadlineAt: number) => Promise<BackpressuredOutputSettlement> };
   return candidate.settleBackpressuredOutput ? await candidate.settleBackpressuredOutput(deadlineAt) : { status: "blocked", reason: "outcome_unknown" };
 }
 
 async function fixture() {
-  const state = { now: 1000, bytes: Buffer.alloc(0), acknowledged: 0, pipesEnded: false, stale: false, reads: 0, acks: 0,
+  const state = { now: 1000, bytes: Buffer.alloc(0), acknowledged: 0, writes: [] as Array<{ sequence: number; timeoutMs?: number; signal?: AbortSignal }>, writeError: undefined as Error | undefined, pipesEnded: false, stale: false, reads: 0, acks: 0,
     beforeRead: undefined as (() => Promise<void>) | undefined, beforeControl: undefined as (() => Promise<void>) | undefined,
     beforeAck: undefined as (() => Promise<void>) | undefined, onReattest: undefined as (() => "live" | "exited") | undefined };
   const owner = { runId: "job-run", sessionId: "job-session" }; const fence = { ownerId: "job-owner", fencingToken: 1 };
@@ -214,7 +251,7 @@ async function fixture() {
     claimOwnedFence: async (_id, requestedOwner, requestedFence) => { assert.deepEqual(requestedOwner, owner); assert.deepEqual(requestedFence, fence); exact(); },
     attachOwnedChannel: async () => ({ nextSequence: 1, inputClosed: false, outputOffsets: { stdout: state.acknowledged, stderr: 0 }, outputSequences: { stdout: state.acks, stderr: 0 },
       snapshot: { processId: "job", pid: 42, status: "running", exitCode: null, signal: null, startedAt: "2026-09-05T00:00:00.000Z", updatedAt: "2026-09-05T00:00:00.000Z", stdout: "", stderr: "", ownershipReleased: false } }),
-    writeOwnedInput: async (_id, _owner, _fence, sequence) => ({ acknowledged: true, sequence }), closeOwnedInput: async () => undefined,
+    writeOwnedInput: async (_id, _owner, _fence, sequence, _payload, timeoutMs, signal) => { state.writes.push({ sequence, timeoutMs, signal }); if (state.writeError) throw state.writeError; return { acknowledged: true, sequence }; }, closeOwnedInput: async () => undefined,
     readOwnedOutput: async (_id, requestedOwner, offsets, requestedFence) => { state.reads++; await state.beforeRead?.(); exact(); assert.deepEqual(requestedOwner, owner); assert.deepEqual(requestedFence, fence);
       return { stdout: state.bytes.subarray(offsets.stdout), stderr: new Uint8Array(), next: { stdout: state.bytes.length, stderr: 0 } }; },
     acknowledgeOwnedOutput: async (_id, requestedOwner, requestedFence, _stream, offset) => { await state.beforeAck?.(); exact(); assert.deepEqual(requestedOwner, owner); assert.deepEqual(requestedFence, fence); state.acks++; state.acknowledged = offset; },

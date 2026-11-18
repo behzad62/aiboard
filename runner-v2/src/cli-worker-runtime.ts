@@ -62,6 +62,7 @@ import {
   CLI_FIX_ROUNDS,
   cliCheckDecision,
   cliFixRoundPrompt,
+  type CliCheckDecision,
   type CliCheckRerun,
 } from "./cli-worker-evidence.js";
 import type { CliWorkerResultV1 } from "./cli-worker-result.js";
@@ -108,8 +109,11 @@ export interface CliProcessOutput {
 
 export interface CliProcessHandle {
   readonly processId: string;
-  /** Writes `text` to stdin; with `closeInput`, stdin is closed after it. */
-  write(text: string, closeInput: boolean): Promise<void>;
+  /**
+   * Writes `text` to stdin; with `closeInput`, stdin is closed after it. `signal` ends the wait for the CLI to read it
+   * (the attempt's cancellation or deadline): the write then fails with an unknown outcome and is never resent.
+   */
+  write(text: string, closeInput: boolean, signal?: AbortSignal): Promise<void>;
   /** Waits up to `waitMs` for new output. */
   read(waitMs: number): Promise<CliProcessOutput>;
 }
@@ -148,9 +152,12 @@ export interface CliWorkerHostFacts {
   jobContainment?: ProcessHostSemanticFact;
 }
 
-/** CW8: the owner's Playwright CLI session, started before the CLI. CW5 records what it reports. */
+/**
+ * CW8: the owner's Playwright CLI session (§3.10), started before the CLI in the task's worktree, and again for the
+ * Runner's re-runs of the CLI's browser checks; production is cli-worker-browser.ts. It stops with the owner.
+ */
 export interface CliBrowserSessions {
-  start?(owner: CliWorkerOwner, signal?: AbortSignal): Promise<
+  start?(owner: CliWorkerOwner, input: { workspacePath: string; signal?: AbortSignal }): Promise<
     | { status: "started"; note: string }
     | { status: "none"; note?: string }
     | { status: "start_failed"; reason: string }
@@ -197,6 +204,9 @@ export type CliCheckRerunner = (input: {
  * home commands refuse any depth of 1 or more). Composed into the run binding's per-owner environment
  * (child-environment.ts).
  */
+/** CW8: set to "1" for every process of a CLI worker's owner (playwright-cli-guard.mjs startInstructionFor). */
+export const CLI_WORKER_MARKER_ENV = "AIBOARD_CLI_WORKER";
+
 export class CliWorkerOwners {
   private readonly owners = new Set<string>();
 
@@ -204,9 +214,11 @@ export class CliWorkerOwners {
   release(owner: Pick<CliWorkerOwner, "runId" | "sessionId">): void { this.owners.delete(ownerKey(owner)); }
   has(owner: Pick<CliWorkerOwner, "runId" | "sessionId">): boolean { return this.owners.has(ownerKey(owner)); }
 
+  // CW8: AIBOARD_CLI_WORKER marks the owner's processes for playwright-cli-guard.mjs, whose "start a session with
+  // process.start" instruction a CLI cannot follow; it is a plain marker, never a secret or an MCP setting.
   readonly environmentFor = (owner: { readonly runId: string; readonly sessionId: string }): RunnerProcessEnvironment | undefined =>
     this.owners.has(ownerKey(owner))
-      ? Object.freeze({ values: Object.freeze({}), pathPrepend: Object.freeze([]), mcpDepth: LOCAL_MCP_DEPTH_LIMIT })
+      ? Object.freeze({ values: Object.freeze({ [CLI_WORKER_MARKER_ENV]: "1" }), pathPrepend: Object.freeze([]), mcpDepth: LOCAL_MCP_DEPTH_LIMIT })
       : undefined;
 }
 
@@ -284,6 +296,11 @@ export const PROCESS_LAUNCH_UNPROVEN_PREFIX = "process_launch_unproven:";
 export const PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX = "process_launch_unproven_repeated:";
 /** §3.11 case 2: the kept outcome of a CLI run whose result waits for a proven stop. */
 export const CLI_COLLECT_PENDING_PREFIX = "cli_collect_pending:";
+/**
+ * §3.6: the kept outcome of an attempt whose re-runs left a stop unproven (a re-run's own cleanup, a broker timeout, the
+ * re-run browser session): the Resume re-enters the attempt, which restores the CLI's tree and re-runs its checks.
+ */
+export const CLI_RERUNS_PENDING_PREFIX = "cli_reruns_pending:";
 /** The worktree changed between the unproven stop and the collect: nothing is collected. */
 export const CLI_COLLECT_WORKTREE_CHANGED = "cli_collect_worktree_changed";
 /** The prompt did not reach the CLI's stdin (a write refused or past its limit); the stop was proven. */
@@ -294,6 +311,14 @@ class CliStdinUndeliveredError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CliStdinUndeliveredError";
+  }
+}
+
+/** The attempt was cancelled, or reached its deadline, while the prompt was still being delivered. */
+class CliPromptDeliveryStoppedError extends Error {
+  constructor(readonly stoppedBy: "cancelled" | "deadline", message: string) {
+    super(message);
+    this.name = "CliPromptDeliveryStoppedError";
   }
 }
 
@@ -466,6 +491,17 @@ async function runCliWorkerRun(deps: CliWorkerRuntimeDeps, input: CliWorkerAttem
   let resultDigest: string;
   try {
     const browser = await startBrowser(deps.browser, input);
+    // CW8: before the CLI starts, a session start that failed (case 3) leaves nothing running, and a cancel during the
+    // start (which the real start reports as a failed start) stops the session and launches nothing; either stop is
+    // proven like any other (§3.11 case 2 when it is not).
+    const cancelled = input.signal?.aborted === true;
+    if (browser.record?.status === "start_failed" || (browser.record && cancelled)) {
+      const settled = await settleBeforeLaunch(deps, input, cancelled ? { type: "paused", reason: "worker_cancelled" } : undefined);
+      if (settled) {
+        keepOwner = settled.type === "stop_unproven";
+        return settled;
+      }
+    }
     const prompt = buildCliWorkerPrompt({ taskContext, ...(browser.note ? { browserNote: browser.note } : {}) });
     let handle: CliProcessHandle;
     try {
@@ -477,8 +513,13 @@ async function runCliWorkerRun(deps: CliWorkerRuntimeDeps, input: CliWorkerAttem
         keepOwner = isProcessStopUnprovenError(error);
         throw error;
       }
-      // The managed start proved its own cleanup: nothing of this launch runs.
-      return launchUnproven(deps.schedulerStore, input.runId, code);
+      // The managed start proved its own cleanup: nothing of this launch runs. The browser session started for it stops
+      // with the owner first (CW8).
+      const refused = launchUnproven(deps.schedulerStore, input.runId, code);
+      if (browser.record?.status !== "started" || refused.type !== "settled") return refused;
+      const settled = (await settleBeforeLaunch(deps, input, refused.outcome))!;
+      keepOwner = settled.type === "stop_unproven";
+      return settled;
     }
     try {
       // From here the CLI may read the fix round: a later launch gives it the task again too.
@@ -523,6 +564,12 @@ async function runCliWorkerRun(deps: CliWorkerRuntimeDeps, input: CliWorkerAttem
       if (error instanceof CliStdinUndeliveredError) {
         return { type: "settled", outcome: { type: "failed", reason: `${CLI_STDIN_UNDELIVERED}: ${boundedRecordText(error.message, 500)}` } };
       }
+      // Stopped while the prompt was still going in: the same outcomes as a run stopped later, with nothing collected.
+      if (error instanceof CliPromptDeliveryStoppedError) {
+        return error.stoppedBy === "cancelled"
+          ? { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } }
+          : { type: "settled", outcome: { type: "failed", reason: `cli_attempt_deadline: ${name} did not finish within its time limit for one attempt (its prompt was still being delivered).` } };
+      }
       throw error;
     }
   } finally {
@@ -561,8 +608,7 @@ async function runCliWorkerRun(deps: CliWorkerRuntimeDeps, input: CliWorkerAttem
       outcome: { type: "failed", reason: "process_stop_unproven" },
     };
   }
-  deps.owners?.release(input.owner);
-  return await collect(deps, input, { file, resultDigest }, clock);
+  return await collectReleasingOwner(deps, input, { file, resultDigest }, clock);
 }
 
 /**
@@ -656,6 +702,19 @@ async function clearPendingReruns(folder: string): Promise<void> {
   await rm(join(folder, PENDING_RERUNS_FILE), { force: true });
 }
 
+/** Puts the tree the CLI left back after a failed re-run; returns why it could not, or undefined. */
+async function restorePersistedTree(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, treeId: string): Promise<string | undefined> {
+  try {
+    const current = await deps.captureTree(input.workspace.path);
+    if (current.status === "known" && current.treeId === treeId) return undefined;
+    if (!deps.restoreTree) return "The tree the CLI left could not be restored: the working-tree restore is unavailable.";
+    await deps.restoreTree(input.workspace.path, treeId);
+    return undefined;
+  } catch (error) {
+    return `The tree the CLI left could not be restored: ${boundedRecordText(errorMessage(error), 500)}`;
+  }
+}
+
 async function readStateFile(path: string): Promise<unknown> {
   let text: string;
   try {
@@ -713,7 +772,9 @@ async function resumeReruns(
   } catch (error) {
     return failed(`the tree the CLI left could not be restored: ${boundedRecordText(errorMessage(error), 1_000)}`);
   }
-  return await submitCliResult(deps, input, { file, resultDigest }, outcome.result, clock, pending.treeId);
+  // The re-runs run as the owner, with its depth registration held until their browser session is proven stopped (CW8).
+  deps.owners?.register(input.owner);
+  return await releasingOwner(deps, input, () => submitCliResult(deps, input, { file, resultDigest }, outcome.result, clock, pending.treeId));
 }
 
 /** The Runner-owned folder of one worker session's CLI files (§3.5 step 2), outside the worktree. */
@@ -859,15 +920,76 @@ async function startBrowser(sessions: CliBrowserSessions | undefined, input: Cli
   // §3.11 case 3: a session that does not start is recorded; the CLI runs without a browser and the run never pauses.
   let started: Awaited<ReturnType<NonNullable<CliBrowserSessions["start"]>>>;
   try {
-    started = await sessions.start(input.owner, input.signal);
+    started = await sessions.start(input.owner, { workspacePath: input.workspace.path, ...(input.signal ? { signal: input.signal } : {}) });
   } catch (error) {
     started = { status: "start_failed", reason: errorMessage(error) };
   }
   if (started.status === "started") return { note: started.note, record: { status: "started" } };
   if (started.status === "none") return { ...(started.note ? { note: started.note } : {}), record: { status: "none" } };
   return {
-    note: "No browser is running for this task: the Runner could not start its Playwright CLI session, so browser checks are not run.",
+    note: "No browser is running for this task: the Runner could not start its Playwright CLI session, so browser checks are not run. Do not browse or start a session yourself; put any browser check in notRun with that reason.",
     record: { status: "start_failed", reason: boundedRecordText(started.reason, 300) },
+  };
+}
+
+/**
+ * CW8: proves the owner's stop before any CLI is launched: after a browser session start that failed (case 3), a
+ * cancel during the start, or a launch the Runner refused after the session started. Undefined when the stop is proven
+ * and there is no outcome to settle; otherwise the outcome, or `stop_unproven` keeping it when the stop is not proven
+ * (§3.11 case 2: no CLI ran, so there is nothing to collect).
+ */
+async function settleBeforeLaunch(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, outcome: SettledWorkerOutcome | undefined):
+  Promise<CliWorkerAttemptResult | undefined> {
+  const stopFailure = await proveCliStop(deps, input.owner);
+  if (stopFailure) {
+    return {
+      type: "stop_unproven",
+      reason: `${CLI_WORKER_DISPLAY_NAMES[input.config.providerId]} was not started; the stop of the Playwright CLI session the Runner started for it is not proven: ${stopFailure}`,
+      outcome: outcome ?? { type: "failed", reason: "process_stop_unproven" },
+    };
+  }
+  return outcome ? { type: "settled", outcome } : undefined;
+}
+
+type CliRerunResult = Awaited<ReturnType<CliCheckRerunner>>;
+
+/**
+ * CW8: the Runner's re-runs of the CLI's checks (CW6's seam). When the CLI ran with a browser and reported checks, the
+ * owner's session is started again for the re-runs (the CLI's own session stopped with the CLI) and stopped, proven,
+ * before anything is submitted. A session that does not start makes the re-runs run
+ * without a browser, so its browser checks are not run (case 3).
+ */
+async function rerunReportedChecks(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, file: CliRunResultFile, result: CliWorkerResultV1,
+  treeBefore: string):
+  Promise<{ reruns: CliRerunResult; concern?: string } | { stopUnproven: string }> {
+  if (!deps.rerunChecks) return { reruns: { criterionEvidenceLinks: [], notRun: [] } };
+  // Whenever the CLI ran with a browser: a check may browse from inside its own program (one that starts a server,
+  // drives `playwright-cli` and stops it), so the re-runs get the environment the CLI had, not only bare commands.
+  const browsing = file.browser?.status === "started" && result.checks.length > 0;
+  const session = browsing ? (await startBrowser(deps.browser, input)).record : undefined;
+  let reruns: CliRerunResult | undefined;
+  let failure: { error: unknown } | undefined;
+  try {
+    reruns = await deps.rerunChecks({
+      owner: input.owner, workspace: input.workspace, taskId: input.taskId, attempt: input.attempt, result,
+      browserUnavailable: browsing ? session?.status !== "started" : file.browser?.status !== "started",
+      submission: input.submission, treeBefore,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  } catch (error) {
+    failure = { error };
+  }
+  // The session's stop is proven whatever the re-runs did; an unproven stop wins over their result or error.
+  if (session && session.status !== "none") {
+    const stopFailure = await proveCliStop(deps, input.owner);
+    if (stopFailure) return { stopUnproven: stopFailure };
+  }
+  if (failure) throw failure.error;
+  return {
+    reruns: reruns!,
+    ...(session?.status === "start_failed"
+      ? { concern: `The Runner could not start the Playwright CLI session for its re-runs, so the browser checks were not re-run: ${session.reason ?? "no reason recorded"}` }
+      : {}),
   };
 }
 
@@ -892,13 +1014,24 @@ async function waitForRun(
 ): Promise<RunWait> {
   const live = liveTail(input, runNumber);
   const chunks = stdinChunks(stdin);
+  const stopped = (by: "cancelled" | "deadline", index: number) => new CliPromptDeliveryStoppedError(by,
+    `The attempt was ${by === "cancelled" ? "cancelled" : "past its deadline"} while the prompt's write ${index + 1} of ${chunks.length} still waited for the CLI to read it.`);
   for (let index = 0; index < chunks.length; index += 1) {
+    // Each write waits until the CLI reads it, up to ManagedProcessService's ceiling (MANAGED_INPUT_WRITE_CEILING_MS),
+    // and never past the attempt's cancellation or what is left of its deadline, across all the chunks. A write that
+    // still lands after either is read as before: the wait below records the stop.
+    const timer = new AbortController();
+    const timeout = setTimeout(() => timer.abort(), Math.max(0, deadline - now()));
     try {
-      await handle.write(chunks[index]!, index === chunks.length - 1);
+      await handle.write(chunks[index]!, index === chunks.length - 1, input.signal ? AbortSignal.any([input.signal, timer.signal]) : timer.signal);
     } catch (error) {
-      // Each write has ManagedProcessService's fixed limit (MANAGED_INPUT_WRITE_TIMEOUT_MS). A CLI that has not started
-      // reading its stdin when the pipe buffer is full (a slow start) can reach it: the Runner's failure, not the CLI's.
+      if (input.signal?.aborted) throw stopped("cancelled", index);
+      if (timer.signal.aborted || deadline - now() <= 0) throw stopped("deadline", index);
+      // A CLI that has not started reading its stdin by the ceiling, with the pipe buffer full, reaches it: the
+      // Runner's failure, not the CLI's.
       throw new CliStdinUndeliveredError(`The prompt's write ${index + 1} of ${chunks.length} to the CLI's stdin was not delivered: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timeout);
     }
   }
   let stderr = "";
@@ -1067,8 +1200,7 @@ async function collectPending(
   if (now.head !== pending.worktree!.head) return changed(`HEAD is ${now.head}, not ${pending.worktree!.head} as the CLI left it`);
   if (!pending.worktree!.tree || !now.tree) return changed("the working files' tree hash could not be built, so they cannot be compared");
   if (now.tree !== pending.worktree!.tree) return changed(`the working files differ from what the CLI left (tree ${now.tree}, not ${pending.worktree!.tree})`);
-  deps.owners?.release(input.owner);
-  return await collect(deps, input, { file, resultDigest }, clock);
+  return await collectReleasingOwner(deps, input, { file, resultDigest }, clock);
 }
 
 /**
@@ -1082,6 +1214,31 @@ export function cliHistoryRefusal(error: ForeignHistoryError): string {
   return `${error.code}:${error.kind}: ${error.message}${offBranch
     ? " The task's worktree is kept as the CLI left it, and no CLI run is started in it again; replan the work as a new task."
     : ""}`;
+}
+
+/**
+ * Collects, and releases the owner's depth registration (§3.11) once nothing of the attempt runs: after the re-runs'
+ * browser session (CW8) is proven stopped, not before. A re-run session whose stop is not proven keeps it until the
+ * scheduler's retried stop proves it.
+ */
+async function collectReleasingOwner(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, collectable: Collectable, clock: () => string): Promise<CliRunResult> {
+  return await releasingOwner(deps, input, () => collect(deps, input, collectable, clock));
+}
+
+/**
+ * Runs `work` and then releases the owner's depth registration, unless a stop it reached is not proven: a
+ * `stop_unproven` result, or a re-run's classified stop error (CW6), keeps it until the scheduler's retried stop.
+ */
+async function releasingOwner(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, work: () => Promise<CliRunResult>): Promise<CliRunResult> {
+  let result: CliRunResult;
+  try {
+    result = await work();
+  } catch (error) {
+    if (!isProcessStopUnprovenError(error)) deps.owners?.release(input.owner);
+    throw error;
+  }
+  if (result.type !== "stop_unproven") deps.owners?.release(input.owner);
+  return result;
 }
 
 /** §3.5 steps 6 and 7: after a proven stop. */
@@ -1161,7 +1318,10 @@ async function submitCliResult(
   const name = CLI_WORKER_DISPLAY_NAMES[file.providerId];
   const folder = cliWorkerStateFolder(deps.stateDirectory, input.runId, input.sessionId);
   let reruns: Awaited<ReturnType<CliCheckRerunner>> = { criterionEvidenceLinks: [], notRun: [] };
+  let criterionEvidenceLinks: CriterionEvidenceLink[] = [];
   let knownDefects: CliCheckRerun[] = [];
+  let notVerified: Extract<CliCheckDecision, { type: "submit" }>["notVerified"] = [];
+  let rerunConcern: string | undefined;
   if (deps.rerunChecks) {
     const failed = (why: string): CliRunResult => ({ type: "settled", outcome: { type: "failed", reason: `${CLI_CHECKS_RERUN_FAILED}: ${boundedRecordText(why, 2_000)}` } });
     let treeBefore = persistedTree;
@@ -1177,39 +1337,59 @@ async function submitCliResult(
       treeBefore = tree.treeId;
       await writePendingReruns(folder, { runNumber: file.runNumber, resultDigest, treeId: treeBefore });
     }
+    // §3.6: a stop the re-runs leave unproven holds the attempt: nothing is submitted, the scheduler keeps the worktree
+    // claim and pauses (#220), and once the owner's stop is proven the Resume re-enters this attempt, whose next entry
+    // restores the persisted tree and runs the re-runs again (resumeReruns), starting no CLI.
+    const held = (reason: string): CliRunResult => ({
+      type: "stop_unproven", reason: boundedRecordText(reason, 2_000),
+      outcome: { type: "paused", reason: `${CLI_RERUNS_PENDING_PREFIX}${input.taskId}` },
+    });
+    // CW8: the re-runs go through the owner's re-run browser session, whose stop is proven before anything is
+    // submitted; an unproven stop wins over the re-runs' result or error.
+    let rerun: Awaited<ReturnType<typeof rerunReportedChecks>>;
     try {
-      reruns = await deps.rerunChecks({
-        owner: input.owner, workspace: input.workspace, taskId: input.taskId, attempt: input.attempt, result,
-        browserUnavailable: file.browser?.status !== "started", submission: input.submission, treeBefore,
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
+      rerun = await rerunReportedChecks(deps, input, file, result, treeBefore);
     } catch (error) {
-      // A re-run whose processes are not proven gone (CliRerunStopUnprovenError) keeps its classification and the
-      // persisted tree: the driver keeps the worktree claim and pauses (#220), and the next entry restores the tree and
-      // runs the re-runs again. Every other throw fails the attempt.
-      if (isProcessStopUnprovenError(error)) throw error;
+      // A re-run whose processes are not proven gone (CliRerunStopUnprovenError: a cleanup not verified, or a broker
+      // timeout that stopped waiting for its command) holds the attempt.
+      if (isProcessStopUnprovenError(error)) return held(`a Runner re-run of ${name}'s checks did not prove its processes stopped: ${errorMessage(error)}`);
+      // Any other throw may have cut a re-run short: the owner's stop (its managed processes and its browser) is proven
+      // before the attempt fails, and the tree the CLI left is put back, so the next attempt in this worktree starts
+      // from it, not from a re-run's changes.
+      const stopFailure = await proveCliStop(deps, input.owner);
+      if (stopFailure) return held(`the Runner's re-runs of ${name}'s checks failed (${errorMessage(error)}); the stop of the owner's processes is not proven: ${stopFailure}`);
+      const restore = await restorePersistedTree(deps, input, treeBefore);
       await clearPendingReruns(folder);
-      return failed(errorMessage(error));
+      return failed(`${errorMessage(error)}${restore ? ` ${restore}` : ""}`);
     }
+    if ("stopUnproven" in rerun) {
+      return held(`the Runner re-ran ${name}'s browser checks in a Playwright CLI session; the stop of that session is not proven: ${rerun.stopUnproven}`);
+    }
+    reruns = rerun.reruns;
+    rerunConcern = rerun.concern;
     // A cancelled attempt keeps the persisted tree too: its next entry runs the re-runs again, starting no CLI.
     if (input.signal?.aborted) return { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } };
     // §3.6, CWD-3: a gap gives the CLI one fix round; after it, an unsupported criterion fails the attempt (the task is
-    // requeued), and a re-run that still fails while every criterion is supported is a known defect.
-    const decision = cliCheckDecision(name, input.submission.acceptanceCriteria, reruns, file.fixRound === true);
+    // requeued), a criterion the budget cut short is submitted as not verified, and a re-run that still fails while no
+    // criterion depends on it is a known defect.
+    const decision = cliCheckDecision(name, input.submission.acceptanceCriteria, reruns, file.fixRound === true,
+      { taskId: input.taskId, attempt: input.attempt });
     if (decision.type === "fail") {
       await clearPendingReruns(folder);
       return { type: "settled", outcome: { type: "failed", reason: decision.reason } };
     }
     if (decision.type === "fix_round") {
       await writeFixRound(folder, {
-        prompt: cliFixRoundPrompt({ name, gaps: decision.gaps, reruns: reruns.reruns ?? [], restoredPaths: reruns.restoredPaths ?? [] }),
+        prompt: cliFixRoundPrompt({ name, gaps: decision.gaps, reruns: reruns.reruns ?? [] }),
         sent: false,
         ...(file.deadlineAt !== undefined ? { deadlineAt: file.deadlineAt } : {}),
       });
       await clearPendingReruns(folder);
       return { type: "fix_round" };
     }
+    criterionEvidenceLinks = decision.criterionEvidenceLinks;
     knownDefects = decision.knownDefects;
+    notVerified = decision.notVerified;
   }
   // Every collected run of the attempt (before a fix round or a question) counts: the Architect sees every commit the
   // Runner undid and every docs/project change it restored in this attempt, not only the last run's.
@@ -1218,8 +1398,10 @@ async function submitCliResult(
   const restoredProjectDocs = [...new Set(collected.flatMap((record) => record.restoredProjectDocs ?? []))].sort();
   const projectChangedDuringAttempt = [...new Set(collected.flatMap((record) => record.projectChangedDuringAttempt ?? []))];
   const concerns = [
-    ...knownDefects.map((rerun) => `Known defect: the Runner's re-run of ${rerun.label} (${rerun.command}) still fails after ${name}'s fix round (${rerun.detail}${rerun.evidenceId ? `, evidence ${rerun.evidenceId}` : ""}); every criterion has a passing re-run, so the work is submitted with it.`),
+    ...notVerified.map((entry) => `Not verified by the Runner: ${entry.id === "task" ? "the task's work" : `criterion ${entry.id} (${entry.text})`}. Its re-run, ${entry.rerun.label} (${entry.rerun.command}), did not finish within the task's validation budget, even after ${name}'s fix round; its record (evidence ${entry.rerun.evidenceId}) is a timeout, not a pass.`),
+    ...knownDefects.map((rerun) => `Known defect: the Runner's re-run of ${rerun.label} (${rerun.command}) still fails after ${name}'s fix round (${rerun.detail}${rerun.evidenceId ? `, evidence ${rerun.evidenceId}` : ""}); ${rerun.criterionIds.length ? "each criterion it names has a passing re-run" : "it names no criterion"}, so the work is submitted with it.`),
     ...(result.concerns ?? []).map((concern) => `${name} reported: ${concern}`),
+    ...(rerunConcern ? [rerunConcern] : []),
     ...(reruns.restoredPaths?.length
       ? [`A Runner re-run of ${name}'s checks changed ${reruns.restoredPaths.length} file(s); the Runner restored them, so the submitted tree is the one ${name} left: ${reruns.restoredPaths.slice(0, 20).join(", ")}${reruns.restoredPaths.length > 20 ? ", …" : ""}`]
       : []),
@@ -1242,7 +1424,7 @@ async function submitCliResult(
       summary,
       readiness: "ready_for_architect_review",
       unresolvedConcerns: concerns,
-      criterionEvidenceLinks: reruns.criterionEvidenceLinks,
+      criterionEvidenceLinks: deps.rerunChecks ? criterionEvidenceLinks : reruns.criterionEvidenceLinks,
       ...(input.submission.requireValidationScope ? { validationScope: cliValidationScope(name, result, notRun, reruns.reruns ?? []) } : {}),
       validationBudgetJustification: `${name} ran its own checks; the Runner's re-runs of the checks it reported are the evidence.`,
     });
@@ -1287,7 +1469,7 @@ export function createManagedCliProcessLauncher(options: {
   executionGrants: ExecutionGrantAuthority;
   permissionProfile: PermissionProfile;
 }): CliProcessLauncher {
-  const invoke = async <T>(owner: CliWorkerOwner, workspacePath: string, toolName: string, perform: (context: ToolExecutionContext) => Promise<T>): Promise<T> => {
+  const invoke = async <T>(owner: CliWorkerOwner, workspacePath: string, toolName: string, perform: (context: ToolExecutionContext) => Promise<T>, signal?: AbortSignal): Promise<T> => {
     const callId = `cli-worker:${randomUUID()}:${toolName}`;
     const grant = await options.executionGrants.issue({
       runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, toolName, callId,
@@ -1295,7 +1477,7 @@ export function createManagedCliProcessLauncher(options: {
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
     try {
-      return await perform({ runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, callId, toolName, workspacePath, executionGrant: grant });
+      return await perform({ runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, callId, toolName, workspacePath, executionGrant: grant, ...(signal ? { signal } : {}) });
     } finally {
       await options.executionGrants.revoke(grant, "completed");
     }
@@ -1309,9 +1491,10 @@ export function createManagedCliProcessLauncher(options: {
       let cursor: string | undefined;
       return Object.freeze({
         processId,
-        async write(text: string, closeInput: boolean) {
+        async write(text: string, closeInput: boolean, signal?: AbortSignal) {
+          // The signal ends the drain wait (an unknown outcome), never the admission.
           const written = await invoke(input.owner, input.cwd, "process.write_stdin", (context) =>
-            managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), ...(closeInput ? { closeInput: true } : {}) }, context));
+            managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), ...(closeInput ? { closeInput: true } : {}) }, context), signal);
           if (written.status !== "acknowledged") throw new Error(`The CLI's stdin was not delivered (${written.status}${written.errorCode ? `: ${written.errorCode}` : ""}).`);
         },
         async read(waitMs: number): Promise<CliProcessOutput> {

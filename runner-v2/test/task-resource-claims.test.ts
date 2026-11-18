@@ -1724,6 +1724,68 @@ test("an unproven worker stop keeps the claim, pauses, and resume retries the st
   }
 });
 
+test("CW6 §3.6: a CLI attempt held by its re-runs' unproven stop re-enters the same attempt once the stop is proven", async () => {
+  const fixture = openFixture("stop-unproven-reruns-pending");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U10", files: ["src/u10.ts"] },
+    ], { revisionId: "revision_u10", reviewId: "coverage_u10" }));
+    const evidenceRecord = fixture.evidence.record({
+      runId: "run_t4", taskId: "U10", actor: { role: "worker", id: "worker_U10_1" },
+      fact: { kind: "browser_screenshot", label: "U10 evidence", capturedAt: fixture.clock(), screenshotArtifactHash: "1".repeat(64), mediaType: "image/png", byteLength: 1 },
+      createdAt: fixture.clock(), idempotencyKey: "evidence:U10", attempt: 1,
+    });
+    const assignments: Array<{ workerId: string; attempt: number }> = [];
+    const retries: WorkerAssignment[] = [];
+    const driver: WorkerRuntimeDriver = {
+      run: async (assignment) => {
+        assignments.push({ workerId: assignment.workerId, attempt: assignment.attempt });
+        // The first entry: the re-runs left a stop unproven (cli-worker-runtime.ts submitCliResult), so nothing is
+        // submitted and the attempt is held. The re-entry restores the CLI's tree, re-runs and submits.
+        if (assignments.length === 1) {
+          return { type: "stop_unproven", reason: "A Runner re-run of Claude Code's checks did not prove its processes stopped.", outcome: { type: "paused", reason: "cli_reruns_pending:U10" } };
+        }
+        return {
+          type: "submitted", changeSetId: "changeset-u10",
+          criterionEvidenceLinks: [{ criterionId: "done", evidenceId: evidenceRecord.id, artifactHashes: ["1".repeat(64)] }],
+        };
+      },
+      retryStop: async (assignment) => { retries.push(assignment); },
+    };
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U10");
+    assert.deepEqual(claimStatus(fixture.store, "U10"), [{ status: "claimed", evidence: undefined }], "the re-runs' processes may still write");
+
+    // Resume: the stop is retried and proven first; the kept pause is then recorded, and the next Resume runs the same
+    // attempt again (as for cli_collect_pending).
+    scheduler.resume("resume:u10:1");
+    await scheduler.settleUnprovenStops();
+    for (let step = 0; step < 3 && projectionOf(fixture.store, "run_t4").tasks.U10.status !== "submitted"; step += 1) {
+      if (projectionOf(fixture.store, "run_t4").status === "paused") scheduler.resume(`resume:u10:${step + 2}`);
+      await scheduler.tick();
+      await scheduler.awaitIdle();
+    }
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.ok(retries.length >= 1);
+    assert.ok(retries.every((retry) => retry.workerId === "worker_U10_1" && retry.attempt === 1));
+    assert.deepEqual(assignments, [{ workerId: "worker_U10_1", attempt: 1 }, { workerId: "worker_U10_1", attempt: 1 }],
+      "the re-entry is the same attempt by the same worker, never a new attempt");
+    assert.equal(projection.tasks.U10.status, "submitted");
+    const pauses = fixture.store.readRun("run_t4").filter((event) => event.type === "run.paused").map((event) => (event.payload as { reason: string }).reason);
+    assert.deepEqual(pauses, ["process_stop_unproven:U10", "cli_reruns_pending:U10"], "the kept pause is recorded only after the proven stop");
+    const claims = claimStatus(fixture.store, "U10");
+    // The first claim ends only on the proven stop; the re-entry runs under the next generation.
+    assert.equal(claims[0]?.status, "stopped_fenced");
+    assert.match(claims[0]?.evidence ?? "", /^worker stop proven on retry after: /);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("a thrown process_cleanup_unverified keeps the claim even after a lifecycle abort; a driver that cannot retry stays paused", async () => {
   const fixture = openFixture("stop-unproven-thrown");
   try {

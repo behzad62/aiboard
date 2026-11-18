@@ -11,12 +11,11 @@ import test, { describe, type TestContext } from "node:test";
 
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 import { CLI_CHECKS_FAILING, CLI_CHECKS_RERUN_FAILED, CLI_CHECKS_UNSUPPORTED, createCliCheckRerunner } from "../src/cli-worker-evidence.js";
-import { cliWorkerStateFolder, runCliWorkerAttempt, type CliCheckRerunner, type CliProcessLauncher, type CliWorkerOwner } from "../src/cli-worker-runtime.js";
+import { CLI_RERUNS_PENDING_PREFIX, cliWorkerStateFolder, runCliWorkerAttempt, type CliCheckRerunner, type CliProcessLauncher, type CliWorkerOwner } from "../src/cli-worker-runtime.js";
 import { captureWorkingTreeIdentity, restoreWorkingTree } from "../src/command-evidence-identity.js";
 import { RUNNER_RERUN_OF_CLI_CLAIM, type CommandEvidenceFact } from "../src/evidence-store.js";
 import type { RunGitExecutionContext } from "../src/git-run-context.js";
 import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
-import { isProcessStopUnprovenError } from "../src/process-stop-proof.js";
 import { ChildCliLauncher, policyGit } from "./support/cli-worker-fixture.js";
 import { CLI_RUNTIME_TEST_CONCURRENCY, harness, claudeStream, records, CLAUDE_SESSION, RUN, SESSION, TASK, WORKER, type Harness } from "./support/cli-worker-runtime-harness.js";
 import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
@@ -208,7 +207,7 @@ describe("CW6 loop: re-runs, the fix round and its failures", { concurrency: CLI
     assert.equal(launcher.starts.length, 2);
   });
 
-  test("a re-run whose stop is not proven keeps its classification and the CLI's tree; the next entry restores it and re-runs, starting no CLI", async (t) => {
+  test("a re-run whose stop is not proven holds the attempt with the CLI's tree; the next entry restores it and re-runs, starting no CLI", async (t) => {
     const h = await harness(t, "evidence-restart");
     const launcher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] });
     // The first entry's re-run changes a file, and its processes are not proven gone (a Runner restart leaves the same).
@@ -217,7 +216,10 @@ describe("CW6 loop: re-runs, the fix round and its failures", { concurrency: CLI
       throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
     };
     const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(h.state, "tree-index"), policyGit, treeId);
-    await assert.rejects(runCliWorkerAttempt(h.deps(launcher, { rerunChecks: unproven, restoreTree }), h.input()), (error: unknown) => isProcessStopUnprovenError(error));
+    const held = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: unproven, restoreTree }), h.input());
+    assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+    assert.deepEqual((held as { outcome: unknown }).outcome, { type: "paused", reason: `${CLI_RERUNS_PENDING_PREFIX}${TASK}` });
+    assert.match((held as { reason: string }).reason, /did not prove its processes stopped: Shared managed cleanup did not prove release/);
     const pending = join(cliWorkerStateFolder(h.state, RUN, SESSION), "reruns-pending.json");
     assert.ok(existsSync(pending), "the tree the CLI left stays persisted");
     const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: realRerunner(t, h, true), restoreTree }), h.input());
@@ -228,15 +230,54 @@ describe("CW6 loop: re-runs, the fix round and its failures", { concurrency: CLI
     if (result.type === "submitted") assert.deepEqual([...result.changeSet.changedPaths], ["value.txt"]);
   });
 
-  test("any other re-runner failure fails the attempt as cli_checks_rerun_failed and submits nothing", async (t) => {
+  test("any other re-runner failure proves the owner's stop, puts the CLI's tree back and fails the attempt as cli_checks_rerun_failed", async (t) => {
     const h = await harness(t, "evidence-rerun-failed");
+    const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(h.state, "tree-index"), policyGit, treeId);
+    const pending = join(cliWorkerStateFolder(h.state, RUN, SESSION), "reruns-pending.json");
+    // A re-run cut short by an error the classifier does not know: what it changed is put back once the stop is proven.
     const launcher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] });
-    const throwing: CliCheckRerunner = async () => { throw new Error("the tree index could not be written"); };
-    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: throwing }), h.input());
+    const throwing: CliCheckRerunner = async (input) => {
+      writeFileSync(join(input.workspace.path, "value.txt"), "changed by a re-run\n");
+      throw new Error("the tree index could not be written");
+    };
+    const stopsBefore = launcher.stops;
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: throwing, restoreTree }), h.input());
     assert.equal(result.type === "settled" && result.outcome.type, "failed", JSON.stringify(result));
     assert.match(JSON.stringify(result), new RegExp(`${CLI_CHECKS_RERUN_FAILED}: the tree index could not be written`));
-    assert.equal(existsSync(join(cliWorkerStateFolder(h.state, RUN, SESSION), "reruns-pending.json")), false);
+    assert.ok(launcher.stops > stopsBefore, "the owner's stop ran before the failure");
+    assert.equal(readFileSync(join(h.workspace.path, "value.txt"), "utf8"), "two\n", "the re-run's change was put back");
+    assert.equal(existsSync(pending), false);
     assert.notEqual((await h.sessions.load(SESSION)).status, "submitted");
+
+    // The owner's stop not proven on that path: the attempt is held with the CLI's tree, like a re-run's own unproven stop.
+    const h2 = await harness(t, "evidence-rerun-failed-unproven");
+    const launcher2 = h2.launcher({ cli: "claude-code", stdout: claudeStream(h2, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] });
+    const throwing2: CliCheckRerunner = async () => { launcher2.stopFailures = 1; throw new Error("the tree index could not be written"); };
+    const restoreTree2 = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(h2.state, "tree-index"), policyGit, treeId);
+    const held = await runCliWorkerAttempt(h2.deps(launcher2, { rerunChecks: throwing2, restoreTree: restoreTree2 }), h2.input());
+    assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+    assert.deepEqual((held as { outcome: unknown }).outcome, { type: "paused", reason: `${CLI_RERUNS_PENDING_PREFIX}${TASK}` });
+    assert.match((held as { reason: string }).reason, /the tree index could not be written.*the stop of the owner's processes is not proven/);
+    assert.ok(existsSync(join(cliWorkerStateFolder(h2.state, RUN, SESSION), "reruns-pending.json")), "the CLI's tree stays persisted");
+  });
+
+  test("a fix round whose run ends in a provider failure stays pending: the next entry gets it, inside a time limit of its own", async (t) => {
+    const h = await harness(t, "evidence-fix-provider");
+    const third = join(h.root, "fake", "after-provider.json");
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, null, { isError: true, result: "API Error: 529 overloaded" }), exitCode: 1 }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), record: third, actions: [{ write: "value.txt", content: "two\n" }] }),
+    ]);
+    const deps = h.deps(launcher, { rerunChecks: realRerunner(t, h, true) });
+    const failure = await runCliWorkerAttempt(deps, h.input());
+    assert.equal(failure.type, "provider_failure", JSON.stringify(failure));
+    const result = await runCliWorkerAttempt(deps, h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(launcher.starts.length, 3);
+    // The fix round was sent once already, so this launch gets the task again before it.
+    assert.match(stdinOf(third), /Change value\.txt to two\.[\s\S]*Fix round: the Runner's re-runs of your checks[\s\S]*value is three/);
+    assert.deepEqual(records(h).map((record) => record.outcome), ["done", "failure", "done"]);
   });
 
   test("a Runner that stops before the fix round's launch runs it on its next entry, resuming the CLI's session with the fix round", async (t) => {

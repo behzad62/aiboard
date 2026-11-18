@@ -1064,6 +1064,42 @@ for (const outcome of ["acknowledged", "takeover", "takeover-absent", "failed", 
   });
 }
 
+for (const settledFirst of [false, true]) {
+  test(`portable write stops waiting for its acknowledgement when the session stops${settledFirst ? ", keeping one that already landed" : ""}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "aiboard-portable-abandon-ack-"));
+    for (const directory of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, directory), { recursive: true });
+    writeOutputCheckpoint(root);
+    const effects: string[] = [];
+    const ackPath = join(root, "channel/ack/input-000000000001.json");
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, clock: () => Date.now(),
+      authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live",
+        effect: async (kind, effect) => { effects.push(kind); return effect(); },
+        snapshot: immediateSnapshot,
+      }),
+    });
+    let channel: Awaited<ReturnType<typeof provider.acquire>> | undefined;
+    try {
+      channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+      const payload = Buffer.from("sent");
+      const stopping = new AbortController();
+      const startedAt = performance.now();
+      // The reader never drains, so no acknowledgement arrives before the 60 s bound: only the stop ends the wait.
+      const write = channel.write({ sequence: 1, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 60_000, signal: stopping.signal }, payload);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The supervisor's acknowledgement can land in the same instant: the final reconciliation still reports it.
+      if (settledFirst) writeFileSync(ackPath, JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, sequence: 1, status: "acknowledged" }));
+      stopping.abort();
+      if (settledFirst) assert.deepEqual(await write, { acknowledged: true, sequence: 1 });
+      else await assert.rejects(write, /acknowledgement was abandoned: the session is stopping/);
+      assert.ok(performance.now() - startedAt < 30_000, "the stop ended the wait, not the bound");
+      assert.equal(effects.filter((kind) => kind === "write").length, 1, "the write was admitted once and never re-sent");
+    } finally {
+      await channel?.detach();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
