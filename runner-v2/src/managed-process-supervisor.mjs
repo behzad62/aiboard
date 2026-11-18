@@ -131,11 +131,11 @@ function parseWaitStatusTimeout(url) {
   if (!Number.isSafeInteger(timeoutMs)) return 1_000;
   return Math.min(5_000, Math.max(1, timeoutMs));
 }
-/** A bounded park for one input settlement: 0-5000 ms, like /wait-status. */
+/** A bounded park for one input settlement: 0-5000 ms, like /wait-status. A fractional wait is rounded down. */
 function parseInputWait(raw) {
   const timeoutMs = Number(raw);
-  if (raw === null || raw === undefined || !Number.isSafeInteger(timeoutMs)) return 0;
-  return Math.min(5_000, Math.max(0, timeoutMs));
+  if (raw === null || raw === undefined || raw === "" || !Number.isFinite(timeoutMs)) return 0;
+  return Math.min(5_000, Math.max(0, Math.floor(timeoutMs)));
 }
 function settleInput(entry, error) {
   if (entry.state !== "pending") return;
@@ -303,8 +303,10 @@ const server = createServer(async (request, response) => {
       catch (error) { settleInput(entry, error ?? new Error("Input write threw.")); }
       // A Runner that sends no ackWaitMs waits for the settlement here, within the clamp, as before this protocol.
       const state = await waitForInput(entry, parseInputWait(body.ackWaitMs ?? 5_000));
+      // A write that failed after admission (the reader closed its stdin or exited) was handed to the pipe: the
+      // sequence is spent, so the reply says it was admitted, never a plain error the Runner could read as a refusal.
       if (state === "failed") {
-        json(response, 500, { error: entry.error });
+        json(response, 200, { acknowledged: false, failed: true, sequence: entry.sequence, error: entry.error });
         return;
       }
       json(response, 200, state === "acknowledged" ? { acknowledged: true, sequence: entry.sequence } : { acknowledged: false, pending: true, sequence: entry.sequence });

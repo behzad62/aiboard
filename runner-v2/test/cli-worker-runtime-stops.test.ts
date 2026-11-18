@@ -204,4 +204,49 @@ describe("CW5 loop: the stop, cases 2 and 3", { concurrency: CLI_RUNTIME_TEST_CO
     assert.equal(unreadable.stops, 1);
     assert.equal(h.owners.has(OWNER), false);
   });
+
+  test("a prompt still going in ends at the attempt's cancellation or deadline, after the proven stop", async (t) => {
+    const h = await harness(t, "prompt-stopped");
+    // A CLI that never reads its stdin: each write waits until its signal ends it, as ManagedProcessService's does.
+    const unread = (): CliProcessLauncher & { stops: number; signals: Array<AbortSignal | undefined> } => {
+      const launcher = {
+        stops: 0,
+        signals: [] as Array<AbortSignal | undefined>,
+        async start() {
+          return {
+            processId: "proc",
+            write: (_text: string, _closeInput: boolean, signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
+              launcher.signals.push(signal);
+              // Without a signal the wait would run to the 60 s ceiling: the undelivered failure stands in for it here.
+              if (!signal) { reject(new Error("The CLI's stdin was not delivered (outcome_unknown: no signal ended the wait).")); return; }
+              const fail = () => reject(new Error("The CLI's stdin was not delivered (outcome_unknown: process_input_outcome_unknown)."));
+              if (signal.aborted) fail(); else signal.addEventListener("abort", fail, { once: true });
+            }),
+            async read(): Promise<never> { throw new Error("no output is read before the prompt is in"); },
+          };
+        },
+        async stopOwner() { launcher.stops += 1; },
+      };
+      return launcher;
+    };
+    const cancel = new AbortController();
+    const cancelled = unread();
+    setTimeout(() => cancel.abort(), 100);
+    const started = Date.now();
+    const paused = await runCliWorkerAttempt(h.deps(cancelled), h.input({ signal: cancel.signal }));
+    assert.deepEqual(paused, { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } });
+    assert.ok(Date.now() - started < 10_000, "the cancellation ends the write's wait, not its 60 s ceiling");
+    assert.equal(cancelled.signals.length, 1);
+    assert.equal(cancelled.stops, 1);
+    assert.equal(h.owners.has(OWNER), false);
+
+    const late = unread();
+    const settings = await h.deps(late).settings("claude-code");
+    const deadline = await runCliWorkerAttempt(h.deps(late, { settings: async () => ({ ...settings, attemptLimitMs: 300 }) }), h.input());
+    assert.equal(deadline.type, "settled");
+    assert.match(JSON.stringify(deadline), /"type":"failed","reason":"cli_attempt_deadline: .*prompt was still being delivered/);
+    assert.equal(late.signals.length, 1, "the deadline is shared across the prompt's writes, so the wait ends with the first");
+    assert.equal(late.stops, 1);
+    assert.equal(h.owners.has(OWNER), false);
+  });
 });

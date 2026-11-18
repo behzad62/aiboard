@@ -102,8 +102,11 @@ export interface CliProcessOutput {
 
 export interface CliProcessHandle {
   readonly processId: string;
-  /** Writes `text` to stdin; with `closeInput`, stdin is closed after it. */
-  write(text: string, closeInput: boolean): Promise<void>;
+  /**
+   * Writes `text` to stdin; with `closeInput`, stdin is closed after it. `signal` ends the wait for the CLI to read it
+   * (the attempt's cancellation or deadline): the write then fails with an unknown outcome and is never resent.
+   */
+  write(text: string, closeInput: boolean, signal?: AbortSignal): Promise<void>;
   /** Waits up to `waitMs` for new output. */
   read(waitMs: number): Promise<CliProcessOutput>;
 }
@@ -269,6 +272,14 @@ class CliStdinUndeliveredError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CliStdinUndeliveredError";
+  }
+}
+
+/** The attempt was cancelled, or reached its deadline, while the prompt was still being delivered. */
+class CliPromptDeliveryStoppedError extends Error {
+  constructor(readonly stoppedBy: "cancelled" | "deadline", message: string) {
+    super(message);
+    this.name = "CliPromptDeliveryStoppedError";
   }
 }
 
@@ -453,6 +464,12 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
       // failure, so the CLI's health and cooldown stay as they are.
       if (error instanceof CliStdinUndeliveredError) {
         return { type: "settled", outcome: { type: "failed", reason: `${CLI_STDIN_UNDELIVERED}: ${boundedRecordText(error.message, 500)}` } };
+      }
+      // Stopped while the prompt was still going in: the same outcomes as a run stopped later, with nothing collected.
+      if (error instanceof CliPromptDeliveryStoppedError) {
+        return error.stoppedBy === "cancelled"
+          ? { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } }
+          : { type: "settled", outcome: { type: "failed", reason: `cli_attempt_deadline: ${name} did not finish within its time limit for one attempt (its prompt was still being delivered).` } };
       }
       throw error;
     }
@@ -705,14 +722,24 @@ async function waitForRun(
   const live = liveTail(input, runNumber);
   const deadline = now() + limitMs;
   const chunks = stdinChunks(stdin);
+  const stopped = (by: "cancelled" | "deadline", index: number) => new CliPromptDeliveryStoppedError(by,
+    `The attempt was ${by === "cancelled" ? "cancelled" : "past its deadline"} while the prompt's write ${index + 1} of ${chunks.length} still waited for the CLI to read it.`);
   for (let index = 0; index < chunks.length; index += 1) {
+    // Each write waits until the CLI reads it, up to ManagedProcessService's ceiling (MANAGED_INPUT_WRITE_CEILING_MS),
+    // and never past the attempt's cancellation or what is left of its deadline, across all the chunks. A write that
+    // still lands after either is read as before: the wait below records the stop.
+    const timer = new AbortController();
+    const timeout = setTimeout(() => timer.abort(), Math.max(0, deadline - now()));
     try {
-      await handle.write(chunks[index]!, index === chunks.length - 1);
+      await handle.write(chunks[index]!, index === chunks.length - 1, input.signal ? AbortSignal.any([input.signal, timer.signal]) : timer.signal);
     } catch (error) {
-      // Each write waits until the CLI reads it, up to ManagedProcessService's ceiling (MANAGED_INPUT_WRITE_CEILING_MS).
-      // A CLI that has not started reading its stdin by then, with the pipe buffer full, reaches it: the Runner's
-      // failure, not the CLI's.
+      if (input.signal?.aborted) throw stopped("cancelled", index);
+      if (timer.signal.aborted || deadline - now() <= 0) throw stopped("deadline", index);
+      // A CLI that has not started reading its stdin by the ceiling, with the pipe buffer full, reaches it: the
+      // Runner's failure, not the CLI's.
       throw new CliStdinUndeliveredError(`The prompt's write ${index + 1} of ${chunks.length} to the CLI's stdin was not delivered: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timeout);
     }
   }
   let stderr = "";
@@ -1035,7 +1062,7 @@ export function createManagedCliProcessLauncher(options: {
   executionGrants: ExecutionGrantAuthority;
   permissionProfile: PermissionProfile;
 }): CliProcessLauncher {
-  const invoke = async <T>(owner: CliWorkerOwner, workspacePath: string, toolName: string, perform: (context: ToolExecutionContext) => Promise<T>): Promise<T> => {
+  const invoke = async <T>(owner: CliWorkerOwner, workspacePath: string, toolName: string, perform: (context: ToolExecutionContext) => Promise<T>, signal?: AbortSignal): Promise<T> => {
     const callId = `cli-worker:${randomUUID()}:${toolName}`;
     const grant = await options.executionGrants.issue({
       runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, toolName, callId,
@@ -1043,7 +1070,7 @@ export function createManagedCliProcessLauncher(options: {
       externalApproved: false, destructiveApproved: false, networkApproved: false,
     });
     try {
-      return await perform({ runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, callId, toolName, workspacePath, executionGrant: grant });
+      return await perform({ runId: owner.runId, sessionId: owner.sessionId, actor: { ...owner.actor }, callId, toolName, workspacePath, executionGrant: grant, ...(signal ? { signal } : {}) });
     } finally {
       await options.executionGrants.revoke(grant, "completed");
     }
@@ -1057,9 +1084,10 @@ export function createManagedCliProcessLauncher(options: {
       let cursor: string | undefined;
       return Object.freeze({
         processId,
-        async write(text: string, closeInput: boolean) {
+        async write(text: string, closeInput: boolean, signal?: AbortSignal) {
+          // The signal ends the drain wait (an unknown outcome), never the admission.
           const written = await invoke(input.owner, input.cwd, "process.write_stdin", (context) =>
-            managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), ...(closeInput ? { closeInput: true } : {}) }, context));
+            managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), ...(closeInput ? { closeInput: true } : {}) }, context), signal);
           if (written.status !== "acknowledged") throw new Error(`The CLI's stdin was not delivered (${written.status}${written.errorCode ? `: ${written.errorCode}` : ""}).`);
         },
         async read(waitMs: number): Promise<CliProcessOutput> {

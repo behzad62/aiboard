@@ -31,22 +31,23 @@ Two couplings made a longer limit unsafe:
   - the session stopping.
 - **Portable:** unchanged polling, now also ended by the drain signal. One final reconciliation still reports an acknowledgement that already landed.
 - **Who ends a drain wait early.** The write's drain signal fires on any of these, and the write then ends `outcome_unknown`, as at its own deadline, and is never resent:
-  - **Stop and close** (`relinquishAttachmentForCleanupTakeover`, `closeAttachment`). They close input, then abandon the drains before joining the write tail. A write that passed its admission check just before that is still admitted, and the join waits for it. No write is admitted after the join.
+  - **Stop and close** (`relinquishAttachmentForCleanupTakeover`, `closeAttachment`). They stop admitting writes (`inputStopped`; no EOF is sent), then abandon the drains before joining the write tail. A write that passed its admission check just before that is still admitted, and the join waits for it. No write is admitted after the join.
   - **Graceful shutdown** (`gracefulInputClose`, `gracefulProtocolSettlement`). It abandons the drains already waiting, but its own shutdown writes are still admitted.
-  - **The caller's cancellation:** the tool call's signal, or an MCP or LSP request's own deadline.
+  - **The caller's cancellation:** the tool call's signal, an MCP or LSP request's own deadline, or a CLI worker attempt's cancellation or deadline. A CLI worker's deadline is shared across its prompt's writes, and a prompt stopped that way ends `paused: worker_cancelled` or `failed: cli_attempt_deadline` after the proven stop, never `cli_stdin_undelivered`.
 
   Admission itself is never cancelled.
 - **Sequence after an unacknowledged write (Windows Job).**
   - A write that was admitted but not acknowledged throws `WindowsJobInputUnacknowledgedError`, and the channel moves to the next sequence, as the host and the runtime already have. When the reader has drained it, the next write works again.
   - While it still drains, the supervisor refuses a later write (409 `input_pending`). It also refuses any sequence that is not above the last one it admitted (`input_sequence_stale`). So bytes are never queued, reordered or sent twice.
   - A write refused before admission (any 409 from the supervisor, a stopping session, or a caller that already gave up) sent nothing. It is typed as `InteractiveInputRefusedError`, the runtime hands its sequence back, and the tool reports it `rejected` (`process_input_rejected`), never `outcome_unknown`. Input stays usable: the next write takes the same sequence. This is the Windows Job backend only; the portable channel has no refusal before admission.
-  - Not covered (follow-up): if the reply to an admitted write is lost and the session is reattached, the host's next sequence is the one the supervisor already admitted. Every later write is then refused `input_sequence_stale`: reported `rejected` and never sent twice, but input stays unusable. Before this change that write would have been sent again. The host's own refusals (input unavailable, a stale fence) are still untyped and report `outcome_unknown`, as before.
+  - A write that fails within the admission wait (the reader exited) is still admitted: the supervisor replies `failed` with its sequence, the host spends it, and the write ends `outcome_unknown`.
+  - Not covered (follow-up): if the reply to an admitted write is lost or times out (the `/write` request's 5.25 s), with or without a reattach, the host's next sequence is the one the supervisor already admitted. Every later write is then refused `input_sequence_stale`: reported `rejected` and never sent twice, but input stays unusable. Before this change that write would have been sent again. The host's own refusals (input unavailable, a stale fence) are still untyped and report `outcome_unknown`, as before.
 - **Lease:** the write path renews the session's ownership lease through the write's bound, as a read's wait does.
 - **Every ending other than acknowledged** is `process_input_outcome_unknown` (or a refusal before delivery), never a guess.
 
 Why 60 s:
 - **The upper limit.** The tool broker gives a call 120 s by default. `process.interact` also needs its pre-read and up to 30 s of read wait inside that. So 60 s is the largest write bound that keeps a turn inside one call with margin.
-- **The measured real cases (CW0, below).** On an idle PC, the slowest real CLI's start-to-first-read is at most 7.7 s (agy on Windows). 60 s is 7.8x that. That leaves room for a busy host, a cold start or an antivirus scan, which are not measured for the real CLIs.
+- **The measured real cases (CW0, below).** On an idle PC, CW0's recorded runs bound the real CLIs' start-to-first-read at 6.8–7.7 s for agy and at 10.8 s for Claude Code (a run that includes one model request, so the read itself came earlier). 60 s is 5.6x the largest of these bounds. That leaves room for a busy host, a cold start or an antivirus scan, which are not measured for the real CLIs. The ceiling stays a measured-case ceiling until they are.
 
 ## Measurements
 
@@ -87,7 +88,7 @@ CW0 (`runner-v2/test/fixtures/cli-workers/`, 2026-11-17, idle Windows 10 PC and 
 | --- | --- | --- | --- |
 | agy 1.5.10 | `stream-input-missing-event.windows` | the stream-json line is refused, exit 1 | 7.7 s |
 | agy 1.5.10 | `model-unavailable.windows` | one model request, refused | 6.8 s |
-| Claude Code 2.1.326 | `logged-out.linux` | `Not logged in`, no request | 2.0 s |
+| Claude Code 2.1.326 | `logged-out.linux` | `Not logged in`, no request; it may exit before it reads stdin, so it bounds nothing | 2.0 s |
 | Claude Code 2.1.326 | `model-unavailable.windows` | one model request, refused | 10.8 s |
 
 - Managed launches of the real CLIs took 1.0–3.2 s on Windows (CW0 report §7). They load the user's own MCP servers and hooks.
