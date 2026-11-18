@@ -42,6 +42,8 @@ interface Fixture {
   call(path: string, init?: { method?: string; body?: unknown }): Promise<{ status: number; body: Record<string, unknown> }>;
   scenario(name: string, scenario: FakeCliScenario): string;
   record(name: string): FakeCliRecord;
+  /** The control server's close alone, as the Runner's shutdown closes it after the CLI worker service. */
+  closeServer(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -117,6 +119,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     const { url } = await server.start(0);
     const responses: string[] = [];
     const started = { server, supervisor };
+    let serverClosed = false;
     return {
       root, state, location, processes, detection, now, ended, responses,
       async call(path, init = {}) {
@@ -131,9 +134,15 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
       },
       scenario,
       record: (name) => JSON.parse(readFileSync(join(scenarioDir, name), "utf8")) as FakeCliRecord,
+      async closeServer() {
+        if (serverClosed) return;
+        serverClosed = true;
+        await started.server.close();
+      },
       async close() {
         try {
-          await started.server.close();
+          if (!serverClosed) await started.server.close();
+          serverClosed = true;
           started.supervisor.close();
         } finally {
           rmSync(root, { recursive: true, force: true });
@@ -511,7 +520,7 @@ test("on Windows a CLI runs only under a verified Job: otherwise it is unavailab
         assert.equal(check.status, "unavailable", `${jobContainment} ${providerId}`);
         assert.equal(check.code, "job_containment_unavailable");
         assert.match(check.reason!, /can't run .* as a worker: Windows did not pass AIBoard's check that a Job object holds a CLI/);
-        assert.equal(check.failure?.kind, "authentication");
+        assert.equal(check.failure?.kind, "provider_unavailable", "a host fact: unhealthy, but never a 24 h login cooldown");
       }
       const tested = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
       assert.equal(tested.status, 409, JSON.stringify(tested.body));
@@ -777,6 +786,35 @@ test("a Test already running answers 409; a second provider is not held up", asy
     assert.equal(other.status, 200, JSON.stringify(other.body));
     assert.equal((await first).status, 200);
     assert.equal(f.processes.launched("test").length, 2, "the refused second Claude Code Test launched nothing");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a shutdown during a Test stops it and answers runner_shutting_down; nothing is saved, and no Test starts after", async () => {
+  const f = await fixture({ testTimeoutMs: 30_000, scenarios: (s) => ({ [CLAUDE]: claudeScenario(s, { holdMs: 30_000 }) }) });
+  try {
+    const pending = f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
+    for (let tries = 0; f.processes.launched("test").length === 0 && tries < 400; tries += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(f.processes.launched("test").length, 1, "the Test's CLI is running");
+    const started = Date.now();
+    // The Runner's order: the CLI worker service, then the server (which drops every open connection at once).
+    await f.detection.close();
+    await f.closeServer();
+    assert.ok(Date.now() - started < 10_000, "the shutdown does not wait out the Test's deadline");
+    const { status, body } = await pending;
+    assert.equal(status, 503, JSON.stringify(body));
+    assert.equal(body.code, "runner_shutting_down");
+    assert.match(body.error as string, /shutting down, so the test did not finish; nothing was saved/);
+    assert.deepEqual(f.processes.closes.at(-1), { purpose: "test", verified: true });
+    assert.equal(await lastTest(f, "claude-code"), undefined, "an interrupted Test is not the CLI's outcome");
+    assert.deepEqual(testFolders(f), [], "its stop was proven, so its folder is removed");
+    const opened = f.processes.opens.length;
+    await assert.rejects(f.detection.test("claude-code", { model: null }), { code: "runner_shutting_down" });
+    const check = await f.detection.check("claude-code");
+    assert.equal(check.status, "unknown");
+    assert.match(check.reason ?? "", /shutting down/);
+    assert.equal(f.processes.opens.length, opened, "no check or Test opened a process session after the shutdown began");
   } finally {
     await f.close();
   }

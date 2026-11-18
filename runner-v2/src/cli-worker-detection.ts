@@ -202,6 +202,15 @@ export class CliWorkerTestRefusedError extends Error {
   }
 }
 
+/** A Test the Runner's shutdown interrupted, or one asked for during it: nothing is saved as the CLI's outcome. */
+export class CliWorkerShutdownError extends Error {
+  readonly code = "runner_shutting_down";
+  constructor() {
+    super("AIBoard is shutting down, so the test did not finish; nothing was saved. Test again after AIBoard restarts.");
+    this.name = "CliWorkerShutdownError";
+  }
+}
+
 export class CliWorkerTestBusyError extends Error {
   readonly code = "cli_worker_test_running";
   constructor(providerId: CliWorkerProviderId) {
@@ -231,6 +240,10 @@ export function cliWorkerFreeCheckEntry(check: CliWorkerCheck): CliWorkerFreeChe
 export class CliWorkerDetection {
   private readonly cache = new Map<CliWorkerProviderId, CacheEntry>();
   private readonly testing = new Set<CliWorkerProviderId>();
+  /** Every process session open now (a check's or a Test's), so a shutdown can stop them. */
+  private readonly sessions = new Set<CliWorkerProcessSession>();
+  private readonly running = new Set<Promise<unknown>>();
+  private closing = false;
 
   constructor(private readonly options: CliWorkerDetectionOptions) {}
 
@@ -267,6 +280,27 @@ export class CliWorkerDetection {
 
   /** One CLI's free check (§3.2), uncached. CW4's Build-start check calls this. */
   readonly check: CliWorkerCheckFunction = async (providerId, options = {}) => {
+    if (this.closing) {
+      return { providerId, displayName: CLI_WORKER_DISPLAY_NAMES[providerId], checkedAt: new Date(this.now()).toISOString(),
+        status: "unknown", code: "probe_failed", reason: "AIBoard is shutting down, so the CLI was not checked." };
+    }
+    return await this.during(this.runCheck(providerId, options));
+  };
+
+  /**
+   * Counts `work` as running until it settles, so the Runner's shutdown waits for it. The routes run a whole Test
+   * request through it, answer included, so a shutdown's own answer reaches the client before the server closes.
+   */
+  async during<T>(work: Promise<T>): Promise<T> {
+    this.running.add(work);
+    try {
+      return await work;
+    } finally {
+      this.running.delete(work);
+    }
+  }
+
+  private async runCheck(providerId: CliWorkerProviderId, options: CliWorkerCheckOptions): Promise<CliWorkerCheck> {
     const checkedAt = new Date(this.now()).toISOString();
     const base = { providerId, displayName: CLI_WORKER_DISPLAY_NAMES[providerId], checkedAt };
     const platformRefusal = cliWorkerPlatformRefusal(providerId, this.platform);
@@ -274,8 +308,8 @@ export class CliWorkerDetection {
     const rootRefusal = this.isRoot() ? cliWorkerRootRefusal(providerId) : undefined;
     if (rootRefusal) return { ...base, status: "refused", code: "root_refused", reason: rootRefusal };
 
-    const unavailable = (code: CliWorkerCheckCode, reason: string, extra: Partial<CliWorkerCheck> = {}): CliWorkerCheck =>
-      ({ ...base, ...extra, status: "unavailable", code, reason, failure: { kind: "authentication", message: reason } });
+    const unavailable = (code: CliWorkerCheckCode, reason: string, extra: Partial<CliWorkerCheck> = {}, kind: ProviderFailure["kind"] = "authentication"): CliWorkerCheck =>
+      ({ ...base, ...extra, status: "unavailable", code, reason, failure: { kind, message: reason } });
 
     await mkdir(this.lookupFolder, { recursive: true, mode: 0o700 });
     const resolved = await resolveCliExecutable({
@@ -297,7 +331,9 @@ export class CliWorkerDetection {
     const executable = { path: resolved.path, source: resolved.source, form: resolved.form };
 
     if (this.platform === "win32" && (await this.options.windowsJobContainment?.()) !== "verified") {
-      return unavailable("job_containment_unavailable", `This PC can't run ${name} as a worker: Windows did not pass AIBoard's check that a Job object holds a CLI and everything it starts.`, { executable });
+      // A fact of this host, not the CLI's login: `provider_unavailable` marks it unhealthy with a 5-minute cooldown
+      // (CW4 checks again at each Build start and resume), never the 24 h cooldown of `authentication`.
+      return unavailable("job_containment_unavailable", `This PC can't run ${name} as a worker: Windows did not pass AIBoard's check that a Job object holds a CLI and everything it starts.`, { executable }, "provider_unavailable");
     }
 
     if (executable.form === "cmd") {
@@ -306,7 +342,7 @@ export class CliWorkerDetection {
     }
 
     return await this.probe(providerId, executable, base);
-  };
+  }
 
   /** `POST /v2/cli-workers/<providerId>/test` (§3.4). The caller ends the provider's cooldowns on `passed`. */
   async test(providerId: CliWorkerProviderId, request: CliWorkerTestRequest): Promise<CliWorkerTestResult> {
@@ -314,10 +350,11 @@ export class CliWorkerDetection {
       throw new TypeError("model must be null (the CLI default) or a model id of A-Z a-z 0-9 . _ : / -.");
     if (request.reasoningEffort !== undefined && !isCliArgumentValue(request.reasoningEffort))
       throw new TypeError("reasoningEffort must be A-Z a-z 0-9 . _ : / -.");
+    if (this.closing) throw new CliWorkerShutdownError();
     if (this.testing.has(providerId)) throw new CliWorkerTestBusyError(providerId);
     this.testing.add(providerId);
     try {
-      return await this.runTest(providerId, request);
+      return await this.during(this.runTest(providerId, request));
     } finally {
       this.testing.delete(providerId);
       // The Test may have changed what the checks find (a login it reported, say). A check still running is kept, so
@@ -325,6 +362,19 @@ export class CliWorkerDetection {
       const cached = this.cache.get(providerId);
       if (cached) cached.stale = true;
     }
+  }
+
+  /**
+   * The Runner's shutdown, before the execution host closes: no new Test starts, every open check and Test session is
+   * stopped (each stop is still proven or not, as always), and what was running settles. A Test it interrupts answers
+   * `runner_shutting_down` and saves nothing, unless its stop could not be proven: that is saved as `timed_out` with
+   * its folder kept, as always.
+   */
+  async close(): Promise<void> {
+    this.closing = true;
+    for (const session of [...this.sessions]) void session.close().catch(() => undefined);
+    // What `during` adds while this waits (a Test's answer after its run) is waited for too.
+    while (this.running.size > 0) await Promise.allSettled([...this.running]);
   }
 
   /**
@@ -400,6 +450,9 @@ export class CliWorkerDetection {
     } catch (error) {
       return failed(`${name}'s checks could not start: ${errorText(error)}`);
     }
+    this.sessions.add(session);
+    // A shutdown that began while this session was opening has already gone through the open sessions.
+    if (this.closing) void session.close().catch(() => undefined);
     const runs = new Map<string, Promise<CliProbeOutput>>();
     const probe = (args: readonly string[]): Promise<CliProbeOutput> => {
       const key = JSON.stringify(args);
@@ -437,6 +490,7 @@ export class CliWorkerDetection {
     // Every probe's stop is proven before anything they printed is used (a timed-out probe is stopped here too).
     try {
       await session.close();
+      this.sessions.delete(session);
     } catch {
       return failed(`${name}'s check processes could not be proven stopped, so AIBoard does not trust their output.`);
     }
@@ -496,6 +550,7 @@ export class CliWorkerDetection {
     };
 
     // Outcomes the free checks already decide, without a launch.
+    if (this.closing) throw new CliWorkerShutdownError();
     if (check.status === "refused" || (check.code && check.code.startsWith("cmd_")) || check.code === "executable_refused" || check.code === "job_containment_unavailable")
       throw new CliWorkerTestRefusedError(check);
     if (check.code === "not_installed") return await saved("not_installed", check.reason);
@@ -532,10 +587,17 @@ export class CliWorkerDetection {
       }
       if (adapter.schemaDelivery === "file") await writeFile(schemaPath, cliWorkerResultSchemaJson(), { mode: 0o600 });
 
+      if (this.closing) throw new CliWorkerShutdownError();
       const session = await this.options.processes.open({ purpose: "test", workingDirectory: work });
       keepFolder = true;
+      this.sessions.add(session);
+      // A shutdown that began while this session was opening has already gone through the open sessions.
+      if (this.closing) void session.close().catch(() => undefined);
       const run = await this.runTestProcess(session, providerId, check.executable.path, args, outputPath);
       keepFolder = !run.stopVerified;
+      if (run.stopVerified) this.sessions.delete(session);
+      // A shutdown stopped the CLI under the Test: whatever it printed or how it ended is not its outcome.
+      if (this.closing && run.stopVerified) throw new CliWorkerShutdownError();
       // A start or read that failed, after the stop was proven: the folder goes, and the Test is saved as a CLI that
       // could not be used (the outcomes have no "could not start"; the message says what happened). The process
       // host's own error may speak of cleanup it has since proven, so it is only logged.

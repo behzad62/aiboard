@@ -410,6 +410,7 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       windowsBatchArgv: async () => (await executionHost.windowsProcessFacts?.())?.windowsBatchArgv,
       windowsJobContainment: async () => (await executionHost.windowsProcessFacts?.())?.jobContainment,
     });
+    resources.cliWorkers = cliWorkerDetection;
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,

@@ -13,6 +13,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
 import { createExecutionHostCliWorkerProcesses } from "../src/cli-worker-processes.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
@@ -64,7 +65,13 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
   }, `${name}.json`);
   let scenario = scenarioFor("passing", { stdout: cliFixture("claude-code/success.windows.stdout.json") });
   const capabilitiesConfig = emptyRunnerCapabilitiesConfig();
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS });
+  // The shared Job host as the Runner makes it, keeping spares warm (runner-start.ts): a check or Test must never wake one.
+  const sharedJobHost = createWindowsJobProcessHost({
+    stateDirectory: join(state, "managed-processes-job-host"),
+    platform: process.platform === "win32" ? "win32" : "linux",
+    spare: { keepWarm: true, idleTimeoutMs: 60_000, maxSpares: 4 },
+  });
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), windowsJobHost: sharedJobHost, ...PROCESS_HOST_FACTS });
   try {
     // The passing Test ends on its result event, so its deadline is only a bound; the hanging one waits it out.
     const detection = (testTimeoutMs: number) => new CliWorkerDetection({
@@ -110,6 +117,7 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
 
     // Checks and Tests leave no history: each binding's run root and process records went with it after its proven
     // stop, so the shared record store (bounded at 4096 records, which every Build's processes share) gains nothing.
+    assert.deepEqual(sharedJobHost.spareStats?.(), { prestarts: 0, claims: 0, fallbacks: 0 }, "no check or Test woke a spare of the shared Job host");
     const listed = (folder: string) => (existsSync(folder) ? readdirSync(folder) : []);
     assert.deepEqual(listed(join(state, "transient-runs")), [], "every transient run folder was removed");
     assert.deepEqual(listed(join(state, "builds")).filter((name) => name.includes("cli-worker")), [], "no run root under builds/");

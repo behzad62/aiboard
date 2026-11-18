@@ -30,7 +30,9 @@ const privateOwners = new Set([
   "encrypted-provider-config-store.ts",
   // Reviewed again 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw3.md): a transient binding (CLI
   // worker checks and Tests) mkdirs <state>/transient-runs/<runId> for its run root, private record store, private
-  // Job host and artifacts, and removes exactly that folder only after the binding's close proved every process stopped.
+  // Job host and artifacts, and removes exactly that folder only after the binding's close proved every process stopped
+  // (or after a construction that rolled back completely, which started nothing). It waits for the private Job host's
+  // supervisors to exit first; a removal that still fails empties the folder's files (truncate) and names any it can't.
   "execution-host.ts", "execution-isolation-provider.ts",
   "final-verification-cleanup.ts", "final-verification-port-authority.ts", "final-verification-profile.ts",
   "git-baseline.ts", "git-bootstrap.ts", "git-preflight.ts", "integration-manager.ts", "managed-process-record.ts",

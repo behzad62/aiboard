@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { recordTempCreation, type TempRecordSink } from "./cleanup-ownership.js";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -351,7 +351,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
               // Its own Job host, as historical Git inspection has: the shared one keeps every released process's
               // record and output logs for good, and a CLI's checks print account fields. No spares: a check or
               // Test never prestarts a Job-host pair, and never takes a running Build's spare slot.
-              windowsJobHost: createWindowsJobProcessHost({ stateDirectory: join(root, "job-host"), platform: platform === "windows" ? "win32" : "linux" }),
+              windowsJobHost: createWindowsJobProcessHost({ stateDirectory: join(root, "job-host"), platform: platform === "windows" ? "win32" : "linux",
+                helperFallbackWarningKey: join(stateDirectory, "transient-runs") }),
             };
           } catch (error) {
             await rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -580,24 +581,66 @@ interface TransientRunState {
  * A folder that cannot be removed (a handle Windows held a moment longer) is logged and left: the stop stands.
  */
 function transientRunBinding(binding: ExecutionHostRunBinding, state: TransientRunState): ExecutionHostRunBinding {
+  // One close at a time: the session's close and the host's own may meet. A close that failed may be tried again.
+  let closing: Promise<void> | undefined;
   return Object.freeze({
     ...binding,
-    async close() {
-      await binding.close();
-      await releaseTransientRunState(state);
+    close() {
+      closing ??= (async () => {
+        await binding.close();
+        await releaseTransientRunState(state);
+      })().catch((error: unknown) => {
+        closing = undefined;
+        throw error;
+      });
+      return closing;
     },
   });
 }
 
+/**
+ * How long a transient run's removal waits for its private Job host's supervisors to exit after the proven stop. A
+ * released process's supervisor reports the stop, then exits, holding its output logs until it does. Measured on an
+ * idle Windows PC (cli-worker-processes.test.ts, 3 runs, 12 sessions, 1 or 2 supervisors each): every supervisor had
+ * already exited when the wait began, so it took 0 ms. GitHub's Windows image ran the same test about 3 times slower.
+ * The wait polls every 25 ms and ends as soon as they are gone, so the ceiling only bounds a host loaded far past that.
+ */
+const TRANSIENT_SUPERVISOR_EXIT_CEILING_MS = 15_000;
+
 async function releaseTransientRunState(state: TransientRunState): Promise<void> {
   await state.managedProcesses.close();
+  const alive = await state.windowsJobHost.awaitSupervisorsExited?.(TRANSIENT_SUPERVISOR_EXIT_CEILING_MS) ?? [];
   try {
-    // A stopped supervisor exits just after it reports the stop, so Windows may hold its output log open for a moment;
-    // the logs can hold what a CLI printed (account fields from `auth status`), so the removal retries briefly.
     await rm(state.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    return;
   } catch (error) {
-    console.warn(`[runner] a transient run's folder could not be removed (${state.root}): ${error instanceof Error ? error.message : String(error)}`);
+    // The folder stays. What a CLI printed (account fields from `auth status`) must not stay with it unnoticed: every
+    // file that can hold its output is cleared, and what could not be is named.
+    const kept = await clearTransientRunFiles(state.root);
+    console.warn(`[runner] a transient run's folder could not be removed (${state.root}${alive.length > 0 ? `; supervisor processes ${alive.join(", ")} were still running` : ""}): ${error instanceof Error ? error.message : String(error)}. `
+      + (kept.length === 0 ? "Every file in it was cleared." : `These files could not be cleared and may hold a CLI's output: ${kept.join(", ")}`));
   }
+}
+
+/** Empties, then removes, every file under a transient run's folder; returns the files that could be neither. */
+async function clearTransientRunFiles(root: string): Promise<string[]> {
+  const kept: string[] = [];
+  const walk = async (folder: string): Promise<void> => {
+    let entries;
+    try { entries = await readdir(folder, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const path = join(folder, entry.name);
+      if (entry.isDirectory()) { await walk(path); continue; }
+      if (!entry.isFile()) continue;
+      let cleared = false;
+      // A hard link's target is emptied too, so only a file with one link is truncated (the CLI runs unsandboxed).
+      try { if ((await stat(path)).nlink === 1) { await truncate(path, 0); cleared = true; } } catch { /* held without share-write */ }
+      try { await rm(path, { force: true }); cleared = true; } catch { /* held open */ }
+      if (!cleared) kept.push(path);
+    }
+  };
+  await walk(root);
+  return kept;
 }
 
 interface CreateRunBindingInput {

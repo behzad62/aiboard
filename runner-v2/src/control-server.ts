@@ -67,7 +67,7 @@ import { catalogVersion } from "./generated/model-catalog.js";
 import { snapshotProvider } from "./home-model-policy.js";
 import { loadStoredProviderConfigs, PushedConfigError, resolvePushedConfig, takesKeyFromHome } from "./home-provider-configs.js";
 import { MANUAL_PROXY_PRINCIPAL, type ModelProxy } from "./model-proxy.js";
-import { CliWorkerTestBusyError, CliWorkerTestRefusedError, type CliWorkerDetection } from "./cli-worker-detection.js";
+import { CliWorkerShutdownError, CliWorkerTestBusyError, CliWorkerTestRefusedError, type CliWorkerDetection } from "./cli-worker-detection.js";
 import { isCliWorkerProviderId } from "./cli-worker-config.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -108,7 +108,7 @@ export interface ControlServerOptions {
   /** VF7b: `/v2/browser` (installed browsers) and `POST /v2/browser/install`, the Settings > Tools button. */
   browserInstall?: BrowserInstallService;
   /** CLI workers CW3: `GET /v2/cli-workers` (the free checks) and `POST /v2/cli-workers/<providerId>/test`. */
-  cliWorkers?: Pick<CliWorkerDetection, "list" | "test">;
+  cliWorkers?: Pick<CliWorkerDetection, "list" | "test" | "during">;
 }
 
 export interface RunBootstrapInput {
@@ -284,7 +284,7 @@ export class ControlServer {
   private readonly home?: AiboardHomeLocation;
   private readonly modelProxy?: ModelProxy;
   private readonly browserInstall?: BrowserInstallService;
-  private readonly cliWorkers?: Pick<CliWorkerDetection, "list" | "test">;
+  private readonly cliWorkers?: Pick<CliWorkerDetection, "list" | "test" | "during">;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -1638,30 +1638,38 @@ export class ControlServer {
       assertExactBodyKeys(body, "reasoningEffort" in record ? ["model", "reasoningEffort"] : ["model"]);
       if (record.model !== null && typeof record.model !== "string") invalidBody();
       if (record.reasoningEffort !== undefined && typeof record.reasoningEffort !== "string") invalidBody();
-      let result;
-      try {
-        result = await cliWorkers.test(providerId, {
-          model: record.model as string | null,
-          ...(record.reasoningEffort !== undefined ? { reasoningEffort: record.reasoningEffort as string } : {}),
-        });
-      } catch (error) {
-        if (error instanceof CliWorkerTestRefusedError) {
-          sendJson(response, 409, { code: error.code, error: error.message, check: error.check });
-          return;
-        }
-        if (error instanceof CliWorkerTestBusyError) throw new HttpError(409, error.code, error.message);
-        if (error instanceof TypeError) throw new HttpError(400, "invalid_body", error.message);
-        throw error;
-      }
-      let endedCooldownIn: string[] = [];
-      if (result.lastTest.outcome === "passed" && this.builds?.providerTestPassed) {
+      // The whole request, answer included, counts as running for the Runner's shutdown (CliWorkerDetection.close).
+      await cliWorkers.during((async () => {
+        let result;
         try {
-          endedCooldownIn = await this.builds.providerTestPassed(providerId);
+          result = await cliWorkers.test(providerId, {
+            model: record.model as string | null,
+            ...(record.reasoningEffort !== undefined ? { reasoningEffort: record.reasoningEffort as string } : {}),
+          });
         } catch (error) {
-          console.warn(`[runner] a passing ${providerId} test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+          if (error instanceof CliWorkerTestRefusedError) {
+            sendJson(response, 409, { code: error.code, error: error.message, check: error.check });
+            return;
+          }
+          if (error instanceof CliWorkerTestBusyError) throw new HttpError(409, error.code, error.message);
+          // Answered here, inside `during`, so the shutdown waits for this answer before the server closes.
+          if (error instanceof CliWorkerShutdownError) {
+            sendJson(response, 503, { error: error.message, code: error.code });
+            return;
+          }
+          if (error instanceof TypeError) throw new HttpError(400, "invalid_body", error.message);
+          throw error;
         }
-      }
-      sendJson(response, 200, { ...result, endedCooldownIn });
+        let endedCooldownIn: string[] = [];
+        if (result.lastTest.outcome === "passed" && this.builds?.providerTestPassed) {
+          try {
+            endedCooldownIn = await this.builds.providerTestPassed(providerId);
+          } catch (error) {
+            console.warn(`[runner] a passing ${providerId} test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+          }
+        }
+        sendJson(response, 200, { ...result, endedCooldownIn });
+      })());
       return;
     }
     throw new HttpError(404, "not_found", "Unknown CLI workers endpoint.");
