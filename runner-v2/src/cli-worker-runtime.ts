@@ -180,6 +180,9 @@ export type CliCheckRerunner = (input: {
  * home commands refuse any depth of 1 or more). Composed into the run binding's per-owner environment
  * (child-environment.ts).
  */
+/** CW8: set to "1" for every process of a CLI worker's owner (playwright-cli-guard.mjs startInstructionFor). */
+export const CLI_WORKER_MARKER_ENV = "AIBOARD_CLI_WORKER";
+
 export class CliWorkerOwners {
   private readonly owners = new Set<string>();
 
@@ -187,9 +190,11 @@ export class CliWorkerOwners {
   release(owner: Pick<CliWorkerOwner, "runId" | "sessionId">): void { this.owners.delete(ownerKey(owner)); }
   has(owner: Pick<CliWorkerOwner, "runId" | "sessionId">): boolean { return this.owners.has(ownerKey(owner)); }
 
+  // CW8: AIBOARD_CLI_WORKER marks the owner's processes for playwright-cli-guard.mjs, whose "start a session with
+  // process.start" instruction a CLI cannot follow; it is a plain marker, never a secret or an MCP setting.
   readonly environmentFor = (owner: { readonly runId: string; readonly sessionId: string }): RunnerProcessEnvironment | undefined =>
     this.owners.has(ownerKey(owner))
-      ? Object.freeze({ values: Object.freeze({}), pathPrepend: Object.freeze([]), mcpDepth: LOCAL_MCP_DEPTH_LIMIT })
+      ? Object.freeze({ values: Object.freeze({ [CLI_WORKER_MARKER_ENV]: "1" }), pathPrepend: Object.freeze([]), mcpDepth: LOCAL_MCP_DEPTH_LIMIT })
       : undefined;
 }
 

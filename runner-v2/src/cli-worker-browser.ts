@@ -71,6 +71,10 @@ export function cliBrowserStartedNote(skillPath: string): string {
 export const CLI_NO_BROWSER_NOTE =
   "No browser is available for this task: this machine has no browser the Playwright CLI can use, so do not browse or install one; put any browser check in notRun with that reason.";
 
+/** The preamble's line when the run browses with no Playwright CLI at all (no session is started). */
+export const CLI_NO_BROWSING_NOTE =
+  "No browser is available in this run: AIBoard does not browse for it, so do not browse with your own tools or install a browser; put any browser check in notRun with that reason.";
+
 /**
  * Production: the owner's session through `ManagedProcessService`, as a final check and the CLI launch do, with one
  * grant per call. `checkAfterStop` and `escapedPids` are the owner folder's fresh check and its known escapes.
@@ -104,9 +108,9 @@ export function createManagedCliBrowserSessions(options: {
   return Object.freeze({
     async start(owner: CliWorkerOwner, input: { workspacePath: string; signal?: AbortSignal }) {
       const browser = options.runs.browserFor(owner.runId);
-      // A run that does not browse through the Playwright CLI gets nothing; one whose inventory found no browser gets
-      // no session and a line saying so (CWD-2).
-      if (browser === undefined) return { status: "none" as const };
+      // No session when the run does not browse through the Playwright CLI, or its inventory found no browser (CWD-2);
+      // either way the CLI is told so, so it does not browse with its own tools.
+      if (browser === undefined) return { status: "none" as const, note: CLI_NO_BROWSING_NOTE };
       if (browser === null) return { status: "none" as const, note: CLI_NO_BROWSER_NOTE };
       let processId: string;
       try {

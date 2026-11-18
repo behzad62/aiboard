@@ -20,7 +20,7 @@ import { join } from "node:path";
 import test, { describe, type TestContext } from "node:test";
 
 import { composeRunnerProcessEnvironments } from "../src/child-environment.js";
-import { CLI_BROWSER_SESSION_READY_WAIT_MS, CLI_NO_BROWSER_NOTE, createManagedCliBrowserSessions, isPlaywrightCliCheck } from "../src/cli-worker-browser.js";
+import { CLI_BROWSER_SESSION_READY_WAIT_MS, CLI_NO_BROWSER_NOTE, CLI_NO_BROWSING_NOTE, createManagedCliBrowserSessions, isPlaywrightCliCheck } from "../src/cli-worker-browser.js";
 import { createManagedCliProcessLauncher, runCliWorkerAttempt, type CliCheckRerunner, type CliWorkerHostFacts } from "../src/cli-worker-runtime.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
 import { createExecutionHost } from "../src/execution-host.js";
@@ -119,23 +119,26 @@ interface Fixture {
 }
 
 /**
- * Runs `body` with a fixture, and closes the run's binding and the host before the harness removes its folder. A
- * Windows host that cannot hold a Job refuses every CLI launch (cli-worker-runtime-runs.test.ts checks that); one
- * whose batch-argv fact is not verified refuses the `.cmd` session shim, so a test that needs a session skips there
- * (the probe can read `unavailable` on a loaded host).
+ * The host's process facts on Windows, injected as cli-worker-runtime-runs.test.ts does: the probe alone takes many
+ * seconds there and can read `unavailable` on a loaded host, which skipped this file on Windows CI (job 134968866527).
+ * They name the Job as the only backend, with no portable fallback, so a Job that does not hold the session's
+ * daemon fails this file instead of passing on a fallback; GitHub's Windows image verifies Job containment. The batch
+ * argv fact lets the `.cmd` session shim run: the shims' arguments are plain words, which cmd.exe passes as they are.
  */
-async function withFixture(t: TestContext, label: string, browser: "chromium" | null, needsSession: boolean, body: (f: Fixture) => Promise<void>): Promise<void> {
+const WINDOWS_HOST_FACTS = { portableDuplex: "unavailable", windowsBatchArgv: "verified", exactTreeBirth: "verified", jobContainment: "verified" } as const;
+
+/** Runs `body` with a fixture, and closes the run's binding and the host before the harness removes its folder. */
+async function withFixture(t: TestContext, label: string, browser: "chromium" | null, body: (f: Fixture) => Promise<void>): Promise<void> {
   const h = await harness(t, label);
   let close: (() => Promise<void>) | undefined;
   try {
-    const f = await fixture(t, h, browser, needsSession, (closer) => { close = closer; });
-    if (f) await body(f);
+    await body(await fixture(h, browser, (closer) => { close = closer; }));
   } finally {
     await close?.();
   }
 }
 
-async function fixture(t: TestContext, h: Harness, browser: "chromium" | null, needsSession: boolean, onClose: (close: () => Promise<void>) => void): Promise<Fixture | undefined> {
+async function fixture(h: Harness, browser: "chromium" | null, onClose: (close: () => Promise<void>) => void): Promise<Fixture> {
   const standIn = join(h.root, "pw-standin");
   mkdirSync(standIn);
   writeFileSync(join(standIn, "daemon.mjs"), DAEMON);
@@ -148,7 +151,8 @@ async function fixture(t: TestContext, h: Harness, browser: "chromium" | null, n
   sessions.configureRun(RUN, { browser });
   const scenarioPath = join(h.root, "fake", "browser-scenario.json");
   const ambient = { ...snapshotNativeBuildAmbientEnvironment(), [FAKE_CLI_SCENARIO_ENV]: scenarioPath, AIBOARD_STANDIN_LOG: log };
-  const host = createExecutionHost({ projectRoot: h.project, stateDirectory: h.state, artifacts: h.artifacts, ambientEnvironment: ambient });
+  const host = createExecutionHost({ projectRoot: h.project, stateDirectory: h.state, artifacts: h.artifacts, ambientEnvironment: ambient,
+    ...(ON_WINDOWS ? { processHostFacts: WINDOWS_HOST_FACTS } : {}) });
   const run = await host.bindRun({
     runId: RUN, permissionProfile: "full", capabilityContract: { digest: "d".repeat(64) } as RunnerCapabilityContract,
     capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
@@ -160,12 +164,8 @@ async function fixture(t: TestContext, h: Harness, browser: "chromium" | null, n
   let hostFacts: CliWorkerHostFacts = { platform: process.platform, isRoot: false };
   if (ON_WINDOWS) {
     const facts = await host.windowsProcessFacts?.();
-    // A Windows host that cannot hold a Job refuses every CLI launch (cli-worker-runtime-runs.test.ts checks that).
-    if (facts?.jobContainment !== "verified" || (needsSession && facts.windowsBatchArgv !== "verified")) {
-      t.skip(`this Windows host cannot run this case (Job containment ${facts?.jobContainment}, batch argv ${facts?.windowsBatchArgv})`);
-      return undefined;
-    }
-    hostFacts = { ...WINDOWS, jobContainment: facts.jobContainment, windowsBatchArgv: facts.windowsBatchArgv };
+    assert.deepEqual(facts, WINDOWS_HOST_FACTS, "the injected facts reach the launches");
+    hostFacts = { ...WINDOWS, jobContainment: WINDOWS_HOST_FACTS.jobContainment, windowsBatchArgv: WINDOWS_HOST_FACTS.windowsBatchArgv };
   }
   const launcher = createManagedCliProcessLauncher({ managedProcesses: run.managedProcesses, executionGrants: run.executionGrants, permissionProfile: "full" });
   const browserSessions = createManagedCliBrowserSessions({
@@ -228,14 +228,23 @@ async function fixture(t: TestContext, h: Harness, browser: "chromium" | null, n
 
 /**
  * Whether the stand-in daemon with this PID still runs: the PID answers and its command line still names the stand-in
- * daemon (Windows reuses PIDs within seconds on a busy host, so a PID alone proves nothing). Read by PID only.
+ * daemon (Windows reuses PIDs within seconds on a busy host, so a PID alone proves nothing). Read by PID only. A
+ * command line that cannot be read counts as alive, so the check never passes by not looking.
  */
 function daemonAlive(pid: number): boolean {
   try { process.kill(pid, 0); } catch { return false; }
   const command = ON_WINDOWS
-    ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: "utf8", windowsHide: true }).stdout
-    : (() => { try { return readFileSync(`/proc/${pid}/cmdline`, "utf8"); } catch { return ""; } })();
-  return /pw-standin[\\/]daemon\.mjs/.test(command ?? "");
+    ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: "utf8", windowsHide: true })
+    : process.platform === "linux"
+      ? (() => { try { return { status: 0, stdout: readFileSync(`/proc/${pid}/cmdline`, "utf8") }; } catch { return { status: 1, stdout: "" }; } })()
+      // macOS has no /proc.
+      : spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" });
+  // ps exits 1 for a PID that is gone between the two reads.
+  if (command.status !== 0) {
+    try { process.kill(pid, 0); } catch { return false; }
+    return true;
+  }
+  return /pw-standin[\\/]daemon\.mjs/.test(command.stdout ?? "");
 }
 
 function browserChecks(extra: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
@@ -252,7 +261,7 @@ function done(checks: Array<Record<string, unknown>>): Record<string, unknown> {
 
 // The two tests have their own harness, host and stand-ins, so they run side by side.
 describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, () => {
-  test("CW8: the fake CLI's playwright-cli reaches the owner's session, a re-run keeps its screenshot as evidence, a failed command fails its re-run, and no session is left", (t) => withFixture(t, "browse", "chromium", true, async (f) => {
+  test("CW8: the fake CLI's playwright-cli reaches the owner's session, a re-run keeps its screenshot as evidence, a failed command fails its re-run, and no session is left", (t) => withFixture(t, "browse", "chromium", async (f) => {
     const record = join(f.h.root, "fake", "browse.json");
     // A failed command: exit 1 in the CLI's run and in its re-run, so it supports nothing.
     const click = { label: "submit the form", executable: "playwright-cli", args: ["--json", "click", "e99"], cwd: null, outputs: null, criterionIds: ["value"] };
@@ -298,7 +307,7 @@ describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, 
     assert.deepEqual(await f.running(), []);
   }));
 
-  test("CW8: a session start that fails with the until.pattern wall ceiling is recorded and the CLI runs without a browser; with no browser recorded no session starts", (t) => withFixture(t, "wall-ceiling", "chromium", true, async (f) => {
+  test("CW8: a session start that fails with the until.pattern wall ceiling is recorded and the CLI runs without a browser; with no browser recorded no session starts", (t) => withFixture(t, "wall-ceiling", "chromium", async (f) => {
     // The busy host's failure, injected where the real one is thrown: the session's ready wait (managed-process-wait.ts).
     const readOutput = f.run.managedProcesses.readOutput.bind(f.run.managedProcesses);
     const start = f.run.managedProcesses.start.bind(f.run.managedProcesses);
@@ -360,4 +369,16 @@ describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, 
     assert.match(ran.runs?.[0]?.stderr ?? "", /is not open/);
     assert.deepEqual(await f.running(), []);
   }));
+});
+
+test("CW8: with no Playwright CLI in the run, or no browser in its inventory, no session starts and the CLI is told not to browse", async () => {
+  const untouched = new Proxy({}, { get: () => { throw new Error("no session is started"); } });
+  for (const [browserFor, note] of [[undefined, CLI_NO_BROWSING_NOTE], [null, CLI_NO_BROWSER_NOTE]] as const) {
+    const sessions = createManagedCliBrowserSessions({
+      managedProcesses: untouched as never, executionGrants: untouched as never, permissionProfile: "full", skillPath: playwrightCliSkillPath(),
+      runs: { browserFor: () => browserFor, checkOwnerBrowsers: async () => "none", knownEscapePids: () => [] },
+    });
+    assert.deepEqual(await sessions.start!({ runId: RUN, sessionId: SESSION } as never, { workspacePath: "." }), { status: "none", note });
+  }
+  assert.match(CLI_NO_BROWSING_NOTE, /do not browse with your own tools/);
 });

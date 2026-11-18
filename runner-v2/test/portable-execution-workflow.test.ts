@@ -75,8 +75,8 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
   // CW8: the CLI worker's browser session end to end through the real ExecutionHost (the Job or the process group),
-  // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side, about
-  // 9 s on Linux (Docker) and 23 s on a loaded Windows PC run alone (the host's fact probe and the harness's git setup).
+  // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side and one
+  // unit test, with the host's process facts injected on Windows; about 14 s on a loaded Windows PC run alone.
   "runner-v2/test/cli-worker-browser.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
