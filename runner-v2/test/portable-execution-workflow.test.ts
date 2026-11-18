@@ -81,10 +81,14 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
-  // A Job host start the launcher gives up on records its stop, so the run closes with it released, and a host killed
-  // between creating the root and resuming it leaves no process (stricter-only faults in the real Job host; Windows
-  // only, about 4 s on a Windows PC; the start-wait unit test runs on every host in milliseconds).
+  // A Job host start the launcher gives up on, or its call cancels, records its stop, so the run closes with its exact
+  // record released (also after its workload wrote, on a claimed spare and through one-shot process.run), and a host
+  // that dies between creating the root and resuming it leaves no process (stricter-only faults in the real Job host;
+  // Windows only, about 11 s on a Windows PC; the start-wait unit test runs on every host in milliseconds).
   "runner-v2/test/windows-job-start-abort.test.ts",
+  // CW7: failover across the CLI boundary and the handoff both ways, with the fake CLI as a child and a scripted API
+  // model (no real CLI, no prompt): 12 tests, the ten driver tests side by side as CW5's are: about 36 s run alone on Windows.
+  "runner-v2/test/cli-worker-handoff.test.ts",
   // CW8: the CLI worker's browser session end to end through the real ExecutionHost (the Job or the process group),
   // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side and one
   // unit test, with the host's process facts injected on Windows; about 14 s on a loaded Windows PC run alone.
