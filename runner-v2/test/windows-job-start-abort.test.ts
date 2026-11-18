@@ -63,7 +63,7 @@ function jobFolders(jobHost: string): JobFolder[] {
   });
 }
 
-test("the start wait ends at once when the supervisor is already gone or the call is cancelled, without waiting out its ceiling", async () => {
+test("the start wait ends at once when the supervisor is already gone or the call is cancelled, without waiting out its ceiling", { timeout: 30_000 }, async () => {
   const folder = join(ownRoot, "gone");
   mkdirSync(folder, { recursive: true });
   const statusPath = join(folder, "supervisor.jsonl");
@@ -227,14 +227,24 @@ test("one-shot process.run whose start failed keeps its exact record blocked for
   await assertAbortedStartSettled(ran, closeError, jobHost);
 });
 
-test("a host that dies right after it created the root inside the Job, before resuming it, leaves no process", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+test("a host that dies right after it created the root inside the Job, before resuming it, ends the start wait at its exit and leaves no process", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
   // Only the root's death is claimed here: the host that owned the Job died, so whether its stop is proven is not.
+  // The host's close reaches its supervisor 20 s late (the fault): the supervisor writes a terminal, unproven status at
+  // the host's exit, which ends the launcher's start wait; the launch's abort then waits for the recorded stop.
   const { value: observed } = await withRun("created", "host_exit_after_create", {}, async ({ invoke, jobHost }) => {
     const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
-    const created = jobFolders(jobHost).map((folder) => /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1]).find(Boolean);
-    return { result, pid: created ? Number(created) : 0 };
+    const folder = jobFolders(jobHost)[0];
+    const created = folder ? /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
+    const statuses = folder ? readFileSync(join(jobHost, folder.name, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line) as { status?: string; updatedAt?: string }) : [];
+    return { result, pid: created ? Number(created) : 0, statuses };
   });
+  assert.equal(observed.result.isError, true, JSON.stringify(observed.result.content));
   assert.ok(observed.pid > 0, `the host reported the root it created: ${JSON.stringify(observed.result.content)}`);
+  const at = (state: string) => Date.parse(observed.statuses.find((entry) => entry.status === state)?.updatedAt ?? "");
+  const listening = Date.parse(observed.statuses.findLast((entry) => entry.status === "starting")?.updatedAt ?? "");
+  assert.ok(at("exited_unknown") - listening < 10_000,
+    `the terminal, unproven status was written at the host's exit, not its late close: ${JSON.stringify(observed.statuses.map((entry) => [entry.status, entry.updatedAt]))}`);
   assert.ok(await waitUntil(() => !alive(observed.pid), 10_000), `the suspended root ${observed.pid} died with the host's Job`);
 });
 

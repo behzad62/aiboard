@@ -158,9 +158,9 @@ export interface WindowsJobChannelState {
  * Faults a test can inject into the Job host. Each only makes it stricter: slow_start_late_close makes the host take
  * longer to start than its launcher waits and delivers the host's close to its supervisor a second late, as on a
  * loaded host; late_started_line runs the workload but writes its started line 30 s late; host_exit_after_create
- * ends the host right after it created the root inside the Job, before it resumed it; assign_path_exit_after_create
- * takes the Assign path (as an app execution alias does) and ends the host after it
- * reported the suspended root's identity, before the Assign.
+ * ends the host right after it created the root inside the Job, before it resumed it, and delivers the host's close
+ * to its supervisor 20 s late; assign_path_exit_after_create takes the Assign path (as an app execution alias does)
+ * and ends the host after it reported the suspended root's identity, before the Assign.
  */
 export type WindowsJobInjectedLaunchFault = "slow_start_late_close" | "late_started_line" | "host_exit_after_create" | "assign_path_exit_after_create";
 export interface WindowsJobProcessHostOptions {
