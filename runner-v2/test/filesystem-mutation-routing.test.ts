@@ -80,6 +80,10 @@ const privateOwners = new Set([
   // state/pw/bin and the owner state folders state/pw/r-<hex>/t-<hex> (plus a POSIX <tmp>/aib-<hex> socket folder),
   // all derived from Runner ids, never model-selected.
   "playwright-cli.ts",
+  // Reviewed 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw5.md): a CLI worker session's folder
+  // state/cli-workers/<run>/<session> from Runner ids, holding the result schema, Codex's -o file (removed before each
+  // launch) and the Runner's exclusive (wx) digested result record of each CLI run.
+  "cli-worker-runtime.ts",
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.
 // Async open owners keep ["open"]; the sync report reader keeps ["openSync"].

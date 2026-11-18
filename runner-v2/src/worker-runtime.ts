@@ -86,6 +86,7 @@ import { requireGitRunner } from "./git-command.js";
 import {
   createSubmitTaskTool,
   createWorkerLifecycleTools,
+  type SubmitTaskInput,
 } from "./worker-lifecycle-tools.js";
 
 export interface RunWorkerTaskOptions {
@@ -340,131 +341,11 @@ export async function runWorkerTask(
   const validationBudgetMs = options.validationBudgetMs === undefined
     ? DEFAULT_VALIDATION_BUDGET_MS
     : parseValidationBudgetMs(options.validationBudgetMs);
-  broker.register(createSubmitTaskTool(async ({
-    summary,
-    unresolvedConcerns,
-    criterionEvidenceLinks,
-    validationScope,
-    validationBudgetJustification,
-  }) => {
-    if (
-      schedulerState(options)?.acceptanceContractStatus ===
-      "acceptance_contract_upgrade_required"
-    ) {
-      throw new Error(
-        "Task submission is blocked until the Architect upgrades the acceptance contract."
-      );
-    }
-    if (requireValidationScope && validationScope === undefined) {
-      throw new Error(
-        "Task submission requires a validationScope report on this run."
-      );
-    }
-    const validationBudget = options.budgetLedger
-      ? summarizeValidationBudget(options.budgetLedger, {
-          runId: options.runId,
-          taskId: options.taskId,
-          budgetMs: validationBudgetMs,
-        })
-      : undefined;
-    if (validationBudget?.overBudget) {
-      if (validationBudgetJustification === undefined) {
-        throw new Error(
-          "Task submission requires a validation-budget justification: measured validation time exceeds the advisory budget."
-        );
-      }
-      parseValidationBudgetJustification(validationBudgetJustification);
-    }
-    const evidenceRecords = options.evidenceStore
-      ? acceptanceCriteria
-        ? options.evidenceStore.getByIds({
-            runId: options.runId,
-            taskId: options.taskId,
-            ids: [...new Set((criterionEvidenceLinks ?? []).map((link) => link.evidenceId))],
-          })
-        : options.evidenceStore.list({
-            runId: options.runId,
-            taskId: options.taskId,
-            limit: 1_000,
-          })
-      : [];
-    const evidenceHashes = evidenceArtifactHashes(
-      evidenceRecords,
-      options.actorId,
-      attempt
-    );
-    if (!acceptanceCriteria && evidenceHashes.length === 0) {
-      throw new Error(
-        "Task submission requires durable evidence; record command or browser facts first."
-      );
-    }
-    const currentSubmissionProjection = schedulerState(options);
-    const scopeIdentity = currentSubmissionProjection ? captureSubmissionScopeIdentity(currentSubmissionProjection, {
-      runId: options.runId, taskId: options.taskId, attempt: attempt ?? 0, workerId: options.actorId, sessionId: options.sessionId,
-      workspacePath: options.workspace.path, baselineRevision: options.workspace.baselineRevision,
-    }) : undefined;
-    let commit: TaskCommit;
-    try {
-      commit = await options.workspaceManager.commitWorkspace(
-        options.workspace,
-        summary,
-        scopeIdentity ? async (candidateRevision) => {
-          await inspectSubmissionTree({ git: requireGitRunner(options.git?.lifecycle("inspection").run), workspacePath: options.workspace.path,
-            baselineRevision: options.workspace.baselineRevision, candidateRevision, claim: scopeIdentity.claim });
-        } : undefined,
-      );
-    } catch (error) {
-      if (!(error instanceof NoTaskChangesError)) throw error;
-      commit = {
-        runId: options.runId,
-        taskId: options.taskId,
-        revision: options.workspace.baselineRevision,
-        baselineRevision: options.workspace.baselineRevision,
-        commits: [],
-        changedPaths: [],
-      };
-    }
-    producedChangeSet = await createChangeSet({
-      ...(validationScope ? { validationScope } : {}),
-      ...(validationBudget?.overBudget && validationBudgetJustification !== undefined
-        ? {
-            validationBudget: {
-              summary: cloneValidationBudgetSummary(validationBudget),
-              justification: parseValidationBudgetJustification(validationBudgetJustification),
-            },
-          }
-        : {}),
-      ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
-      ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
-      ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
-      execute: options.git?.lifecycle("inspection").run,
-      workspacePath: options.workspace.path,
-      taskCommit: commit,
-      artifacts: options.artifacts,
-      ...(acceptanceCriteria
-        ? {
-            acceptanceCriteria,
-            ...(options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion) !== undefined
-              ? {
-                  acceptanceCriteriaVersion:
-                    options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion,
-                }
-              : {},
-            criterionEvidenceLinks,
-            evidenceRecords,
-            taskId: options.taskId,
-            attempt,
-            assignedWorkerId: options.actorId,
-          }
-        : { evidenceArtifactHashes: evidenceHashes }),
-      externalEffects: externalEffectReferences(
-        options.ledger.listRun(options.runId),
-        options.sessionId
-      ),
-      guidanceIds: taskGuidanceIds(options),
-      memoryIds: taskMemoryIds(options),
-      unresolvedConcerns,
-    });
+  const submission: WorkerSubmissionContext = {
+    options, acceptanceCriteria, attempt, taskContract, requireValidationScope, validationBudgetMs,
+  };
+  broker.register(createSubmitTaskTool(async (input) => {
+    producedChangeSet = await submitWorkerTask(submission, input);
     return producedChangeSet;
   }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined, requireValidationScope }));
   for (const tool of options.toolSurfaceProbe ?? []) broker.register(tool);
@@ -534,6 +415,176 @@ export async function runWorkerTask(
   return { loop, ...(producedChangeSet ? { changeSet: producedChangeSet } : {}) };
 }
 
+/**
+ * What the `submit_task` handler needs, fixed when the worker's attempt starts (CLI workers plan §3.5 step 8):
+ * the API worker's tool and the CLI worker's collect step submit through the same function.
+ */
+export type SubmitWorkerTaskOptions = Pick<RunWorkerTaskOptions,
+  "git" | "runId" | "sessionId" | "taskId" | "actorId" | "acceptanceCriteriaVersion" | "workspace" | "workspaceManager" |
+  "artifacts" | "ledger" | "schedulerStore" | "evidenceStore" | "budgetLedger" | "memoryStore" | "projectId">;
+
+export interface WorkerSubmissionContext {
+  options: SubmitWorkerTaskOptions;
+  acceptanceCriteria?: readonly AcceptanceCriterion[];
+  attempt?: number;
+  taskContract?: { acceptanceCriteriaVersion?: number };
+  requireValidationScope: boolean;
+  validationBudgetMs: number;
+}
+
+/** The submission context as runWorkerTask computes it at the start of an attempt. */
+export function workerSubmissionContext(
+  options: SubmitWorkerTaskOptions & Pick<RunWorkerTaskOptions, "acceptanceCriteria" | "attempt" | "validationBudgetMs">,
+): WorkerSubmissionContext {
+  const projection = schedulerState(options);
+  const taskContract = projection?.tasks[options.taskId];
+  return {
+    options,
+    acceptanceCriteria: options.acceptanceCriteria ?? taskContract?.acceptanceCriteria,
+    attempt: options.attempt ?? taskContract?.attempt,
+    taskContract,
+    requireValidationScope: projection?.validationScopePolicyVersion === 1,
+    validationBudgetMs: options.validationBudgetMs === undefined
+      ? DEFAULT_VALIDATION_BUDGET_MS
+      : parseValidationBudgetMs(options.validationBudgetMs),
+  };
+}
+
+/**
+ * The body of `submit_task`: the contract gate, the validation scope and budget, the evidence lookup, the guarded
+ * commit and the change set. The tool's input checks run before it; a refusal throws.
+ */
+export async function submitWorkerTask(
+  context: WorkerSubmissionContext,
+  {
+    summary,
+    unresolvedConcerns,
+    criterionEvidenceLinks,
+    validationScope,
+    validationBudgetJustification,
+  }: SubmitTaskInput,
+): Promise<ChangeSet> {
+  const { options, acceptanceCriteria, attempt, taskContract, requireValidationScope, validationBudgetMs } = context;
+  if (
+    schedulerState(options)?.acceptanceContractStatus ===
+    "acceptance_contract_upgrade_required"
+  ) {
+    throw new Error(
+      "Task submission is blocked until the Architect upgrades the acceptance contract."
+    );
+  }
+  if (requireValidationScope && validationScope === undefined) {
+    throw new Error(
+      "Task submission requires a validationScope report on this run."
+    );
+  }
+  const validationBudget = options.budgetLedger
+    ? summarizeValidationBudget(options.budgetLedger, {
+        runId: options.runId,
+        taskId: options.taskId,
+        budgetMs: validationBudgetMs,
+      })
+    : undefined;
+  if (validationBudget?.overBudget) {
+    if (validationBudgetJustification === undefined) {
+      throw new Error(
+        "Task submission requires a validation-budget justification: measured validation time exceeds the advisory budget."
+      );
+    }
+    parseValidationBudgetJustification(validationBudgetJustification);
+  }
+  const evidenceRecords = options.evidenceStore
+    ? acceptanceCriteria
+      ? options.evidenceStore.getByIds({
+          runId: options.runId,
+          taskId: options.taskId,
+          ids: [...new Set((criterionEvidenceLinks ?? []).map((link) => link.evidenceId))],
+        })
+      : options.evidenceStore.list({
+          runId: options.runId,
+          taskId: options.taskId,
+          limit: 1_000,
+        })
+    : [];
+  const evidenceHashes = evidenceArtifactHashes(
+    evidenceRecords,
+    options.actorId,
+    attempt
+  );
+  if (!acceptanceCriteria && evidenceHashes.length === 0) {
+    throw new Error(
+      "Task submission requires durable evidence; record command or browser facts first."
+    );
+  }
+  const currentSubmissionProjection = schedulerState(options);
+  const scopeIdentity = currentSubmissionProjection ? captureSubmissionScopeIdentity(currentSubmissionProjection, {
+    runId: options.runId, taskId: options.taskId, attempt: attempt ?? 0, workerId: options.actorId, sessionId: options.sessionId,
+    workspacePath: options.workspace.path, baselineRevision: options.workspace.baselineRevision,
+  }) : undefined;
+  let commit: TaskCommit;
+  try {
+    commit = await options.workspaceManager.commitWorkspace(
+      options.workspace,
+      summary,
+      scopeIdentity ? async (candidateRevision) => {
+        await inspectSubmissionTree({ git: requireGitRunner(options.git?.lifecycle("inspection").run), workspacePath: options.workspace.path,
+          baselineRevision: options.workspace.baselineRevision, candidateRevision, claim: scopeIdentity.claim });
+      } : undefined,
+    );
+  } catch (error) {
+    if (!(error instanceof NoTaskChangesError)) throw error;
+    commit = {
+      runId: options.runId,
+      taskId: options.taskId,
+      revision: options.workspace.baselineRevision,
+      baselineRevision: options.workspace.baselineRevision,
+      commits: [],
+      changedPaths: [],
+    };
+  }
+  return await createChangeSet({
+    ...(validationScope ? { validationScope } : {}),
+    ...(validationBudget?.overBudget && validationBudgetJustification !== undefined
+      ? {
+          validationBudget: {
+            summary: cloneValidationBudgetSummary(validationBudget),
+            justification: parseValidationBudgetJustification(validationBudgetJustification),
+          },
+        }
+      : {}),
+    ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
+    ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
+    ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
+    execute: options.git?.lifecycle("inspection").run,
+    workspacePath: options.workspace.path,
+    taskCommit: commit,
+    artifacts: options.artifacts,
+    ...(acceptanceCriteria
+      ? {
+          acceptanceCriteria,
+          ...(options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion) !== undefined
+            ? {
+                acceptanceCriteriaVersion:
+                  options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion,
+              }
+            : {},
+          criterionEvidenceLinks,
+          evidenceRecords,
+          taskId: options.taskId,
+          attempt,
+          assignedWorkerId: options.actorId,
+        }
+      : { evidenceArtifactHashes: evidenceHashes }),
+    externalEffects: externalEffectReferences(
+      options.ledger.listRun(options.runId),
+      options.sessionId
+    ),
+    guidanceIds: taskGuidanceIds(options),
+    memoryIds: taskMemoryIds(options),
+    unresolvedConcerns,
+  });
+}
+
 export function externalEffectReferences(
   events: readonly ToolLedgerEvent[],
   sessionId: string
@@ -568,7 +619,7 @@ export function externalEffectReferences(
   return effects;
 }
 
-function taskGuidanceIds(options: RunWorkerTaskOptions): string[] {
+function taskGuidanceIds(options: Pick<RunWorkerTaskOptions, "schedulerStore" | "runId" | "taskId">): string[] {
   if (!options.schedulerStore) return [];
   const projection = rebuildSchedulerProjection(
     options.schedulerStore.readRun(options.runId)
@@ -578,7 +629,7 @@ function taskGuidanceIds(options: RunWorkerTaskOptions): string[] {
     .map((guidance) => guidance.requestId);
 }
 
-function taskMemoryIds(options: RunWorkerTaskOptions): string[] {
+function taskMemoryIds(options: Pick<RunWorkerTaskOptions, "memoryStore" | "projectId" | "runId" | "taskId">): string[] {
   if (!options.memoryStore || !options.projectId) return [];
   return [...rebuildProjectMemories(
     options.memoryStore.events(options.projectId)
@@ -615,7 +666,7 @@ function evidenceArtifactHashes(
   ];
 }
 
-function schedulerState(options: RunWorkerTaskOptions) {
+function schedulerState(options: Pick<RunWorkerTaskOptions, "schedulerStore" | "runId">) {
   if (!options.schedulerStore) return undefined;
   const events = options.schedulerStore.readRun(options.runId);
   if (events.length === 0) return undefined;

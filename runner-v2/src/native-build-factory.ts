@@ -254,7 +254,10 @@ import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
 import { verifyHandoffSnapshotDigest } from "./handoff-snapshot.js";
-import { createChildEnvironmentFactory } from "./child-environment.js";
+import { composeRunnerProcessEnvironments, createChildEnvironmentFactory } from "./child-environment.js";
+import { resolveCliExecutable } from "./cli-worker-adapters.js";
+import { cliAttemptLimitMinutes, CLI_DEFAULT_MODEL_ID, isCliWorkerProviderId, type CliWorkerProviderId, type HomeCliWorkersV1 } from "./cli-worker-config.js";
+import { CliWorkerOwners, createManagedCliProcessLauncher, type CliWorkerRuntimeConfig } from "./cli-worker-runtime.js";
 import {
   createExecutionGrantAuthority,
   type ExecutionGrantAuthority,
@@ -425,8 +428,13 @@ export interface NativeBuildFactoryOptions {
    * planning and after each resume. Absent, a crew's CLIs are recorded as `unchecked`.
    */
   cliWorkerFreeChecks?: CliWorkerFreeChecks;
-  /** Test seam for the CLI crew rules: the OS, root, and the Windows batch-argv fact. Live callers leave it undefined. */
-  cliWorkerHost?: CliCrewHost & { windowsBatchArgv?: ProcessHostSemanticFact };
+  /** Test seam for the CLI crew rules: the OS, root, and the Windows batch-argv and Job facts. Live callers leave it undefined. */
+  cliWorkerHost?: CliCrewHost & { windowsBatchArgv?: ProcessHostSemanticFact; jobContainment?: ProcessHostSemanticFact };
+  /**
+   * CW5: the home's `cliWorkers` section (§3.3), read when a CLI attempt starts: each CLI's `executablePath` and
+   * `maxMinutesPerAttempt`. Absent, a CLI is looked up on PATH and gets the default 90 minutes (CWD-6).
+   */
+  cliWorkerHome?: () => Promise<HomeCliWorkersV1 | undefined>;
   /** Injected only by focused construction-order tests. */
   providerModelFactory?: (
     config: RunnerProviderConfig,
@@ -573,17 +581,19 @@ export class NativeBuildFactory {
     try {
     initializationStage = "baseline";
     const baselineRevision = this.options.baselineFor(spec.runId);
+    const cliWorkerOwners = new CliWorkerOwners();
     let executionHostBinding: ExecutionHostRunBinding | undefined;
     if (this.options.executionHost) {
       initializationStage = "execution_host_binding";
+      // CW5 (§3.11): every process of a CLI worker's owner gets AIBOARD_MCP_DEPTH=2, beside the Playwright CLI values.
+      const processEnvironment = composeRunnerProcessEnvironments(this.options.playwrightCli?.environmentFor, cliWorkerOwners.environmentFor);
       executionHostBinding = await this.options.executionHost.bindRun({
         runId: spec.runId,
         permissionProfile: spec.permissionProfile,
         capabilityContract: spec.capabilityContract,
         capabilitiesConfig,
-        ...(this.options.playwrightCli
-          ? { processEnvironment: this.options.playwrightCli.environmentFor, managedStopObserver: this.options.playwrightCli.stopObserver() }
-          : {}),
+        ...(processEnvironment ? { processEnvironment } : {}),
+        ...(this.options.playwrightCli ? { managedStopObserver: this.options.playwrightCli.stopObserver() } : {}),
       });
       if (relative(runRoot, executionHostBinding.runRoot) !== "") {
         throw new Error("ExecutionHost returned a mismatched run root.");
@@ -1253,10 +1263,23 @@ export class NativeBuildFactory {
       schedulerStore.readRun(spec.runId)
     );
     const health = new ProviderHealthRegistry({ initial: initialHealth });
-    // CW4: no CLI worker driver yet (CW5 sets cliWorkerDriver), so CLI workers are never assigned a task.
+    // CW5 (§3.2): a CLI worker's executable, found as VF2 finds a check's tool, on the PATH children get.
+    const cliExecutableLookup = createCheckToolLookup({
+      environment: () => this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+    });
+    // CW5: the worker driver has the CLI branch, so the router may assign a task to a CLI worker.
+    const cliRuntimes = new Map<string, CliWorkerRuntimeConfig>(cliWorkerConfigs
+      .filter((config): config is typeof config & { providerId: CliWorkerProviderId } => isCliWorkerProviderId(config.providerId))
+      .map((config) => [config.runtimeId, {
+        runtimeId: config.runtimeId,
+        providerId: config.providerId,
+        model: config.modelId === CLI_DEFAULT_MODEL_ID ? null : config.modelId,
+        ...(config.cli?.reasoningEffort !== undefined ? { reasoningEffort: config.cli.reasoningEffort } : {}),
+      }]));
     const workerRouter = new RuntimeRouter({
       candidates: workerCandidates,
       health,
+      cliWorkerDriver: true,
     });
     const architectRouter = new RuntimeRouter({ candidates, health });
     // The owner's Reviewer ranks first for every verifier role. Under the strict independence setting a
@@ -1334,6 +1357,40 @@ export class NativeBuildFactory {
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
       defectClassesFor: () => topDefectClasses(this.liveMemoryStore().defectClasses(spec.projectId)),
+      ...(cliRuntimes.size > 0
+        ? {
+            cliWorkers: {
+              runtimes: cliRuntimes,
+              runtime: {
+                schedulerStore,
+                sessions,
+                workspaceManager,
+                launcher: createManagedCliProcessLauncher({ managedProcesses, executionGrants, permissionProfile: spec.permissionProfile }),
+                settings: async (providerId: CliWorkerProviderId) => {
+                  const entry = (await this.options.cliWorkerHome?.())?.[providerId];
+                  // §3.2: the lookup VF2 uses, run from the Runner's state folder, never a worktree.
+                  const executable = await resolveCliExecutable({
+                    providerId,
+                    ...(typeof entry?.executablePath === "string" ? { executablePath: entry.executablePath } : {}),
+                    lookup: cliExecutableLookup,
+                    cwd: this.options.stateDirectory,
+                  });
+                  const version = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).cliWorkersChecked?.clis
+                    .find((check) => check.providerId === providerId)?.version;
+                  return { executable, attemptLimitMs: cliAttemptLimitMinutes(entry) * 60_000, ...(version ? { version } : {}) };
+                },
+                host: await this.cliWorkerLaunchHost(),
+                stateDirectory: this.options.stateDirectory,
+                captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
+                owners: cliWorkerOwners,
+                ...(budgetLedger ? { budgetLedger } : {}),
+                ...(this.options.playwrightCli
+                  ? { browser: { stopRecord: (owner: { runId: string; sessionId: string }, since: string) => browserCleanupSince(this.options.playwrightCli!, owner, since) } }
+                  : {}),
+              },
+            },
+          }
+        : {}),
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -2792,6 +2849,19 @@ export class NativeBuildFactory {
       }
       throw primary;
     }
+  }
+
+  /** CW5: what a CLI launch is refused on: the crew rules' facts, and on Windows the batch-argv and Job facts. */
+  private async cliWorkerLaunchHost() {
+    const host = this.cliWorkerHost();
+    if (host.platform !== "win32") return host;
+    const seam = this.options.cliWorkerHost;
+    const facts = seam ? undefined : this.options.executionHost?.windowsProcessFacts
+      ? await this.options.executionHost.windowsProcessFacts()
+      : await this.windowsProcessFactsPromise;
+    const windowsBatchArgv = seam ? seam.windowsBatchArgv : facts?.windowsBatchArgv;
+    const jobContainment = seam ? seam.jobContainment : facts?.jobContainment;
+    return { ...host, ...(windowsBatchArgv ? { windowsBatchArgv } : {}), ...(jobContainment ? { jobContainment } : {}) };
   }
 
   /** CW4: the OS and root facts the CLI crew rules read; a test may set them. */
@@ -4554,6 +4624,22 @@ function isProviderHealthState(value: unknown): value is ProviderHealthState {
     typeof state.consecutiveFailures === "number" &&
     typeof state.updatedAt === "number"
   );
+}
+
+/**
+ * CW5 (§3.10): the browser checks the Playwright CLI sessions recorded for an owner's stop, only those made since that
+ * stop began: `escaped` if any is, else `unknown` if any is, else the newest; undefined when the stop recorded none.
+ */
+function browserCleanupSince(
+  sessions: import("./playwright-cli.js").PlaywrightCliSessions,
+  owner: { runId: string; sessionId: string },
+  since: string,
+): "none" | "exited" | "escaped" | "unknown" | undefined {
+  const records = sessions.cleanupRecords()
+    .filter((record) => record.runId === owner.runId && record.sessionId === owner.sessionId && record.at >= since);
+  if (records.some((record) => record.status === "escaped")) return "escaped";
+  if (records.some((record) => record.status === "unknown")) return "unknown";
+  return records.at(-1)?.status;
 }
 
 function safeSegment(value: string): string {

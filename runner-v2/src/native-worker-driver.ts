@@ -56,7 +56,14 @@ import type {
 import { AgentCleanupUnverifiedError, errorMessage, isProcessStopUnprovenError, boundedText } from "./process-stop-proof.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
-import { runWorkerTask } from "./worker-runtime.js";
+import { runWorkerTask, workerSubmissionContext } from "./worker-runtime.js";
+import type { ChangeSet } from "./change-set.js";
+import {
+  proveCliStop,
+  runCliWorkerAttempt,
+  type CliWorkerRuntimeConfig,
+  type CliWorkerRuntimeDeps,
+} from "./cli-worker-runtime.js";
 import { resolveWorkerSessionId } from "./worker-identity.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
@@ -110,6 +117,14 @@ export interface NativeWorkerDriverOptions {
   defectClasses?: readonly string[];
   /** T6b repair (N-5): fresh top defect-class labels per worker turn; wins over defectClasses. */
   defectClassesFor?: () => readonly string[];
+  /**
+   * CW5 (CLI workers plan §3.5): the runtimes that are CLI workers, and what their attempts run with. A CLI runtime
+   * takes the CLI branch in place of the model loop; the router assigns one only when this is set.
+   */
+  cliWorkers?: {
+    runtimes: ReadonlyMap<string, CliWorkerRuntimeConfig>;
+    runtime: CliWorkerRuntimeDeps;
+  };
 }
 
 export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): string {
@@ -215,7 +230,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     // An entry left by an earlier run of this attempt is kept, never dropped.
     const retained = this.retainedCleanups.get(key) ?? [];
     this.retainedCleanups.set(key, retained);
-    let outcome: SettledWorkerOutcome | undefined;
+    let outcome: WorkerOutcome | undefined;
     let threw = false;
     let primary: unknown;
     try {
@@ -240,19 +255,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     const stopFailed = stopFailures.length > 0;
     const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map((failure) => errorMessage(failure)).join(" "));
     const cleanupUnproven = threw && isProcessStopUnprovenError(primary);
-    if (!stopFailed && !cleanupUnproven) {
+    // A CLI attempt whose own stop was not proven (§3.11 case 2) stays unproven: its retry runs on resume.
+    const attemptUnproven = !threw && outcome?.type === "stop_unproven" ? outcome : undefined;
+    if (!stopFailed && !cleanupUnproven && !attemptUnproven) {
       this.retainedCleanups.delete(key);
       if (threw) throw primary;
       return outcome!;
     }
     const reasons = [
+      ...(attemptUnproven ? [attemptUnproven.reason] : []),
       ...(cleanupUnproven ? [errorMessage(primary)] : []),
       ...(stopFailed ? [`Managed process stop not proven: ${errorMessage(stopFailure)}`] : []),
     ];
     return {
       type: "stop_unproven",
       reason: reasons.join(" "),
-      outcome: threw ? { type: "failed", reason: boundedText(errorMessage(primary)) } : outcome!,
+      outcome: threw ? { type: "failed", reason: boundedText(errorMessage(primary)) }
+        : attemptUnproven ? attemptUnproven.outcome : outcome as SettledWorkerOutcome,
       ...(threw ? { thrown: primary } : {}),
     };
   }
@@ -280,6 +299,12 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     try { await this.options.language?.closeAgent?.(owner); } catch (error) { failures.push(error); }
     try { await this.options.mcpManager?.closeAgent(owner); } catch (error) { failures.push(error); }
     try { await this.options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
+    // CW5 (§3.10, §3.11 case 2): a CLI attempt's stop is proven only with its browser record proven too.
+    const cli = this.cliRuntime(this.persistedRuntimeAssignment(assignment)?.runtimeId);
+    if (cli) {
+      const unproven = await proveCliStop(cli.deps, owner);
+      if (unproven) failures.push(new Error(`The CLI worker's stop is not proven: ${unproven}`));
+    }
     // Its subagents run under their own owners. Their retained cleanups ran
     // above; after a Runner restart only their managed-process records are
     // left, so every live one of this attempt's subagents is stopped too.
@@ -292,6 +317,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       throw new AgentCleanupUnverifiedError(failures, `The worker's stop is still not proven: ${failures.map((failure) => errorMessage(failure)).join("; ")}`);
     }
     this.retainedCleanups.delete(key);
+    if (cli) cli.deps.owners?.release(owner);
+  }
+
+  /** The CLI branch's config for a runtime, when it is a CLI worker this driver can run. */
+  private cliRuntime(runtimeId: string | undefined): { config: CliWorkerRuntimeConfig; deps: CliWorkerRuntimeDeps } | undefined {
+    const config = runtimeId === undefined ? undefined : this.options.cliWorkers?.runtimes.get(runtimeId);
+    return config ? { config, deps: this.options.cliWorkers!.runtime } : undefined;
   }
 
   private async subagentOwnersWithLiveProcesses(owner: ReturnType<NativeWorkerDriver["attemptOwner"]>) {
@@ -324,7 +356,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
   private async runAttempt(
     assignment: WorkerAssignment,
     retainCleanup: (close: () => Promise<void>) => void,
-  ): Promise<SettledWorkerOutcome> {
+  ): Promise<WorkerOutcome> {
     let lifecycleContinuations = 0;
     const persistedAssignment = this.persistedRuntimeAssignment(assignment);
     let runtimeId = persistedAssignment?.runtimeId;
@@ -354,7 +386,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     for (;;) {
       const model = this.options.models.get(runtimeId);
       const candidate = this.candidateById.get(runtimeId);
-      if (!model || !candidate) {
+      // §3.13: a CLI worker has no AgentModel; its branch runs instead of the model loop.
+      const cli = this.cliRuntime(runtimeId);
+      if (!candidate || (!model && !cli)) {
         return { type: "paused", reason: `runtime_unavailable:${runtimeId}` };
       }
       // C5: fail fast without the authoritative compact contract — the
@@ -416,13 +450,65 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         pack: context.pack,
         recordedAt: this.clock(),
       });
+      if (cli) {
+        // CW5 (§3.5): the CLI runs in place of the model loop; everything before it (selection, contract, worktree,
+        // context pack, context manifest) is the same.
+        const result = await runCliWorkerAttempt(cli.deps, {
+          runId: assignment.runId,
+          taskId: assignment.task.id,
+          attempt: assignment.attempt,
+          workerId: assignment.workerId,
+          sessionId,
+          owner: this.attemptOwner(assignment),
+          workspace,
+          config: cli.config,
+          contextText: context.pack.text,
+          submission: workerSubmissionContext({
+            ...(this.options.git ? { git: this.options.git } : {}),
+            runId: assignment.runId,
+            sessionId,
+            taskId: assignment.task.id,
+            actorId: assignment.workerId,
+            ...(assignment.task.acceptanceCriteria ? { acceptanceCriteria: assignment.task.acceptanceCriteria } : {}),
+            ...(assignment.task.acceptanceCriteriaVersion !== undefined ? { acceptanceCriteriaVersion: assignment.task.acceptanceCriteriaVersion } : {}),
+            attempt: assignment.attempt,
+            workspace,
+            workspaceManager: this.options.workspaceManager,
+            artifacts: this.options.artifacts,
+            ledger: this.options.ledger,
+            schedulerStore: this.options.schedulerStore,
+            evidenceStore: this.options.evidenceStore,
+            ...(this.options.budgetLedger ? { budgetLedger: this.options.budgetLedger } : {}),
+            ...(validationBudgetMs !== undefined ? { validationBudgetMs } : {}),
+            memoryStore: this.options.memoryStore,
+            projectId: this.options.projectId,
+          }),
+          ...(assignment.signal ? { signal: assignment.signal } : {}),
+        });
+        if (result.type === "submitted") {
+          this.recordSuccess(assignment.runId, candidate.providerId);
+          return submittedWorkerOutcome(result.changeSet);
+        }
+        if (result.type === "guidance") {
+          return guidanceOutcomeFromProjection(
+            rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+            result.requestId,
+          );
+        }
+        if (result.type === "settled") return result.outcome;
+        if (result.type === "stop_unproven") return { type: "stop_unproven", reason: result.reason, outcome: result.outcome };
+        const next = this.failOver(assignment, runtimeId, candidate.providerId, result.failure, sessionId);
+        if (next.type === "outcome") return next.outcome;
+        runtimeId = next.runtimeId;
+        continue;
+      }
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
         .filter((entry) => entry.sessionId === sessionId).length;
       const budgetedModel = this.options.budgetLedger
         ? new BudgetedAgentModel({
-            model,
+            model: model!,
             ledger: this.options.budgetLedger,
             scopeId: assignment.runId,
             attribution: workerModelAttribution(
@@ -436,14 +522,14 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             costBasis: this.options.modelCostBases?.get(runtimeId),
             clock: this.clock,
           })
-        : model;
+        : model!;
       const result = await runWorkerTask({
         model: budgetedModel,
         ...(this.options.budgetLedger
           ? {
               subagentModelForSession: (subagentSessionId: string) =>
                 new BudgetedAgentModel({
-                  model,
+                  model: model!,
                   ledger: this.options.budgetLedger!,
                   scopeId: assignment.runId,
                   attribution: workerModelAttribution(
@@ -553,23 +639,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
-        return {
-          type: "submitted",
-          ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
-          ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
-          ...(result.changeSet?.validationScope ? { validationScope: structuredClone(result.changeSet.validationScope) } : {}),
-          ...(result.changeSet?.validationBudget ? { validationBudget: structuredClone(result.changeSet.validationBudget) } : {}),
-          ...(result.changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(result.changeSet.encodingSubmission) } : {}),
-          changeSetId: result.loop.changeSetId,
-          ...(result.changeSet?.criterionEvidenceLinks
-            ? {
-                criterionEvidenceLinks: result.changeSet.criterionEvidenceLinks.map((link) => ({
-                  ...link,
-                  artifactHashes: [...link.artifactHashes],
-                })),
-              }
-            : {}),
-        };
+        return submittedWorkerOutcome(result.changeSet, result.loop.changeSetId);
       }
       if (result.loop.status === "waiting_for_architect") {
         return guidanceOutcomeFromProjection(
@@ -591,27 +661,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ...result.loop.providerError,
           message: result.loop.error ?? "Provider failed.",
         });
-        this.options.health.recordFailure(candidate.providerId, failure);
-        this.persistHealth(assignment.runId, candidate.providerId);
-        if (!shouldFailoverWorkerFailure(failure)) {
-          return {
-            type: "failed",
-            reason: `provider_${failure.kind}:${failure.message}`,
-          };
-        }
-        const selection = this.options.router.selectWorker(
-          assignment.task.requiredCapabilities,
-          new Set([runtimeId]),
-          workerSelectionPreference(
-            rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
-            assignment.task.id,
-          ),
-        );
-        if (selection.status === "unavailable") {
-          return { type: "paused", reason: "all_worker_runtimes_unavailable" };
-        }
-        runtimeId = selection.runtime.runtimeId;
-        this.assignRuntime(assignment, runtimeId, sessionId);
+        const next = this.failOver(assignment, runtimeId, candidate.providerId, failure, sessionId);
+        if (next.type === "outcome") return next.outcome;
+        runtimeId = next.runtimeId;
         continue;
       }
       if (result.loop.status === "suspended") {
@@ -642,6 +694,43 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : `unexpected_worker_lifecycle:${result.loop.status}`,
       };
     }
+  }
+
+  /**
+   * A worker's provider failed: record it, and hand the same task, attempt, worktree and session to another healthy
+   * worker (API or CLI), or end the attempt when none is left or the failure must not fail over.
+   */
+  private failOver(
+    assignment: WorkerAssignment,
+    runtimeId: string,
+    providerId: string,
+    failure: ProviderFailure,
+    sessionId: string,
+  ): { type: "outcome"; outcome: SettledWorkerOutcome } | { type: "next"; runtimeId: string } {
+    this.options.health.recordFailure(providerId, failure);
+    this.persistHealth(assignment.runId, providerId);
+    if (!shouldFailoverWorkerFailure(failure)) {
+      return {
+        type: "outcome",
+        outcome: {
+          type: "failed",
+          reason: `provider_${failure.kind}:${failure.message}`,
+        },
+      };
+    }
+    const selection = this.options.router.selectWorker(
+      assignment.task.requiredCapabilities,
+      new Set([runtimeId]),
+      workerSelectionPreference(
+        rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+        assignment.task.id,
+      ),
+    );
+    if (selection.status === "unavailable") {
+      return { type: "outcome", outcome: { type: "paused", reason: "all_worker_runtimes_unavailable" } };
+    }
+    this.assignRuntime(assignment, selection.runtime.runtimeId, sessionId);
+    return { type: "next", runtimeId: selection.runtime.runtimeId };
   }
 
   private persistedRuntimeAssignment(assignment: WorkerAssignment) {
@@ -814,6 +903,28 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       repositorySnapshot,
     };
   }
+}
+
+/** The scheduler outcome of a submission, from its change set (the API worker's and the CLI worker's alike). */
+export function submittedWorkerOutcome(changeSet: ChangeSet | undefined, changeSetId = changeSet?.id): SettledWorkerOutcome {
+  if (!changeSetId) throw new Error("A submitted worker outcome needs its change set.");
+  return {
+    type: "submitted",
+    ...(changeSet?.reviewSignals ? { reviewSignals: structuredClone(changeSet.reviewSignals) } : {}),
+    ...(changeSet?.submissionScope ? { submissionScope: structuredClone(changeSet.submissionScope) } : {}),
+    ...(changeSet?.validationScope ? { validationScope: structuredClone(changeSet.validationScope) } : {}),
+    ...(changeSet?.validationBudget ? { validationBudget: structuredClone(changeSet.validationBudget) } : {}),
+    ...(changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(changeSet.encodingSubmission) } : {}),
+    changeSetId,
+    ...(changeSet?.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: changeSet.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+  };
 }
 
 export function workerModelAttribution(

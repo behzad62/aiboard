@@ -58,6 +58,9 @@ const deterministicPrTests = [
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // CW5: the CLI worker loop against the fake CLI run as a child (no real CLI, no prompt): temporary git checkouts and
+  // about 25 short fake runs, about 80 s on Windows, about 10 s of it the one managed-launcher test that runs only there.
+  "runner-v2/test/cli-worker-runtime.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
