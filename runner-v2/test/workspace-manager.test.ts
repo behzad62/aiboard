@@ -633,7 +633,7 @@ async function cliWorktree(label: string, withDocs = true) {
   const workspace = await manager.createTaskWorkspace("task_cli");
   const cliGit = async (...args: string[]) =>
     await gitText(workspace.path, ["-c", "user.name=Fake CLI", "-c", "user.email=fake-cli@example.invalid", "-c", "commit.gpgsign=false", ...args]);
-  return { root, project, manager, workspace, cliGit, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, project, manager, workspace, cliGit, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 test("CW5 undoForeignCommits moves the task branch back to the recorded tip and keeps the CLI's content for the guarded commit", async () => {
@@ -722,6 +722,16 @@ test("CW5 undoForeignCommits refuses rewritten history, a detached HEAD, another
     await assert.rejects(cli.manager.assertOnTaskBranch(cli.workspace), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
     // createTaskWorkspace (every worker's entry) refuses it as before, now typed, so the CLI driver can code it.
     await assert.rejects(cli.manager.createTaskWorkspace("task_cli"), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    // Only exit 1 is a detached HEAD: Git's fatal 128 (a broken repository, a missing worktree) stays Git's error.
+    const fatal = new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: cli.workspace.baselineRevision,
+      execute: async (options) => options.args[0] === "symbolic-ref"
+        ? { exitCode: 128, stdout: "", stderr: "fatal: not a git repository" }
+        : await policyGit(options),
+    });
+    await assert.rejects(fatal.createTaskWorkspace("task_cli"),
+      (error: unknown) => error instanceof GitCommandError && !(error instanceof ForeignHistoryError) && /symbolic-ref --quiet HEAD failed: fatal: not a git repository/.test(error.message));
     await cli.cliGit("checkout", "-q", "-b", "cli-elsewhere");
     await assert.rejects(cli.manager.createTaskWorkspace("task_cli"),
       (error: unknown) => error instanceof ForeignHistoryError && error.kind === "other_branch" && /unexpected branch/.test(error.message));

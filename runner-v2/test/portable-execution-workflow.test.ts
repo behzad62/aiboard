@@ -62,9 +62,10 @@ const deterministicPrTests = [
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
   // CW5: the CLI worker loop against the fake CLI run as a child (no real CLI, no prompt): temporary git checkouts and
-  // short fake runs, split in three so the parallel step runs them side by side. Run alone on a Windows PC: outcomes
-  // and case 1 (14 tests) about 44 s, the stop and cases 2-3 (9) about 46 s, runs over time and the managed launcher
-  // (6) about 40 s, 14 s of it the managed launcher; on Linux (Docker) the three take about 55 s together.
+  // short fake runs, in three files the parallel step runs side by side. Each file's tests run four at a time on one
+  // baseline repository copied per test, with async fixture Git. Run alone on a busy Windows PC: outcomes and case 1
+  // (14 tests) about 14 s, the stop and cases 2-3 (9) about 12 s, runs over time and the managed launcher (6, the
+  // managed launcher with injected host facts about 6 s) about 17-24 s.
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",

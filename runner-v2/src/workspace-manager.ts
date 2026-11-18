@@ -255,16 +255,24 @@ export class WorkspaceManager {
 
   private async assertOnTaskBranchUnlocked(workspace: TaskWorkspace): Promise<void> {
     await this.assertWorkspaceTaskOwner(workspace, workspace.taskId);
-    const root = await this.git(workspace.path, ["rev-parse", "--show-toplevel"]);
-    if (resolve(root.stdout.trim()) !== workspace.path) throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
-    for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
-      const metadata = (await this.git(workspace.path, ["rev-parse", "--git-path", name])).stdout.trim();
-      if (await pathExists(resolve(workspace.path, metadata))) {
+    // One rev-parse for the toplevel and every operation's metadata path (it prints one line each, in order), and one
+    // symbolic-ref: this runs before every CLI launch and again at its collect.
+    const names = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] as const;
+    const [paths, branch] = await Promise.all([
+      this.git(workspace.path, ["rev-parse", "--show-toplevel", ...names.flatMap((name) => ["--git-path", name])]),
+      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true),
+    ]);
+    const lines = paths.stdout.split(/\r?\n/).filter((line) => line.length > 0);
+    if (lines.length !== names.length + 1) throw new Error(`Path ${workspace.path} could not be inspected as a task worktree.`);
+    if (resolve(lines[0]!) !== workspace.path) throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
+    for (const [index, name] of names.entries()) {
+      if (await pathExists(resolve(workspace.path, lines[index + 1]!))) {
         throw new ForeignHistoryError("unsettled", `The worktree has an unsettled Git operation (${name}).`);
       }
     }
-    const branch = await this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true);
-    if (branch.exitCode !== 0) throw new ForeignHistoryError("detached", "HEAD is detached from the task branch.");
+    // Exit 1 is a detached HEAD; anything else is Git's own failure, thrown as Git's.
+    if (branch.exitCode === 1) throw new ForeignHistoryError("detached", "HEAD is detached from the task branch.");
+    if (branch.exitCode !== 0) throw new GitCommandError("command_failed", `git symbolic-ref --quiet HEAD failed: ${branch.stderr.trim()}`, branch);
     if (branch.stdout.trim() !== workspace.branch) {
       throw new ForeignHistoryError("other_branch", `HEAD is on ${branch.stdout.trim()}, not the task branch.`);
     }
@@ -343,11 +351,16 @@ export class WorkspaceManager {
         throw error;
       }
     };
-    const [head, index, status] = await Promise.all([
+    // Every read settles before this returns or throws: no Git call on the user's project outlives it.
+    const settled = await Promise.allSettled([
       read(["rev-parse", "HEAD"]),
       read(["ls-files", "--stage", "-z"]),
       read(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { GIT_OPTIONAL_LOCKS: "0" }),
     ]);
+    const failed = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+    if (failed) throw failed.reason;
+    const [head, index, status] = settled.map((entry) => (entry as PromiseFulfilledResult<Awaited<ReturnType<typeof read>>>).value) as [
+      Awaited<ReturnType<typeof read>>, Awaited<ReturnType<typeof read>>, Awaited<ReturnType<typeof read>>];
     const digest = (text: string, exitCode: number) => exitCode === 0 ? createHash("sha256").update(text).digest("hex") : "unknown";
     return {
       head: head.exitCode === 0 ? head.stdout.trim() : "unknown",
@@ -718,8 +731,13 @@ export class WorkspaceManager {
     }
     // Refused as before, typed so the CLI worker's driver can give the coded cli_history_rewritten:<kind> (§3.7) when
     // a CLI left the worktree off its branch; an API worker gets the same throw.
-    if (branch.exitCode !== 0) {
+    // `symbolic-ref --quiet` exits 1 only for a detached HEAD; anything else (128: a broken repository, a missing
+    // worktree) is Git's failure, thrown as it was before the detached case was typed.
+    if (branch.exitCode === 1) {
       throw new ForeignHistoryError("detached", `Task workspace ${workspace.taskId} has a detached HEAD, not its task branch.`);
+    }
+    if (branch.exitCode !== 0) {
+      throw new GitCommandError("command_failed", `git symbolic-ref --quiet HEAD failed: ${branch.stderr.trim()}`, branch);
     }
     if (branch.stdout.trim() !== workspace.branch) {
       throw new ForeignHistoryError("other_branch", `Task workspace ${workspace.taskId} is on an unexpected branch.`);

@@ -8,18 +8,18 @@ import { writeFileSync } from "node:fs";
 import type { CliProcessHandle, CliProcessLauncher, CliWorkerOwner } from "../../src/cli-worker-runtime.js";
 import { prepareGitExecutionPolicy } from "../../src/git-execution-policy.js";
 import { FAKE_CLI_SCENARIO_ENV } from "./fake-cli.js";
-import { runGit } from "./git-fixture.js";
+import { runGitAsync } from "./git-fixture.js";
 
 /**
  * The fixture's Git behind the Runner Git policy and the internal mechanics' verb set (git-run-context.ts MECHANICAL
  * has no network verbs). Production runs the workspace manager's Git through that policy; the fixture's plain runGit
  * would hide a refused verb.
  */
-export const policyGit: typeof runGit = async (options) => {
+export const policyGit: typeof runGitAsync = async (options) => {
   prepareGitExecutionPolicy(options);
   const verb = options.args.find((arg) => !arg.startsWith("-"));
   if (!verb || verb === "remote" || verb === "push") throw new Error(`Git ${verb ?? "(none)"} is not an internal mechanic.`);
-  return await runGit(options);
+  return await runGitAsync(options);
 };
 
 export const FAKE_CLAUDE_SESSION = "6e9ecd7e-f045-475e-b718-988bfac19da6";

@@ -2,7 +2,7 @@
  * CW5: the harness of the CLI worker loop's tests (cli-worker-runtime-*.test.ts): a git project, its task worktree,
  * the stores, a running task, and the fake CLI's streams. No real CLI is started and no prompt is sent.
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext } from "node:test";
@@ -28,7 +28,7 @@ import { SqliteToolLedger } from "../../src/sqlite-tool-ledger.js";
 import { workerSubmissionContext } from "../../src/worker-runtime.js";
 import type { TaskWorkspace } from "../../src/workspace-manager.js";
 import { FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliScenario } from "./fake-cli.js";
-import { WorkspaceManager, captureGitBaseline, fixtureGitContext, runGit } from "./git-fixture.js";
+import { WorkspaceManager, asyncFixtureGitContext, captureGitBaseline, runGitAsync } from "./git-fixture.js";
 import { ChildCliLauncher, FAKE_CLAUDE_SESSION, cliDoneResult, policyGit, writeClaudeStream } from "./cli-worker-fixture.js";
 
 export const RUN = "run_1";
@@ -79,11 +79,11 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
   });
   const project = join(root, "project");
   const state = join(root, "state");
-  mkdirSync(join(project, "docs", "project"), { recursive: true });
   mkdirSync(state);
-  writeFileSync(join(project, "value.txt"), "one\n");
-  writeFileSync(join(project, "docs", "project", "STATE.md"), "# State\n\nThe Architect's.\n");
-  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN });
+  // The project with its baseline is built once per test file and copied: the same files and baseline commit, in a
+  // repository of this test's own (it has no worktree yet, so the copy holds no absolute path).
+  const baseline = await baselineTemplate();
+  cpSync(baseline.project, project, { recursive: true });
   const workspaces = new WorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId: RUN, baselineRevision: baseline.revision, execute: policyGit });
   const workspace = await workspaces.createTaskWorkspace(TASK);
   const artifacts = new ArtifactStore(join(state, "artifacts"));
@@ -109,7 +109,7 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
         attemptLimitMs: 60_000, argsPrefix: [FAKE_CLI_SCRIPT], version: "2.1.326",
       }),
       host: WINDOWS, stateDirectory: state, owners,
-      captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
+      captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGitAsync),
       readWaitMs: 50,
       ...overrides,
     }),
@@ -117,7 +117,7 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
       runId: RUN, taskId: TASK, attempt: 1, workerId: WORKER, sessionId: SESSION, owner: OWNER, workspace, config: CLAUDE,
       contextText: "Change value.txt to two.",
       submission: workerSubmissionContext({
-        git: fixtureGitContext(), runId: RUN, sessionId: SESSION, taskId: TASK, actorId: WORKER, attempt: 1,
+        git: asyncFixtureGitContext(), runId: RUN, sessionId: SESSION, taskId: TASK, actorId: WORKER, attempt: 1,
         workspace, workspaceManager: workspaces, artifacts, ledger, schedulerStore: scheduler, evidenceStore: evidence,
       }),
       ...overrides,
@@ -135,9 +135,36 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
       });
       return { criterionEvidenceLinks: [{ criterionId: "value", evidenceId: record.id, artifactHashes: [output.hash] }], notRun: [] };
     },
-    head: async () => (await runGit({ cwd: workspace.path, args: ["rev-parse", "HEAD"] })).stdout.trim(),
+    head: async () => (await runGitAsync({ cwd: workspace.path, args: ["rev-parse", "HEAD"] })).stdout.trim(),
   };
   return h;
+}
+
+/**
+ * How many of a file's tests run at once. Each harness is its own project, worktree, stores and owner; the files'
+ * one shared value is the live-output buffer, which only the live tail test reads, outside the concurrent group.
+ * On Windows a test's time is mostly process start latency (Git, the fake CLI), which overlaps well; elsewhere it is
+ * mostly CPU, and more than two at once measured slower in a Linux container.
+ */
+export const CLI_RUNTIME_TEST_CONCURRENCY = process.platform === "win32" ? 4 : 2;
+
+let template: Promise<{ project: string; revision: string }> | undefined;
+
+/** The project every harness starts from, with the Runner's baseline captured once per test file. */
+function baselineTemplate(): Promise<{ project: string; revision: string }> {
+  template ??= (async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-worker-template-")));
+    process.once("exit", () => { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* a temp folder */ } });
+    const project = join(root, "project");
+    const state = join(root, "state");
+    mkdirSync(join(project, "docs", "project"), { recursive: true });
+    mkdirSync(state);
+    writeFileSync(join(project, "value.txt"), "one\n");
+    writeFileSync(join(project, "docs", "project", "STATE.md"), "# State\n\nThe Architect's.\n");
+    const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN });
+    return { project, revision: baseline.revision };
+  })();
+  return template;
 }
 
 function seedRunningTask(store: SqliteSchedulerStore): void {
