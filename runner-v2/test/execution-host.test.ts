@@ -445,6 +445,11 @@ test("run binding close hands Job-host record retention its released processes o
       { method: "retireSpare", runId: "run-job-record-retention" },
       { method: "retireReleasedRecords", runId: "run-job-record-retention", released: 0 },
     ]);
+    // A transient run has its own private Job host, removed whole after its proven stop: the shared host's
+    // retention is never asked about it, and none runs on the private host either.
+    const transient = await host.bindRun({ ...runBinding("run-job-record-retention-transient", "a"), transient: true });
+    await transient.close();
+    assert.equal(calls.some((call) => call.runId === "run-job-record-retention-transient"), false);
     await host.close();
   } finally {
     await host.close().catch(() => undefined);
