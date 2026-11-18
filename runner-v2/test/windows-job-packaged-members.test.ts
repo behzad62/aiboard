@@ -293,6 +293,26 @@ test("R2: a host that ends without settling its watch leaves the Job unverified 
     (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
 });
 
+// The started line cannot be written either (started_emit_unwritable, stricter only): the host resumes the workload,
+// fails to write started for the write's retry window, and ends with no line at all. It ended before reporting that its
+// workload started, with no stop request and no report that it created no process, so the launch fails and the
+// supervisor keeps the unsettled watch as evidence; never a clean, releasable stop.
+test("R2: a host that ends before its started line fails the launch and keeps evidence", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const { root, launch } = setup("started-unwritable", "started_emit_unwritable");
+  const marker = join(root, "ran.txt");
+  await assert.rejects(
+    launch(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setTimeout(() => {}, 60000)`]),
+    (error: unknown) => (error as { code?: unknown }).code === "process_start_failed" &&
+      /ended before it reported that its workload started/.test((error as Error).message),
+  );
+  assert.equal(existsSync(marker), true, "the workload ran before the host ended");
+  assert.doesNotMatch(readJobEvents(join(root, "job-host")), /"type":"(started|error|natural_stopped)"/, "the host wrote no lifecycle line");
+  const last = supervisorStatusLines(join(root, "job-host")).at(-1)!;
+  assert.equal(last.status, "stopped", JSON.stringify(last));
+  assert.equal((last.memberEvidence as { count?: number } | undefined)?.count, 1, `the unsettled watch is evidence: ${JSON.stringify(last)}`);
+  assert.match(JSON.stringify(last.memberEvidence), /ended without settling its membership watch/);
+});
+
 /** Each Job record's supervisor status lines (supervisor.jsonl), oldest first, for this test's single record. */
 function supervisorStatusLines(jobHostDirectory: string): Record<string, unknown>[] {
   const records = readdirSync(jobHostDirectory).filter((name) => name.endsWith(".json"));

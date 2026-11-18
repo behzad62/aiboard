@@ -258,9 +258,14 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   assert.match(jobHost, /Flush\(false\);[^}]*if \(pending\.Count > 0\) throw new LaunchRefusedException\(MembershipEvidenceLostCode,/);
   const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
   assert.match(supervisor, /if \(event\.code === "windows_job_membership_evidence_lost"\)\s+recordMemberEvidence\(/);
-  // An interactive host that ended after starting its workload with neither a natural stop (the only settle) nor a
-  // stop the Runner requested never settled its watch: evidence, on both ways the supervisor records the end.
-  assert.match(supervisor, /if \(!config\?\.interactive \|\| !workloadStarted \|\| naturalStopSeen \|\| interactiveTerminationRequested\) return;\s+recordMemberEvidence\(/);
+  // An interactive host that ended with neither a natural stop (the only settle) nor a stop the Runner requested never
+  // settled its watch: evidence, on both ways the supervisor records the end. Before its started line too, unless it was
+  // never sent its workload or reported that no process was created ("launched": false, written only then).
+  assert.match(supervisor, /if \(!config\?\.interactive \|\| naturalStopSeen \|\| interactiveTerminationRequested\) return;\s+if \(!workloadStarted && \(!workloadDelivered \|\| launchNotCreated\)\) return;\s+recordMemberEvidence\(/);
+  assert.match(supervisor, /if \(config\?\.interactive && status\.status === "starting" && workloadDelivered && !interactiveTerminationRequested\) \{\s+startupFailed\(/);
+  assert.equal([...supervisor.matchAll(/^\s+workloadDelivered = true;$/gm)].length, 2);
+  assert.match(jobHost, /if \(processInfo\.hProcess == IntPtr\.Zero\) line = line\.Substring\(0, line\.Length - 1\) \+ ",\\"launched\\":false\}";/);
+  assert.match(jobHost, /\$launchedField = if \(\$runInteractiveEntered\) \{ '' \} else \{ ',"launched":false' \}/);
   assert.equal([...supervisor.matchAll(/^\s+recordUnsettledInteractiveWatch\(\);$/gm)].length, 2);
   // The only members that are not evidence besides the root's own package: one that already exited before it could be
   // opened (ERROR_INVALID_PARAMETER), or whose PID now names a process outside this Job. Every other failure is evidence.

@@ -271,13 +271,19 @@ export async function packagedRootProgram(
     let metadata: Stats;
     try { metadata = await lstat(candidate); } catch { continue; }
     if (metadata.isDirectory()) continue;
-    if (!isPackagedFolder(dirname(candidate))) return undefined;
+    // By its spelling or by its real path (a junction or an 8.3 name that reaches WindowsApps), as the child's PATH
+    // filter tests each entry (child-environment.ts), so a folder the child lost is always pinned here.
+    if (!isPackagedFolder(dirname(candidate)) && !isPackagedFolder(await realFolder(dirname(candidate)))) return undefined;
     try {
       const program = await canonicalExecutablePath(candidate, metadata, platform);
       return WINDOWS_NATIVE_EXTENSIONS.has(extname(program).toLowerCase()) ? program : undefined;
     } catch { return undefined; }
   }
   return undefined;
+}
+
+async function realFolder(folder: string): Promise<string> {
+  try { return await realpath(folder); } catch { return folder; }
 }
 
 function isBareCommand(command: string): boolean {

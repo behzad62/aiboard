@@ -37,6 +37,10 @@ let interactiveTerminationRequested = false;
 // R2: whether the Job host reported its workload started, and whether it settled its membership watch itself.
 let workloadStarted = false;
 let naturalStopSeen = false;
+// R2: the Job host has been sent its workload (its bootstrap line). Before that it cannot have created a process.
+let workloadDelivered = false;
+// R2: the Job host reported, before its started line, that it failed before any process was created ("launched": false).
+let launchNotCreated = false;
 let settled = false;
 let backendFailure;
 const retainedOutput = [];
@@ -382,6 +386,7 @@ async function handleSpareClaim(message) {
     status.spareReady = false;
     persistStatus();
     const line = `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(currentJobConfiguration())).toString("base64") })}\n`;
+    workloadDelivered = true;
     await new Promise((resolvePromise, reject) => backendInput.write(line, (error) => error ? reject(error) : resolvePromise()));
     reply(true);
   } catch (error) {
@@ -538,6 +543,7 @@ function launchWindowsJob() {
     persistStatus();
     armSpareIdleTimer();
   } else {
+    workloadDelivered = true;
     backendInput.write(config.interactive
       ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
       : `${JSON.stringify(jobConfiguration)}\n`);
@@ -690,6 +696,7 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "error") {
+    if (event.launched === false && !workloadStarted) launchNotCreated = true;
     backendFailure = new Error(event.error ?? "Windows Job host failed.");
     // A coded launch refusal from the Job host (raised before CreateProcess) keeps its Runner code.
     if (typeof event.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(event.code)) backendFailure.code = event.code;
@@ -721,11 +728,14 @@ function recordMemberEvidence(event) {
 }
 
 // R2: an interactive Job host settles its membership watch only when its workload ends by itself (natural_stopped);
-// the Runner's own stops end it by a kill it requested. A host that ended after starting its workload with neither
-// (it failed, or could not write its events) never settled the watch, so its evidence may be incomplete: that is
-// itself evidence, and the Job is never verified empty or released.
+// the Runner's own stops end it by a kill it requested. A host that ended with neither (it failed, or could not write
+// its events) never settled the watch, so its evidence may be incomplete: that is itself evidence, and the Job is never
+// verified empty or released. That includes a host that ended before its started line, which it writes only after the
+// workload is resumed. The only exceptions are a host that never received its workload and a host that reported a
+// failure before any process was created (a coded refusal or a CreateProcess failure, "launched": false).
 function recordUnsettledInteractiveWatch() {
-  if (!config?.interactive || !workloadStarted || naturalStopSeen || interactiveTerminationRequested) return;
+  if (!config?.interactive || naturalStopSeen || interactiveTerminationRequested) return;
+  if (!workloadStarted && (!workloadDelivered || launchNotCreated)) return;
   recordMemberEvidence({
     pid: 0, evidence: "unidentified", package: null,
     detail: "The Job host ended without settling its membership watch and without a stop request.",
@@ -747,6 +757,12 @@ function markStopped() {
   // ends as that failure, never as a clean stop of a workload that never ran.
   if (backendFailure && status.status === "starting") {
     startupFailed(backendFailure);
+    return;
+  }
+  // R2: a host that ended with no started line, no error and no stop request (its event file could not be written, or
+  // it was killed from outside between resuming the workload and that line) never proved what it ran: a failed start.
+  if (config?.interactive && status.status === "starting" && workloadDelivered && !interactiveTerminationRequested) {
+    startupFailed(new Error("The Windows Job host ended before it reported that its workload started, so the Job's ownership is not proven."));
     return;
   }
   recordUnsettledInteractiveWatch();

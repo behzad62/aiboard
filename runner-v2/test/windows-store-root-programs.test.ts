@@ -6,7 +6,7 @@
 // host's PATH to be a Store alias.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test, { after } from "node:test";
@@ -16,7 +16,8 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { createCheckToolLookup } from "../src/check-tool-lookup.js";
 import { isWindowsAppsPathEntry } from "../src/child-environment.js";
 import { createExecutionHost } from "../src/execution-host.js";
-import { createManagedProcessTools } from "../src/managed-process-tools.js";
+import { CONTAINED_STOP_CONFIRMATION, createManagedProcessTools } from "../src/managed-process-tools.js";
+import { packagedRootProgram } from "../src/language-server-executable.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -45,6 +46,22 @@ function firstOnPath(name: string): string | undefined {
   return undefined;
 }
 
+/** Every Job record this run's Job host wrote (command, args, pid), from its state directory. */
+function jobRecords(directory: string): { command: string; args: string[]; pid: number }[] {
+  return readdirSync(directory, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".json")).flatMap((file) => {
+    try {
+      const record = JSON.parse(readFileSync(join(directory, file), "utf8")) as { command?: unknown; args?: unknown; pid?: unknown; supervisor?: unknown };
+      return typeof record.command === "string" && Array.isArray(record.args) && record.supervisor ? [{ command: record.command, args: record.args as string[], pid: Number(record.pid) }] : [];
+    } catch { return []; }
+  });
+}
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+const LONG_LIVED = { pwsh: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep 60"], python3: ["-c", "import time; time.sleep(60)"] } as const;
+
 for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \d/u]] as const) {
   const first = WINDOWS ? firstOnPath(name) : undefined;
   const skip = (!WINDOWS && "Windows Job host") ||
@@ -52,6 +69,10 @@ for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \
     (first && !isWindowsAppsPathEntry(dirname(first)) && `needs ${name}'s first match on PATH to be a Microsoft Store alias (it is ${first})`);
   test(`R3: a Store ${name} is looked up, run as a check and started by its bare name; the child's PATH still lacks it`, { skip, timeout: 120_000 }, async () => {
     const root = join(ownRoot, name);
+    // The package's own program the alias names: what every launch here must start as the Job's root, never the alias.
+    const packaged = readlinkSync(first!);
+    assert.notEqual(dirname(packaged).toLowerCase(), dirname(first!).toLowerCase(), `the alias names a program outside its own folder: ${packaged}`);
+    const same = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
     const project = join(root, "project"), state = join(root, "state");
     mkdirSync(project, { recursive: true }); mkdirSync(state, { recursive: true });
 
@@ -75,6 +96,9 @@ for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \
       assert.equal(checked?.exitCode, 0);
       assert.equal(checked?.cleanup?.state, "verified_empty");
       assert.match(stdout, version);
+      const jobHost = join(state, "job-host");
+      assert.ok(jobRecords(jobHost).some((record) => same(record.command, packaged) && record.args.includes("--version")),
+        `the check's Job root is the package's own program: ${JSON.stringify(jobRecords(jobHost))}`);
 
       const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants, artifacts, maxInlineOutputBytes: 512 * 1024 });
       for (const tool of createProcessTools({ execution: run.commandExecution, support: processRunSupport(run.managedProcesses, artifacts) })) broker.register(tool);
@@ -95,12 +119,52 @@ for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \
       }
       assert.match(output, version);
 
+      // A long-lived workload started by its bare name runs as the package's own program and dies with the stop.
+      const sleeper = await invoke("process.start", { command: name, args: [...LONG_LIVED[name]] });
+      assert.equal(sleeper.isError, false, text(sleeper));
+      const sleeperId = (sleeper.content[0] as { value: Record<string, unknown> }).value.processId as string;
+      const sleeperRecord = () => jobRecords(jobHost).find((record) => record.args.join(" ") === LONG_LIVED[name].join(" "));
+      for (let attempt = 0; attempt < 100 && !(sleeperRecord()?.pid ?? 0); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      const running = sleeperRecord();
+      assert.ok(running && same(running.command, packaged), `the started Job root is the package's own program: ${JSON.stringify(jobRecords(jobHost))}`);
+      assert.ok(running.pid > 0 && alive(running.pid), `the workload runs: ${JSON.stringify(running)}`);
+      for (const record of jobRecords(jobHost)) assert.ok(!same(record.command, first!), `the alias is never launched: ${record.command}`);
+      const stopped = await invoke("process.signal", { processId: sleeperId, signal: "SIGTERM" });
+      assert.equal(stopped.isError, false, text(stopped));
+      assert.ok(text(stopped).includes(JSON.stringify(CONTAINED_STOP_CONFIRMATION.slice(0, 40)).slice(1, -1)), `the contained stop: ${text(stopped)}`);
+      for (let attempt = 0; attempt < 100 && alive(running.pid); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(alive(running.pid), false, "the workload died with the stop");
+
       // The child's own PATH still holds no WindowsApps folder: a shell's lookup of the same name finds nothing there.
       const where = await invoke("process.run", { shell: "cmd", script: `where ${name}` });
       assert.match(text(where), /"exitCode":1/u, text(where));
     } finally {
       await run.close();
       await host.close();
+    }
+  });
+}
+
+// Nit 1 of the third review: a PATH folder that reaches WindowsApps through a junction is dropped from the child's PATH
+// by its real path, so the check's own program found there is pinned the same way (never left as an alias the child
+// cannot run).
+{
+  const first = WINDOWS ? firstOnPath("python3") ?? firstOnPath("pwsh") : undefined;
+  const skip = (!WINDOWS && "Windows only") ||
+    (!first && "needs python3 or pwsh on this host's PATH") ||
+    (first && !isWindowsAppsPathEntry(dirname(first)) && `needs a Microsoft Store alias first on PATH (it is ${first})`);
+  test("R3: a check's program found through a junction to WindowsApps is pinned by the folder's real path", { skip }, async () => {
+    const link = join(ownRoot, "apps-link");
+    symlinkSync(dirname(first!), link, "junction");
+    try {
+      assert.equal(isWindowsAppsPathEntry(link), false, "the junction's own spelling is not a WindowsApps folder");
+      const command = first!.slice(dirname(first!).length + 1).replace(/\.exe$/iu, "");
+      const pinned = await packagedRootProgram(command, ownRoot, { PATH: link, PATHEXT: ".COM;.EXE" }, isWindowsAppsPathEntry, "win32");
+      assert.ok(pinned, "found through the junction, it is pinned");
+      assert.equal(pinned.toLowerCase(), readlinkSync(first!).toLowerCase());
+    } finally {
+      unlinkSync(link);
+      assert.throws(() => lstatSync(link), "the junction itself is gone before the root is removed");
     }
   });
 }

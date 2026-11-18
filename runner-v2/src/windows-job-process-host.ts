@@ -67,8 +67,8 @@ export interface WindowsJobMemberEvidenceEntry {
   readonly pid: number; readonly evidence: "packaged" | "unidentified"; readonly package: string | null; readonly detail: string;
 }
 export interface WindowsJobMemberEvidence { readonly count: number; readonly entries: readonly WindowsJobMemberEvidenceEntry[] }
-/** Faults a test can inject into the Job host. Each only makes it stricter: the first three refuse the launch before CreateProcess, and membership_ignore_root_package reports every packaged member, the root's own package included. */
-export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable";
+/** Faults a test can inject into the Job host. Each only makes it stricter: the first three refuse the launch before CreateProcess, membership_ignore_root_package reports every packaged member, the root's own package included, the member_emit_* ones fail member writes, and started_emit_unwritable leaves the host silent after it resumes the workload. */
+export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable" | "started_emit_unwritable";
 export interface WindowsJobOutputRead {
   readonly stdout: Uint8Array; readonly stderr: Uint8Array;
   readonly next: { readonly stdout: number; readonly stderr: number };

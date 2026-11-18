@@ -348,7 +348,16 @@ Windows PowerShell root the same call kept both in the Job, and node died with i
     `windows_job_membership_evidence_lost`, which the supervisor keeps as evidence;
   - an interactive host that ended after its workload started with neither a natural stop (the only path that settles
     the watch) nor a stop the Runner requested: it failed or could not write its events, so its watch never settled.
-    This covers a coded line that could not be written either (a test makes the event file unwritable for it).
+    This covers a coded line that could not be written either (a test makes the event file unwritable for it);
+  - an interactive host that ended **before** its `started` line with no stop request (third review). The host writes
+    that line only after it resumes the workload, so a host whose event file cannot take it, or one killed from outside
+    between the resume and the line, ran its workload unwatched. The supervisor ends such a launch as a failed start
+    ("ended before it reported that its workload started") and keeps the unsettled watch as evidence. The only hosts
+    exempt are one never sent its workload and one that reported a failure before any process was created: the host
+    adds `"launched": false` to its error line only when CreateProcess never returned a process (a coded R4 or watch
+    refusal, or a file it cannot start) or when it failed before entering its launch at all. Those still end as the
+    coded or plain startup failure they were. A test fault (`started_emit_unwritable`) leaves the host silent after the
+    resume.
 
   A Job with evidence is never verified empty (`cleanup_blocked`, `verified_empty_failed`, with the packaged text),
   never released (`process_stop_unproven_packaged_descendant`) and never retired by record retention.
@@ -388,13 +397,16 @@ Windows PowerShell root the same call kept both in the Job, and node died with i
   PID, so reuse can never hide one.
 - **R3.** `%LOCALAPPDATA%\Microsoft\WindowsApps`, its per-package folders, the Program Files package root and a package's
   folder on another volume's package root (`<drive>:\WindowsApps\<Name>_..._<PublisherId>`) leave a Windows child's PATH,
-  compared on the entry and on its real path, each entry resolved once (`child-environment.ts` `isWindowsAppsPathEntry`,
+  compared on the entry and on its real path (a junction or an 8.3 name that reaches them counts), each entry resolved once (`child-environment.ts` `isWindowsAppsPathEntry`,
   decision `removed_packaged_alias_path`). The patterns are anchored to those folders, so an unrelated folder merely
   named `WindowsApps` stays. The launch's **own program** is still looked up on the PATH that keeps them, in their
   places (`withChildEnvironment`'s root-program environment), and an alias found there is pinned to its package's own
-  program and started as the Job's root, as R1's pwsh is: `process.start pwsh` or `python3`, a final check run by a
+  program and started as the Job's root, as R1's pwsh is (a folder is recognised the same two ways as the child's filter,
+  so a folder the child lost through a junction is pinned too): `process.start pwsh` or `python3`, a final check run by a
   Store `python3` or `winget`, and the final-check tool lookup, which searches the same PATH, all work as on main
-  (real-host test `windows-store-root-programs.test.ts`, guarded per program). Only the root's children lose those
+  (real-host test `windows-store-root-programs.test.ts`, guarded per program: it checks that the Job record of the check
+  and of `process.start` names the package's own program and never the alias, that a long-lived Store workload dies
+  with `process.signal`, and that a junction to WindowsApps is pinned). Only the root's children lose those
   folders: `pwsh`, `python3` or `py` typed inside a worker's shell does not resolve to a Store program. I chose this
   over a coded "found only under WindowsApps" reason because the program is installed and the owner can do nothing
   about it; a packaged root under the host's policy keeps its ordinary descendants in the Job (the table above), and R2

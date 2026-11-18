@@ -893,6 +893,13 @@ public static class ManagedProcessJobHost
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
             processInfo.hThread = IntPtr.Zero;
+            // Stricter-only test fault: the started line cannot be written. The workload runs for the write's retry
+            // window (about a second, EmitLspLine) before the failure is thrown, and no later line is written either.
+            if (injectedFault == "started_emit_unwritable")
+            {
+                Thread.Sleep(1000);
+                throw new IOException("injected started_emit_unwritable");
+            }
             EmitLsp(eventPath, "started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
 
             bool rootExited = false;
@@ -967,7 +974,14 @@ public static class ManagedProcessJobHost
             // a host that ended after its workload started with no natural stop and no stop request (R2 evidence).
             if (refused != null && refused.Code == MembershipEvidenceLostCode && injectedFault == "member_emit_unwritable")
                 throw new IOException("injected member_emit_unwritable");
-            EmitLsp(eventPath, "error", processInfo.dwProcessId, null, 0, detail, refused == null ? null : refused.Code);
+            if (injectedFault == "started_emit_unwritable")
+                throw new IOException("injected started_emit_unwritable");
+            // R2: "launched": false only when no process was ever created (a coded refusal or a CreateProcess failure).
+            // Any other failure before the started line leaves the Job's membership unsettled, and the supervisor keeps
+            // that as evidence.
+            string line = EventLine("error", processInfo.dwProcessId, null, 0, detail, refused == null ? null : refused.Code);
+            if (processInfo.hProcess == IntPtr.Zero) line = line.Substring(0, line.Length - 1) + ",\"launched\":false}";
+            EmitLspLine(eventPath, line);
             return 1;
         }
         finally
@@ -1411,6 +1425,9 @@ function Initialize-JobHostType {
 }
 
 if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
+    # R2: until RunInteractive is entered no process can have been created, so a failure here says "launched": false.
+    # A failure that escapes RunInteractive (its own error line could not be written) does not: it may have run one.
+    $runInteractiveEntered = $false
     try {
         $bootstrap = [Console]::In.ReadLine()
         if ([string]::IsNullOrWhiteSpace($bootstrap)) {
@@ -1431,6 +1448,7 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
             $environment[$property.Name] = [string]$property.Value
         }
         Initialize-JobHostType -HelperAssemblyPath $configuration.helperAssemblyPath -HelperAssemblySha256 $configuration.helperAssemblySha256 -EventPath $configuration.eventPath
+        $runInteractiveEntered = $true
         $exitCode = [ManagedProcessJobHost]::RunInteractive(
             [string]$configuration.command,
             [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
@@ -1441,10 +1459,14 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
         )
         exit $exitCode
     } catch {
-        if ($null -ne $configuration -and -not [string]::IsNullOrWhiteSpace([string]$configuration.eventPath)) {
-            [IO.File]::AppendAllText([string]$configuration.eventPath, '{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}' + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        $launchedField = if ($runInteractiveEntered) { '' } else { ',"launched":false' }
+        $bootstrapError = '{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."' + $launchedField + '}'
+        if ($runInteractiveEntered -and [string]$configuration.injectedFault -eq "started_emit_unwritable") {
+            # Stricter-only test fault: the event file stays unwritable for this line too, so the host ends silent.
+        } elseif ($null -ne $configuration -and -not [string]::IsNullOrWhiteSpace([string]$configuration.eventPath)) {
+            [IO.File]::AppendAllText([string]$configuration.eventPath, $bootstrapError + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
         } else {
-            [Console]::Error.WriteLine('@aiboard-lsp-job-host:{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}')
+            [Console]::Error.WriteLine('@aiboard-lsp-job-host:' + $bootstrapError)
             [Console]::Error.Flush()
         }
         exit 1
