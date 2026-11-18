@@ -74,6 +74,10 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
+  // A Job host start the launcher gives up on records its stop, so the run closes with it released, and a host killed
+  // between creating the root and resuming it leaves no process (stricter-only faults in the real Job host; Windows
+  // only, about 4 s on a Windows PC; the start-wait unit test runs on every host in milliseconds).
+  "runner-v2/test/windows-job-start-abort.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

@@ -15,7 +15,20 @@ import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-p
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
 
 const PROTOCOL = "aiboard-managed-process/v1";
-const DEFAULT_START_DEADLINE_MS = 5_000;
+/** One HTTP request to a supervisor. */
+const SUPERVISOR_REQUEST_TIMEOUT_MS = 5_000;
+/**
+ * How long a launch waits for its supervisor and PowerShell Job host to report startup, while both stay alive: a
+ * supervisor that exits first fails the launch at once (waitForSupervisor's `alive`). This is a ceiling for a host
+ * that hangs, never the expected time. PowerShell's start scales with the CPU it gets. Measured 2026-11-18 on a
+ * 16-core Windows 10 host, from launchOwned to the host's started line:
+ *   - idle: cold 1.2 s; sequential median 0.5 s, max 0.65 s; four at once median 0.6 s, max 0.8 s;
+ *   - 20 busy loops: cold 6.9 s; sequential median 4.0 s, max 5.1 s; four at once median 4.7 s, max 7.6 s;
+ *   - 40 busy loops: cold 32.9 s; sequential median 17.4 s, max 19.2 s; four at once median 27.6 s, max 41.3 s.
+ * The former fixed 5 s failed real launches under load (PR CI, cli-worker-processes); the ceiling is about three
+ * times the worst measured start.
+ */
+const DEFAULT_START_CEILING_MS = 120_000;
 /** keepWarm stops after this many consecutive background prestart failures, so a host that cannot start spares stops trying. */
 const KEEP_WARM_FAILURE_LIMIT = 3;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
@@ -131,6 +144,13 @@ export interface WindowsJobChannelState {
   readonly retainedOutput?: readonly BackpressuredOutputMetadata[];
   readonly snapshot: WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean };
 }
+/**
+ * Faults a test can inject into the Job host. Each only makes it stricter: slow_start makes the host take longer to
+ * start than its launcher waits; slow_start_late_close does that and also delivers the host's close to its supervisor
+ * a second late, as on a loaded host; host_exit_after_create ends the host right after it created the root, before it
+ * resumed it.
+ */
+export type WindowsJobInjectedLaunchFault = "slow_start" | "slow_start_late_close" | "host_exit_after_create";
 export interface WindowsJobProcessHostOptions {
   readonly stateDirectory: string; readonly platform?: NodeJS.Platform;
   readonly idFactory?: () => string; readonly clock?: () => string;
@@ -153,6 +173,8 @@ export interface WindowsJobProcessHostOptions {
   readonly maxRecordScan?: number;
   /** Retention: how long one pass waits, for all its held records together, for their supervisors to exit. Test seam; default 15 s. */
   readonly retentionSupervisorExitMs?: number;
+  /** Test seam: a stricter-only fault the Job host injects into every launch (WindowsJobInjectedLaunchFault). */
+  readonly injectedLaunchFault?: WindowsJobInjectedLaunchFault;
 }
 
 /**
@@ -233,6 +255,17 @@ interface SupervisorStatus {
 
 export class WindowsJobHostError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = "WindowsJobHostError"; }
+}
+/**
+ * A start that failed after its record existed (the host was aborted, or reported a failed start). The record names
+ * the exact Job host process, so the caller reconciles and releases it through the normal contract instead of
+ * assuming the failed start left nothing behind.
+ */
+export class WindowsJobStartFailedError extends WindowsJobHostError {
+  constructor(code: string, message: string, readonly startRecord: { readonly processId: string; readonly startedAt: string }) {
+    super(code, message);
+    this.name = "WindowsJobStartFailedError";
+  }
 }
 
 /** Digest-pin record for one compiled Job-host helper assembly. The digest lives
@@ -678,6 +711,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly clock: () => string;
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
+  private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
   private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
   private readonly maxRetainedOutputChunks: number;
@@ -717,7 +751,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
-    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_DEADLINE_MS;
+    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_CEILING_MS;
+    this.injectedLaunchFault = options.injectedLaunchFault;
     this.controlDeadlineMs = options.controlDeadlineMs ?? DEFAULT_CONTROL_DEADLINE_MS;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
     this.maxRetainedOutputChunks = options.maxRetainedOutputChunks ?? 16;
@@ -896,14 +931,18 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
+        ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
       }));
-      const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
+      const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher));
       await this.applyStatus(record, status);
       if (status.status === "stopped" && status.error) throw new WindowsJobHostError("process_start_failed", status.error);
       if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
     } catch (error) {
+      // The abort waits for the host's exit, which records the start's stop; the error carries the exact record, so
+      // the caller settles it on that recorded proof (reconcile, verify-empty, release).
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
-      throw error;
+      throw new WindowsJobStartFailedError(error instanceof WindowsJobHostError ? error.code : "process_start_failed",
+        error instanceof Error ? error.message : "Windows Job start failed.", { processId, startedAt: record.startedAt });
     }
     if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
     if (this.spareOptions.keepWarm === true && input.interactive === true) this.refreshSpareInBackground(input);
@@ -1048,10 +1087,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
+        ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         spare: true,
         ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
       }));
-      await waitForSpareReadyStatus(record.supervisor, processId, this.startDeadlineMs);
+      await waitForSpareReadyStatus(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher));
     } catch (error) {
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
       this.removeSpareFiles(processId);
@@ -1181,7 +1221,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.records.set(processId, claimed); await this.persist(claimed);
       if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
       try {
-        const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
+        const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher));
         await this.applyStatus(claimed, live);
         if (live.status === "stopped" && live.error) throw new WindowsJobHostError("process_start_failed", live.error);
         if (live.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
@@ -2073,6 +2113,11 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
     return null;
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
+/** A launcher (supervisor) child process that has neither exited nor been killed. */
+function childAlive(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
 /**
  * PX-2b: event-driven supervisor-startup wait. The status file is re-read on
  * every directory event instead of every 25 ms; the start deadline stays
@@ -2086,9 +2131,13 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
  * pipe buffer: either way the claim never blocks on boot). Fails fast when
  * the supervisor already died; throws at the same start deadline otherwise.
  * Exported for tests.
+ *
+ * `alive`: whether the supervisor process still runs. Once it does not, the status it last wrote is read once more and
+ * the wait ends: a start never waits out the ceiling for a supervisor that is already gone.
  */
-export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number, alive?: () => boolean): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
+  let lastLook = false;
   for (;;) {
     let wake!: () => void;
     const woke = new Promise<void>((resolve) => { wake = resolve; });
@@ -2103,6 +2152,8 @@ export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, proc
         if ((status.status === "stopped" || status.status === "exited_unknown") && status.spareReady !== true)
           throw new WindowsJobHostError("process_start_failed", `Windows Job spare supervisor failed before becoming ready: ${status.error ?? status.status}.`);
       }
+      if (lastLook) break;
+      if (alive && !alive()) { lastLook = true; continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
@@ -2110,7 +2161,7 @@ export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, proc
       try { watcher?.close(); } catch {}
     }
   }
-  throw new WindowsJobHostError("process_start_failed", "Windows Job spare supervisor did not become ready before the deadline.");
+  throw new WindowsJobHostError("process_start_failed", lastLook ? "Windows Job spare supervisor exited before it reported startup." : "Windows Job spare supervisor did not become ready before the deadline.");
 }
 
 /**
@@ -2138,8 +2189,9 @@ function armFileWatch(directory: string, filename: string, wake: () => void): { 
   }
 }
 
-export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number, alive?: () => boolean): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
+  let lastLook = false;
   for (;;) {
     let wake!: () => void;
     const woke = new Promise<void>((resolve) => { wake = resolve; });
@@ -2164,6 +2216,8 @@ export async function waitForSupervisor(supervisor: SupervisorRecord, processId:
           }
         }
       }
+      if (lastLook) break;
+      if (alive && !alive()) { lastLook = true; continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
@@ -2171,7 +2225,7 @@ export async function waitForSupervisor(supervisor: SupervisorRecord, processId:
       try { watcher?.close(); } catch {}
     }
   }
-  throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
+  throw new WindowsJobHostError("process_start_failed", lastLook ? "Windows Job supervisor exited before it reported startup." : "Windows Job supervisor did not become ready before the deadline.");
 }
 
 /**
@@ -2223,7 +2277,7 @@ export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord
   return await supervisorRequest<SupervisorStatus>(supervisor, query, "GET", undefined, bounded + 250);
 }
 
-async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_START_DEADLINE_MS + 250): Promise<T> {
+async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = SUPERVISOR_REQUEST_TIMEOUT_MS + 250): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {
     let settled = false;
@@ -2447,12 +2501,18 @@ function waitForLauncherExit(launcher: ChildProcess, timeoutMs: number): Promise
     launcher.once("exit", onExit);
   });
 }
+/**
+ * The supervisor bounds its own abort by the same stop deadline (it waits for the host's exit and records it, then
+ * acknowledges). This margin only orders the two bounds, so a supervisor still recording its stop is not killed first;
+ * a supervisor that exits ends the wait at once.
+ */
+const ABORT_ACK_MARGIN_MS = 5_000;
 async function abortStartingSupervisor(launcher: ChildProcess, token: string, deadlineMs: number): Promise<void> {
   if (launcher.exitCode !== null || launcher.signalCode !== null) return;
   const acknowledged = await new Promise<boolean>((resolvePromise) => {
     let settled = false; const finish = (value: boolean) => { if (settled) return; settled = true; clearTimeout(timer); launcher.off("message", onMessage); launcher.off("exit", onExit); resolvePromise(value); };
     const onMessage = (message: unknown) => { if (message && typeof message === "object" && (message as { type?: unknown }).type === "abort_ack" && (message as { token?: unknown }).token === token) finish(true); };
-    const onExit = () => finish(true); const timer = setTimeout(() => finish(false), Math.max(250, deadlineMs));
+    const onExit = () => finish(true); const timer = setTimeout(() => finish(false), Math.max(250, deadlineMs) + ABORT_ACK_MARGIN_MS);
     launcher.on("message", onMessage); launcher.once("exit", onExit); if (!launcher.connected) finish(false); else launcher.send({ type: "abort", token }, (error) => { if (error) finish(false); });
   });
   if (!acknowledged && launcher.exitCode === null && launcher.signalCode === null) launcher.kill("SIGKILL");

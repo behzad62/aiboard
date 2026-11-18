@@ -35,6 +35,8 @@ let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
 let settled = false;
+// The launcher aborted this start (abortStartup): the workload's output has no reader.
+let startupAborted = false;
 let backendFailure;
 const retainedOutput = [];
 const outputOffsets = { stdout: 0, stderr: 0 };
@@ -326,6 +328,7 @@ function currentJobConfiguration() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
 }
 
@@ -493,19 +496,24 @@ function launchWindowsJob() {
     status.jobEmptyProof = true;
   });
   backend.once("close", (exitCode) => {
-    if (config.interactive) pollInteractiveJobEvents();
-    backendInput = undefined;
-    if (settled) return;
-    if (backendFailure) {
-      startupFailed(backendFailure);
-      return;
-    }
-    if (status.jobEmptyProof) {
-      tryMarkStopped();
-      return;
-    }
-    status.exitCode = exitCode;
-    markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
+    const closed = () => {
+      if (config.interactive) pollInteractiveJobEvents();
+      backendInput = undefined;
+      if (settled) return;
+      if (backendFailure) {
+        startupFailed(backendFailure);
+        return;
+      }
+      if (status.jobEmptyProof) {
+        tryMarkStopped();
+        return;
+      }
+      status.exitCode = exitCode;
+      markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
+    };
+    // Stricter-only test fault: the host's close reaches this supervisor late, as on a loaded host.
+    if (config.injectedFault === "slow_start_late_close") setTimeout(closed, 1_000);
+    else closed();
   });
   // PX-2c note: this literal is intentionally inline (not the shared
   // currentJobConfiguration() below): windows-job-supervisor-input.test.ts
@@ -520,6 +528,7 @@ function launchWindowsJob() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
   if (config.spare === true) {
     // PX-2c: the supervisor (node) and the Job host (PowerShell) have booted
@@ -593,6 +602,10 @@ function publishRetainedOutputStatus() {
 function tryMarkStopped() {
   if (!status.jobEmptyProof) return;
   if (config.interactive && (!interactiveStdoutEnded || !interactiveStderrEnded)) return;
+  // An aborted start: its launcher gave up before the workload was reported started, so nobody reads its output. The
+  // Job is empty and both streams ended; bytes held for a reader that will never come are dropped, never a reason to
+  // leave the stop unrecorded.
+  if (startupAborted) retainedOutput.length = 0;
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
       status.status = "exited_unknown";
@@ -758,7 +771,12 @@ async function abortStartup(message) {
   if (!message || message.token !== config.token) return;
   try {
     if (status.port > 0 && backend) {
+      startupAborted = true;
       await stopOwnedTree("SIGKILL", config.stopDeadlineMs);
+      // The kill ends the host, and its exit (a kill-on-close Job) is the exact empty proof: wait for it and record the
+      // stop before acknowledging, so the aborted launch's record ends stopped with proof, never `starting`. Bounded by
+      // the stop deadline; a host that outlives it leaves the record unproven, as before.
+      if (config.interactive) await waitForExit(Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, config.stopDeadlineMs || MAX_STOP_DEADLINE_MS)));
     } else {
       stopping = true;
       settled = true;

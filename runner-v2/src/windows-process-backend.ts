@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, resolve } from "node:path";
 
-import type { ProcessBackend, ProcessBackendBinding, ProcessEffectFence, ProcessLaunchRequest } from "./process-backend.js";
+import { ProcessLaunchFailedWithIdentityError, type ProcessBackend, type ProcessBackendBinding, type ProcessEffectFence, type ProcessLaunchRequest } from "./process-backend.js";
 import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
-import type { WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { WindowsJobStartFailedError, type WindowsJobProcessHost } from "./windows-job-process-host.js";
 import { createWindowsJobProcessChannelProvider } from "./windows-job-process-channel.js";
 import type { ProcessHostSemanticFact, ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 
@@ -112,30 +112,38 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     request = assertWindowsBatchSemantics(request, this.windowsBatchArgv);
     const sessionId = request.intent.sessionId ?? request.intent.invocationId;
-    const snapshot = await this.service.launchOwned({
-      runId: request.intent.runId,
-      sessionId,
-      command: request.intent.executable,
-      args: [...request.intent.arguments],
-      workingDirectory: request.intent.workingDirectory,
-      environment: { ...request.environment },
-      interactive: true,
-      fence: { ...request.fence },
-    });
-    const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt, fence: { ...request.fence } };
-    const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
-    const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
-    this.writerFences.set(identity.processId, { ...request.fence });
-    this.registerLane(identity);
-    return {
-      opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
-      birthFingerprint: {
-        observedAt: snapshot.startedAt,
-        discriminator: birthDiscriminator,
-      },
-      rootPid: snapshot.pid,
-      startedAt: snapshot.startedAt,
+    const bind = (record: { readonly processId: string; readonly startedAt: string }) => {
+      const opaqueIdentity: JobOpaqueIdentity = { processId: record.processId, runId: request.intent.runId, sessionId, startedAt: record.startedAt, fence: { ...request.fence } };
+      const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
+      const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
+      this.writerFences.set(identity.processId, { ...request.fence });
+      this.registerLane(identity);
+      return {
+        opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
+        birthFingerprint: { observedAt: record.startedAt, discriminator: birthDiscriminator },
+        startedAt: record.startedAt,
+      };
     };
+    let snapshot;
+    try {
+      snapshot = await this.service.launchOwned({
+        runId: request.intent.runId,
+        sessionId,
+        command: request.intent.executable,
+        args: [...request.intent.arguments],
+        workingDirectory: request.intent.workingDirectory,
+        environment: { ...request.environment },
+        interactive: true,
+        fence: { ...request.fence },
+      });
+    } catch (error) {
+      // A start that failed after its record existed: the exact record goes back with the failure, with no root pid,
+      // so the caller settles it through reconcile, verify-empty and release like any other binding.
+      if (error instanceof WindowsJobStartFailedError)
+        throw new ProcessLaunchFailedWithIdentityError(error.message, bind(error.startRecord), { cause: error });
+      throw error;
+    }
+    return { ...bind(snapshot), rootPid: snapshot.pid };
   }
   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);

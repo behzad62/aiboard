@@ -60,6 +60,8 @@ export interface StreamingRuntimeOptions {
   readonly isolation: { acquire(input: { launchId: string; claims: ConsumedExecutionGrantClaims }): Promise<StreamingSessionLease>; release(lease: StreamingSessionLease): Promise<void> };
   readonly host: {
     launch(input: { launchId: string; claims: ConsumedExecutionGrantClaims; lease: StreamingSessionLease }): Promise<StreamingSessionBackendBinding>;
+    /** The exact binding a failed `launch` named (only an error that `launch` itself threw), for cleanup to settle. */
+    failedLaunchBinding?(error: unknown): StreamingSessionBackendBinding | undefined;
     quiesce(input: { launchId: string; record: unknown; fence: Readonly<{ ownerId: string; fencingToken: number }>; deadlineAt: number }): Promise<"verified" | "blocked" | "outcome_unknown">;
     observeQuiescence(input: { launchId: string; record: unknown; fence: Readonly<{ ownerId: string; fencingToken: number }>; deadlineAt: number }): Promise<"verified" | "blocked" | "outcome_unknown">;
     release(input: { launchId: string; record: unknown; fence: Readonly<{ ownerId: string; fencingToken: number }>; deadlineAt: number }): Promise<"verified" | "blocked" | "outcome_unknown">;
@@ -1496,7 +1498,16 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
         let host = writer.transitionLaunch({ type: "bind_isolation", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: 0, lease, at: clock().toISOString() });
         host = writer.transitionLaunch({ type: "begin_launch", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString() });
-        backendBinding = await effect("launch", async () => backendBinding = await options.host.launch({ launchId: request.launchId, claims, lease: lease! }));
+        backendBinding = await effect("launch", async () => {
+          try { return backendBinding = await options.host.launch({ launchId: request.launchId, claims, lease: lease! }); }
+          catch (error) {
+            // A failed launch that names its exact backend identity is bound for cleanup, which then settles it on the
+            // backend's own proof; without one, cleanup stays blocked as before.
+            const failedBinding = options.host.failedLaunchBinding?.(error);
+            if (failedBinding) backendBinding = failedBinding;
+            throw error;
+          }
+        });
         if (!backendBinding) throw runnerSessionError("launch_failed", "Streaming backend binding is unavailable after launch.");
         const exactBackendBinding = backendBinding;
         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);

@@ -14,6 +14,7 @@ import type {
 import type { InteractiveProcessChannel } from "./interactive-process-channel.js";
 import {
   adoptProcessBackendAfterRestart,
+  failedLaunchIdentity,
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   parseProcessReconciliation,
@@ -35,6 +36,7 @@ import {
 } from "./streaming-process-session-runtime.js";
 import type {
   HostLaunchRecord,
+  StreamingSessionBackendBinding,
   StreamingSessionLease,
   StreamingSessionStoreKernel,
 } from "./streaming-session-store.js";
@@ -95,6 +97,7 @@ export function createExecutionHostStreamingGraph(
 ) {
   const pending = new Map<string, PendingLaunchContext>();
   const contextByBackendIdentity = new Map<string, PendingLaunchContext>();
+  const failedLaunchBindings = new WeakMap<object, StreamingSessionBackendBinding>();
   const verifierByChannel = new WeakMap<
     object,
     (channel: ExecutionHostStreamingHandshakeChannel) => Promise<string>
@@ -167,27 +170,40 @@ export function createExecutionHostStreamingGraph(
           intent.requiredLifecycleScope,
           fence,
         );
-        const launch = parseProcessLaunchResult(await selected.backend.launch({
-          intent,
-          grant: processGrant(claims, lease.invocationId),
-          environment: context.environment,
-          outputOwnerId: `streaming-output:${launchId}`,
-          fence,
-        }));
-        context.backendIdentity = launch.opaqueIdentity;
-        contextByBackendIdentity.set(launch.opaqueIdentity, context);
-        return Object.freeze({
-          registryId: selected.registryId,
-          backendId: selected.attestation.backendId,
-          implementationGeneration: selected.implementationGeneration,
-          implementationDigest: selected.implementationDigest,
-          attestationVersion: selected.attestation.attestationVersion,
-          attestationDigest: selected.attestationDigest,
-          capabilities: selected.attestation.capabilities,
-          lifecycle: selected.attestation.lifecycle,
-          ...launch,
-        });
+        const bound = (launch: ReturnType<typeof parseProcessLaunchResult>) => {
+          context.backendIdentity = launch.opaqueIdentity;
+          contextByBackendIdentity.set(launch.opaqueIdentity, context);
+          return Object.freeze({
+            registryId: selected.registryId,
+            backendId: selected.attestation.backendId,
+            implementationGeneration: selected.implementationGeneration,
+            implementationDigest: selected.implementationDigest,
+            attestationVersion: selected.attestation.attestationVersion,
+            attestationDigest: selected.attestationDigest,
+            capabilities: selected.attestation.capabilities,
+            lifecycle: selected.attestation.lifecycle,
+            ...launch,
+          });
+        };
+        let launched: unknown;
+        try {
+          launched = await selected.backend.launch({
+            intent,
+            grant: processGrant(claims, lease.invocationId),
+            environment: context.environment,
+            outputOwnerId: `streaming-output:${launchId}`,
+            fence,
+          });
+        } catch (error) {
+          // A failed launch that names the exact backend identity it created: that binding is kept for this error, so
+          // the launch's cleanup reconciles and releases it on the backend's proof.
+          const identity = failedLaunchIdentity(error);
+          if (identity && typeof error === "object" && error !== null) failedLaunchBindings.set(error, bound(identity));
+          throw error;
+        }
+        return bound(parseProcessLaunchResult(launched));
       },
+      failedLaunchBinding: (error) => (typeof error === "object" && error !== null ? failedLaunchBindings.get(error) : undefined),
       quiesce: async ({ record, fence, deadlineAt }) => await quiesceExactBackend(
         record as HostLaunchRecord,
         fence,

@@ -21,6 +21,7 @@ public static class ManagedProcessJobHost
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const int PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY = 0x00020012;
+    private const int PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
     private const int PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint FILE_APPEND_DATA = 0x00000004;
@@ -172,6 +173,9 @@ public static class ManagedProcessJobHost
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(IntPtr thread);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -220,6 +224,7 @@ public static class ManagedProcessJobHost
         IntPtr stderr = new IntPtr(-1);
         IntPtr stdin = new IntPtr(-1);
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+        bool contained = false;
         try
         {
             job = CreateJobObject(IntPtr.Zero, null);
@@ -253,10 +258,14 @@ public static class ManagedProcessJobHost
                 BuildCommandLine(launch.Application, launch.Arguments));
 
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, out processInfo))
+                environmentBlock, cwd, startup, job, out contained, out processInfo))
                 ThrowWin32("CreateProcess");
-            if (!AssignProcessToJobObject(job, processInfo.hProcess))
-                ThrowWin32("AssignProcessToJobObject");
+            if (!contained)
+            {
+                if (!AssignProcessToJobObject(job, processInfo.hProcess))
+                    ThrowWin32("AssignProcessToJobObject");
+                contained = true;
+            }
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
@@ -332,6 +341,9 @@ public static class ManagedProcessJobHost
         }
         finally
         {
+            // A root created outside the Job (only where JOB_LIST is unavailable) that never got into it: it is still
+            // suspended, so it has run nothing; it is ended here rather than left behind.
+            if (processInfo.hProcess != IntPtr.Zero && !contained) TerminateProcess(processInfo.hProcess, 1);
             if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
             if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
             if (stdin != new IntPtr(-1)) CloseHandle(stdin);
@@ -342,7 +354,10 @@ public static class ManagedProcessJobHost
         }
     }
 
-    // Creates the root suspended (it joins the Job before it runs). A packaged (Microsoft Store) program, such as the
+    // Creates the root suspended and inside the Job (PROC_THREAD_ATTRIBUTE_JOB_LIST, Windows 10+), so it is in the Job
+    // from its first moment: a host killed at any point after CreateProcess leaves nothing behind (kill-on-close).
+    // Where that attribute is unavailable, inJob is false and the caller assigns it before it runs, and ends it on
+    // any failure first. A packaged (Microsoft Store) program, such as the
     // Store's pwsh, has its children created by default outside the desktop app environment, by a broker, so they leave
     // this Job and outlive a stop. The desktop app policy keeps the root's process tree inside: measured 2026-11-10 with
     // Store pwsh 7.6.9 starting node, node stayed in the Job and died with it. It does not reach a packaged program a
@@ -356,29 +371,78 @@ public static class ManagedProcessJobHost
         IntPtr environmentBlock,
         string cwd,
         STARTUPINFO startup,
+        IntPtr job,
+        out bool inJob,
+        out PROCESS_INFORMATION processInfo)
+    {
+        // An app execution alias (a reparse point, such as a Store program's alias under WindowsApps) is activated by
+        // the system in a way that refuses the Job attribute (ERROR_ACCESS_DENIED), and after that refusal the Job
+        // refuses the retried root as well. Such a root is created as before, still suspended, and assigned right after.
+        bool alias = false;
+        try { alias = launch.Application != null && (File.GetAttributes(launch.Application) & FileAttributes.ReparsePoint) != 0; }
+        catch (Exception) { alias = false; }
+        bool triedJobList;
+        if (CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
+            job, !alias, out triedJobList, out inJob, out processInfo))
+            return true;
+        if (!triedJobList) return false;
+        // Any other refusal with the root inside the Job: created as before. If the Job then refuses the root, the
+        // launch fails and the suspended root is terminated (the callers' finally), never left outside the Job.
+        return CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
+            job, false, out triedJobList, out inJob, out processInfo);
+    }
+
+    private static bool CreateSuspended(
+        LaunchSpec launch,
+        StringBuilder commandLine,
+        ref SECURITY_ATTRIBUTES processAttributes,
+        ref SECURITY_ATTRIBUTES threadAttributes,
+        IntPtr environmentBlock,
+        string cwd,
+        STARTUPINFO startup,
+        IntPtr job,
+        bool useJobList,
+        out bool withJob,
+        out bool inJob,
         out PROCESS_INFORMATION processInfo)
     {
         IntPtr attributeList = IntPtr.Zero;
         IntPtr policy = IntPtr.Zero;
+        IntPtr jobs = IntPtr.Zero;
+        inJob = false;
+        withJob = false;
         try
         {
             IntPtr size = IntPtr.Zero;
-            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+            int attributeCount = useJobList ? 2 : 1;
+            InitializeProcThreadAttributeList(IntPtr.Zero, attributeCount, 0, ref size);
             if (size != IntPtr.Zero)
             {
                 attributeList = Marshal.AllocHGlobal(size);
-                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
+                if (!InitializeProcThreadAttributeList(attributeList, attributeCount, 0, ref size))
                 {
                     Marshal.FreeHGlobal(attributeList);
                     attributeList = IntPtr.Zero;
                 }
             }
+            bool withPolicy = false;
             if (attributeList != IntPtr.Zero)
             {
                 policy = Marshal.AllocHGlobal(4);
                 Marshal.WriteInt32(policy, PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE);
-                if (!UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
-                    policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero))
+                withPolicy = UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
+                    policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero);
+                // The root is created inside the Job (Windows 10+), so no moment exists in which it lives outside it:
+                // a host killed between CreateProcess and an AssignProcessToJobObject call would otherwise leave a
+                // suspended root behind, outside every Job.
+                if (useJobList)
+                {
+                    jobs = Marshal.AllocHGlobal(IntPtr.Size);
+                    Marshal.WriteIntPtr(jobs, job);
+                    withJob = UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                        jobs, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero);
+                }
+                if (!withPolicy && !withJob)
                 {
                     DeleteProcThreadAttributeList(attributeList);
                     Marshal.FreeHGlobal(attributeList);
@@ -394,10 +458,12 @@ public static class ManagedProcessJobHost
                 extended.lpAttributeList = attributeList;
                 creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
             }
-            return CreateProcess(launch.Application, commandLine,
+            bool created = CreateProcess(launch.Application, commandLine,
                 ref processAttributes, ref threadAttributes,
                 true, creationFlags,
                 environmentBlock, cwd, ref extended, out processInfo);
+            inJob = created && withJob;
+            return created;
         }
         finally
         {
@@ -407,6 +473,7 @@ public static class ManagedProcessJobHost
                 Marshal.FreeHGlobal(attributeList);
             }
             if (policy != IntPtr.Zero) Marshal.FreeHGlobal(policy);
+            if (jobs != IntPtr.Zero) Marshal.FreeHGlobal(jobs);
         }
     }
 
@@ -420,13 +487,17 @@ public static class ManagedProcessJobHost
         string[] arguments,
         string cwd,
         IDictionary<string, string> environment,
-        string eventPath)
+        string eventPath,
+        string injectedFault)
     {
         IntPtr job = IntPtr.Zero;
         IntPtr environmentBlock = IntPtr.Zero;
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+        bool contained = false;
         try
         {
+            // Stricter-only test fault: a host that takes longer to start than its launcher waits (a loaded host).
+            if (injectedFault == "slow_start" || injectedFault == "slow_start_late_close") Thread.Sleep(30000);
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
@@ -458,10 +529,21 @@ public static class ManagedProcessJobHost
                 BuildCommandLine(launch.Application, launch.Arguments));
 
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, out processInfo))
+                environmentBlock, cwd, startup, job, out contained, out processInfo))
                 ThrowWin32("CreateProcess");
-            if (!AssignProcessToJobObject(job, processInfo.hProcess))
-                ThrowWin32("AssignProcessToJobObject");
+            // Stricter-only test fault: the host dies right after CreateProcess, before resume, as a kill of the host
+            // would. The root was created inside the Job (JOB_LIST), so the Job's kill-on-close ends it.
+            if (injectedFault == "host_exit_after_create")
+            {
+                EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
+                System.Diagnostics.Process.GetCurrentProcess().Kill();
+            }
+            if (!contained)
+            {
+                if (!AssignProcessToJobObject(job, processInfo.hProcess))
+                    ThrowWin32("AssignProcessToJobObject");
+                contained = true;
+            }
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
@@ -539,6 +621,9 @@ public static class ManagedProcessJobHost
         }
         finally
         {
+            // A root created outside the Job (only where JOB_LIST is unavailable) that never got into it: it is still
+            // suspended, so it has run nothing; it is ended here rather than left behind.
+            if (processInfo.hProcess != IntPtr.Zero && !contained) TerminateProcess(processInfo.hProcess, 1);
             if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
             if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
@@ -959,7 +1044,8 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
             [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
             [string]$configuration.cwd,
             $environment,
-            [string]$configuration.eventPath
+            [string]$configuration.eventPath,
+            [string]$configuration.injectedFault
         )
         exit $exitCode
     } catch {
