@@ -151,7 +151,7 @@ export interface WindowsJobProcessHostOptions {
   readonly helperFallbackWarningKey?: string;
   /** Record files one maintenance scan (the startup scan, each run-end spare sweep) reads at most. Default 512. */
   readonly maxRecordScan?: number;
-  /** Retention: how long a pass waits for a released record's supervisor to exit before it deletes the record's folder. Test seam; default 15 s. */
+  /** Retention: how long one pass waits, for all its held records together, for their supervisors to exit. Test seam; default 15 s. */
   readonly retentionSupervisorExitMs?: number;
 }
 
@@ -162,12 +162,12 @@ export interface WindowsJobProcessHostOptions {
  */
 const DEFAULT_RECORD_SCAN_LIMIT = 512;
 /**
- * Retention: how long a pass waits for a released record's supervisor to exit before deleting its folder. A released
+ * Retention: how long one pass waits, for all its records together, for their supervisors to exit. A released
  * process's supervisor reports the stop, then exits, holding its output logs until it does (the Job host opens them
  * without delete sharing). This is the measured basis of CW3's transient supervisor wait (execution-host.ts,
  * TRANSIENT_SUPERVISOR_EXIT_CEILING_MS): on an idle Windows PC every supervisor had already exited when the wait began,
- * and GitHub's Windows image was about 3 times slower. The wait polls every 25 ms and ends as soon as it is gone; at
- * the ceiling the record stays marked, and a later sweep finishes it once the supervisor is gone.
+ * and GitHub's Windows image was about 3 times slower. The wait polls every 25 ms and ends as soon as they are gone; a
+ * record still held at the ceiling (or whose PID was reused) stays marked, and a later sweep finishes it.
  */
 const DEFAULT_RETENTION_SUPERVISOR_EXIT_MS = 15_000;
 const RETENTION_SUPERVISOR_POLL_MS = 25;
@@ -823,7 +823,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
 
   /** Finishes a record a retention pass marked, only once its supervisor is gone; never waits for it. */
   private async finishMarkedRecord(value: HostRecord): Promise<void> {
-    await this.retireReleasedRecord({ processId: value.processId, sessionId: value.sessionId, startedAt: value.startedAt }, value.runId, 0);
+    await this.retireReleasedRecord({ processId: value.processId, sessionId: value.sessionId, startedAt: value.startedAt }, value.runId);
   }
 
   async launchOwned(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot> {
@@ -1373,13 +1373,31 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       // settled, so no launch of it is in flight to race; a later launch of the run clears the mark itself anyway.
       this.retiredSpareRuns.delete(closedRun.runId);
       const seen = new Set<string>();
+      // First every named record is proven and marked, deleting those whose supervisor is already gone; then the ones
+      // still held wait together under one deadline for the pass, never one ceiling each.
+      let waiting: WindowsJobReleasedRecord[] = [];
       for (const entry of closedRun.released) {
         if (seen.has(entry.processId)) continue;
         seen.add(entry.processId);
         const outcome = await this.retireReleasedRecord(entry, closedRun.runId);
         if (outcome === "deleted") deleted += 1;
         else if (outcome === "kept") kept += 1;
+        else if (outcome === "supervisor_alive") waiting.push(entry);
       }
+      const deadline = Date.now() + this.retentionSupervisorExitMs;
+      while (waiting.length > 0 && Date.now() < deadline) {
+        await new Promise((resolveWait) => setTimeout(resolveWait, RETENTION_SUPERVISOR_POLL_MS));
+        const still: WindowsJobReleasedRecord[] = [];
+        for (const entry of waiting) {
+          const outcome = await this.retireReleasedRecord(entry, closedRun.runId);
+          if (outcome === "deleted") deleted += 1;
+          else if (outcome === "kept") kept += 1;
+          else if (outcome === "supervisor_alive") still.push(entry);
+        }
+        waiting = still;
+      }
+      // Still held at the deadline: marked, kept for a later sweep.
+      kept += waiting.length;
     } catch {}
     return { deleted, kept };
   }
@@ -1392,7 +1410,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
    * durably, and the folder goes before the record, so a pass that stops part way leaves a marked record that the next
    * run-end sweep reaching it finishes. Every deleted path derives from the validated process id, never from a path the record holds.
    */
-  private async retireReleasedRecord(named: WindowsJobReleasedRecord, runId: string, supervisorExitMs = this.retentionSupervisorExitMs): Promise<"deleted" | "absent" | "kept"> {
+  private async retireReleasedRecord(named: WindowsJobReleasedRecord, runId: string): Promise<"deleted" | "absent" | "kept" | "supervisor_alive"> {
     const processId = named.processId;
     // One pass per record at a time: a second pass (a re-bound run closing while the first still runs) keeps it.
     if (this.retentionInFlight.has(processId)) return "kept";
@@ -1412,9 +1430,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         const marked: HostRecord = { ...candidate, retentionRemovingAt: this.clock() };
         await this.persist(marked, { afterRename: () => { this.records.set(processId, marked); } });
       }
-      // The supervisor holds the output logs until it exits. Still alive at the ceiling (or a reused PID): the record
-      // stays marked, and a later sweep finishes it. No process is ever signalled here; the PID only gates deletion.
-      if (!(await supervisorExited(candidate.supervisor.supervisorPid, supervisorExitMs))) return "kept";
+      // The supervisor holds the output logs until it exits. Still alive (or a reused PID): the record stays marked,
+      // and the pass's shared wait or a later sweep finishes it. No process is ever signalled; the PID only gates
+      // deletion, never a stop.
+      if (!supervisorGone(candidate.supervisor.supervisorPid)) return "supervisor_alive";
       removeRetiredProcessFolder(this.containedProcessPath(processId, ""));
       rmSync(this.containedProcessPath(processId, ".json"), { force: true });
       this.records.delete(processId);
@@ -2397,17 +2416,11 @@ async function retireVerifiedClaimWindowTree(record: HostRecord, durable: Superv
   }
 }
 
-/** CW3: whether `pid` names a live process (EPERM: alive, not ours to signal). */
-/** Retention: whether a supervisor PID is gone, polling until it is or the wait ends. A PID never set (0) is gone. */
-async function supervisorExited(pid: number, waitMs: number): Promise<boolean> {
-  if (!(pid > 0)) return true;
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    if (!processIsAlive(pid)) return true;
-    if (Date.now() >= deadline) return false;
-    await new Promise((resolveWait) => setTimeout(resolveWait, RETENTION_SUPERVISOR_POLL_MS));
-  }
+/** Retention: whether a supervisor PID is gone now. A PID never set (0) is gone. Never waits. */
+function supervisorGone(pid: number): boolean {
+  return !(pid > 0) || !processIsAlive(pid);
 }
+/** CW3: whether `pid` names a live process (EPERM: alive, not ours to signal). */
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

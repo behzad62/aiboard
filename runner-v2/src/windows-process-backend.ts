@@ -79,9 +79,9 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
     : new WindowsProcessBackend(options);
 }
 
-/** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
 /** The backend id every Windows Job backend binding carries. */
 const WINDOWS_JOB_BACKEND_ID = "runner-windows-job-v1";
+/** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
 export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
   private readonly controls = new Map<string, JobControlLane>();

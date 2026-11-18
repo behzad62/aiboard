@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { assertSubprocessCleanupSettled, releasedWindowsJobRecords } from "../src/inspection-cleanup.js";
+import { withOwnedFenceLock } from "../src/owned-fence-lock.mjs";
 import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { windowsJobRecordOfBinding } from "../src/windows-process-backend.js";
 import type { DurableProcessStore } from "../src/durable-process-store.js";
@@ -185,6 +186,88 @@ test("retention waits for a live supervisor, keeps the record marked, and a swee
     await host.retireSpare!({ runId: "another-run" });
     assert.deepEqual(f.present("process_lingering"), { record: false, folder: false });
   } finally { lingering.kill(); f.close(); }
+});
+
+test("one retention pass waits for all its held supervisors under one deadline, never one ceiling each", async () => {
+  const f = fixture();
+  const lingering = [0, 1, 2].map(() => spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+  try {
+    lingering.forEach((child, index) => f.write({ processId: `process_held_${index}`, supervisorPid: child.pid! }));
+    const host = f.host({ retentionSupervisorExitMs: 600 });
+    const started = Date.now();
+    const result = await host.retireReleasedRecords!({ runId, released: [0, 1, 2].map((index) => f.named(`process_held_${index}`)) });
+    const elapsed = Date.now() - started;
+    assert.deepEqual(result, { deleted: 0, kept: 3 });
+    assert.ok(elapsed < 1_500, `three held records waited ${elapsed} ms: one shared 600 ms deadline, not 3 x 600 ms`);
+  } finally { for (const child of lingering) child.kill(); f.close(); }
+});
+
+test("a folder removal that fails after the mark keeps the marked record, and a sweep finishes it", { skip: process.platform !== "win32" ? "an open handle blocks deletion only on Windows" : false }, async () => {
+  const f = fixture();
+  // Holds stdout.log open without delete sharing, as the Job host does, until stdin closes.
+  let holder: ReturnType<typeof spawn> | undefined;
+  try {
+    const host = f.host();
+    const written = f.write({ processId: "process_held_open" });
+    holder = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      "$s=[IO.File]::Open($env:AIBOARD_TEST_HOLD_PATH,'Open','Read','Read'); [Console]::Out.WriteLine('ready'); [Console]::In.ReadLine() | Out-Null; $s.Close()"],
+      { stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, AIBOARD_TEST_HOLD_PATH: written.stdoutPath } });
+    await new Promise<void>((resolveReady, rejectReady) => {
+      holder!.stdout!.on("data", (chunk: Buffer) => { if (chunk.toString().includes("ready")) resolveReady(); });
+      holder!.once("exit", () => rejectReady(new Error("handle holder exited early")));
+    });
+    assert.deepEqual(await host.retireReleasedRecords!({ runId, released: [f.named("process_held_open")] }), { deleted: 0, kept: 1 });
+    const record = JSON.parse(readFileSync(join(f.root, "process_held_open.json"), "utf8")) as { retentionRemovingAt?: unknown };
+    assert.equal(typeof record.retentionRemovingAt, "string", "the mark was durable before the folder removal failed");
+    const exited = new Promise((resolveExit) => holder!.once("exit", resolveExit));
+    holder.stdin!.end("\n");
+    await exited;
+    await host.retireSpare!({ runId: "another-run" });
+    assert.deepEqual(f.present("process_held_open"), { record: false, folder: false });
+  } finally { holder?.kill(); f.close(); }
+});
+
+test("retention waits behind a held fence lock and deletes nothing while it is held", async () => {
+  const f = fixture();
+  try {
+    const host = f.host();
+    f.write({ processId: "process_locked" });
+    let releaseLock!: () => void;
+    const held = new Promise<void>((resolveHeld) => { releaseLock = resolveHeld; });
+    let entered!: () => void;
+    const lockTaken = new Promise<void>((resolveEntered) => { entered = resolveEntered; });
+    const holding = withOwnedFenceLock(join(f.root, "process_locked.fence.lock"), async () => { entered(); await held; });
+    await lockTaken;
+    const retention = host.retireReleasedRecords!({ runId, released: [f.named("process_locked")] });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    assert.deepEqual(f.present("process_locked"), { record: true, folder: true }, "nothing is deleted under a held lock");
+    const unmarked = JSON.parse(readFileSync(join(f.root, "process_locked.json"), "utf8")) as { retentionRemovingAt?: unknown };
+    assert.equal(unmarked.retentionRemovingAt, undefined, "not even marked while the lock is held");
+    releaseLock();
+    await holding;
+    assert.deepEqual(await retention, { deleted: 1, kept: 0 });
+    assert.deepEqual(readdirSync(f.root), [], "the lock file the holder left is removed with the record");
+  } finally { f.close(); }
+});
+
+test("a release replay racing retention either finishes from the tombstone or fails closed", async () => {
+  const f = fixture();
+  try {
+    f.write({ processId: "process_racing", released: false, supervisorStatus: "stopped" });
+    const host = f.host();
+    const owner = { runId, sessionId };
+    await host.releaseOwned("process_racing", owner, startedAt);
+    const [replay, retention] = await Promise.allSettled([
+      host.releaseOwned("process_racing", owner, startedAt),
+      host.retireReleasedRecords!({ runId, released: [f.named("process_racing")] }),
+    ]);
+    assert.equal(retention.status, "fulfilled");
+    assert.deepEqual((retention as PromiseFulfilledResult<unknown>).value, { deleted: 1, kept: 0 });
+    if (replay.status === "fulfilled") assert.equal(replay.value.ownershipReleased, true);
+    else assert.ok(["process_not_found", "process_control_unavailable"].includes((replay.reason as { code?: string }).code ?? ""),
+      `a replay that loses the race fails closed, never with another outcome: ${String(replay.reason)}`);
+    assert.deepEqual(readdirSync(f.root), []);
+  } finally { f.close(); }
 });
 
 test("startup finishes a record a previous Runner's retention pass had marked", async () => {
