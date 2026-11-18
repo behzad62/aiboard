@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { basename } from "node:path";
 import { after } from "node:test";
 import { inspect } from "node:util";
@@ -23,7 +24,7 @@ export async function finalizeCertifiedFixture(input: Readonly<{
       input.hasPrimaryFailure ? [input.primaryFailure, cleanupFailure] : [cleanupFailure],
       `${input.fixtureName} cleanup remains unverified; exact evidence retained at ${input.root}.`,
     );
-    unverifiedCleanups.push(retained);
+    noteUnverifiedCleanup(retained);
     throw retained;
   }
   if (input.hasPrimaryFailure) throw input.primaryFailure;
@@ -38,25 +39,36 @@ export async function finalizeCertifiedFixture(input: Readonly<{
  * supervisors, so a later close could still prove the stop. Those handles keep the event loop alive, so the file's
  * process never exits; on CI that cost a whole job (run 44299442959 sat 29 minutes after a 4 s failure).
  *
- * Once every test of the file has finished (the root `after` hook), a process with an unverified cleanup is ended
- * as soon as the reporter has flushed: like a Runner crash, which the durable owners are built to survive. Nothing
- * is signalled, stopped or removed here; the evidence root stays, the failure stays reported, and the full nested
- * cleanup errors are printed (the test reporter shows only their first level). A file with no unverified cleanup,
- * or one that drains by itself, exits as before: the watch is unref'd.
+ * The first unverified cleanup adds one root `after` hook. Root hooks run in the order they were added, so this one
+ * runs after the file's own (they are added when the file loads, or earlier in its root `after` phase); after it the
+ * root only reports. From then on, a process that is still alive once its output has drained is ended: like a Runner
+ * crash, which the durable owners are built to survive. Nothing is signalled, stopped or removed here, and the
+ * evidence root stays. The exit keeps the process's own exit code: the verdict is the tests' (the test whose fixture
+ * cleanup failed has already failed, with that error), never this hook's. The full nested cleanup errors are printed
+ * first, because the test reporter shows only their first level. The watch is unref'd, so a process that drains by
+ * itself exits as before and prints nothing.
  */
 const unverifiedCleanups: AggregateError[] = [];
-/** The reporter's events follow the root `after` hook at once; this only lets their pipe writes leave the process. */
+/** The root reports right after its last `after` hook; this only lets those writes leave the process. */
 const RETAINED_EXIT_FLUSH_MS = 1_000;
 /** Ceiling for a stdout/stderr that never drains (a parent that stopped reading). */
 const RETAINED_EXIT_CEILING_MS = 10_000;
 const RETAINED_EXIT_POLL_MS = 50;
+/** Created when the module loads, outside any test: `after()` run in its scope attaches to the root, not to a test. */
+const rootScope = new AsyncResource("certified-fixture-root");
+// Only in a test file's own process (its main module, under --test or run directly). Qualification scenarios import
+// this helper into plain child processes, where a node:test hook would start a test harness of its own; they inherit
+// the test runner's environment, so NODE_TEST_CONTEXT cannot tell them apart.
+const inTestFile = /\.test\.[cm]?[jt]s$/.test(process.argv[1] ? basename(process.argv[1]) : "");
+
+function noteUnverifiedCleanup(failure: AggregateError): void {
+  unverifiedCleanups.push(failure);
+  if (unverifiedCleanups.length === 1 && inTestFile) rootScope.runInAsyncScope(() => after(armRetainedCleanupExit));
+}
 
 function armRetainedCleanupExit(): void {
-  if (unverifiedCleanups.length === 0) return;
   const startedAt = performance.now();
   let reported = false;
-  // Unref'd: a process that drains by itself exits before this fires and prints nothing (files that exercise a
-  // failed cleanup on purpose hold nothing). Only a process still held alive after the flush window gets here.
   const watch = setInterval(() => {
     const elapsed = performance.now() - startedAt;
     const drained = process.stdout.writableLength === 0 && process.stderr.writableLength === 0;
@@ -66,18 +78,13 @@ function armRetainedCleanupExit(): void {
         process.stderr.write(`[certified-fixture] ${inspect(failure, { depth: Infinity, breakLength: 160 })}\n`);
       }
       process.stderr.write(`[certified-fixture] ${unverifiedCleanups.length} fixture cleanup(s) remain unverified and what ` +
-        "they retain keeps this test process alive; ending it now. Evidence roots are kept.\n");
+        "they retain keeps this test process alive after its last test; ending it now. Evidence roots are kept.\n");
       return;
     }
     if ((reported && drained) || elapsed >= RETAINED_EXIT_CEILING_MS) {
       clearInterval(watch);
-      process.exit(1);
+      process.exit();
     }
   }, RETAINED_EXIT_POLL_MS);
   watch.unref();
 }
-
-// Only in a test file's own process (its main module, under --test or run directly). Qualification scenarios import
-// this helper into plain child processes, where a node:test hook would start a test harness of its own; they inherit
-// the test runner's environment, so NODE_TEST_CONTEXT cannot tell them apart.
-if (/\.test\.[cm]?[jt]s$/.test(process.argv[1] ? basename(process.argv[1]) : "")) after(() => armRetainedCleanupExit());

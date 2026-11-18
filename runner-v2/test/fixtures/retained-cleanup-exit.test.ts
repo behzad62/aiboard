@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
@@ -12,14 +12,32 @@ import type { RunnerCapabilityContract } from "../../src/runner-capability-contr
 import { finalizeCertifiedFixture } from "../support/certified-fixture-cleanup.js";
 
 // Run only as a child by certified-fixture-retained-exit.test.ts (AIBOARD_RETAINED_EXIT_CASE picks the case). Each
-// case's test catches its own unverified cleanup, so the tests pass and only the retained-cleanup exit can fail the
-// file. hold: the failed cleanup keeps a live handle. drain: it keeps nothing. host: a real ExecutionHost run whose
-// close fails (injected), so its owners keep what they hold, as the CW5a run on main did (run 44299442959).
+// case except fail catches its own unverified cleanup, so its tests pass: the exit keeps their verdict. fail: the
+// unverified cleanup fails its test and keeps a live handle. hold: the failed cleanup keeps a live handle. drain: it
+// keeps nothing. host: a real ExecutionHost run whose close fails (injected), so its owners keep what they hold, as
+// the never-started run on main did (run 44299442959).
 const scenario = process.env.AIBOARD_RETAINED_EXIT_CASE;
+
+// The file's own root hook, added before any cleanup fails and slower than the exit's flush window: the exit must not
+// cut it short.
+after(async () => {
+  await delay(1_500);
+  process.stdout.write("FILE_ROOT_AFTER_DONE\n");
+});
 
 test(`a fixture cleanup that stays unverified (${scenario})`, async () => {
   const root = await mkdtemp(join(tmpdir(), `retained-exit-${scenario}-`));
   process.stdout.write(`RETAINED_ROOT=${root}\n`);
+  if (scenario === "fail") {
+    // As in the never-started run on main: the unverified cleanup fails its test, and its live handle stays.
+    await finalizeCertifiedFixture({
+      fixtureName: "retained exit (fail)", root, hasPrimaryFailure: false,
+      cleanup: async () => { setInterval(() => undefined, 1_000); throw new Error("synthetic close failure"); },
+      certify: async () => undefined,
+      removeRoot: async () => undefined,
+    });
+    return;
+  }
   if (scenario === "hold" || scenario === "drain") {
     await assert.rejects(finalizeCertifiedFixture({
       fixtureName: `retained exit (${scenario})`, root, hasPrimaryFailure: false,

@@ -16,7 +16,7 @@ const CHILD_CEILING_MS = 120_000;
 
 interface ChildResult { readonly code: number | null; readonly output: string; readonly elapsedMs: number; readonly killed: boolean; readonly roots: readonly string[] }
 
-async function runChild(scenario: "hold" | "drain" | "host"): Promise<ChildResult> {
+async function runChild(scenario: "hold" | "fail" | "drain" | "host"): Promise<ChildResult> {
   const env: NodeJS.ProcessEnv = { ...process.env, AIBOARD_RETAINED_EXIT_CASE: scenario };
   // This file itself runs as a test-runner child; the nested runner must not take that role.
   delete env.NODE_TEST_CONTEXT;
@@ -55,12 +55,25 @@ test("a file whose failed cleanup keeps a live handle ends after its last test, 
   try {
     t.diagnostic(`child ended in ${result.elapsedMs} ms`);
     assert.equal(result.killed, false, `the child hung until the ${CHILD_CEILING_MS} ms ceiling:\n${result.output}`);
-    assert.equal(result.code, 1, result.output);
+    assert.equal(result.code, 0, `the exit keeps the tests' verdict:\n${result.output}`);
     assert.match(result.output, /LATER_TEST_RAN/, "every test of the file runs before the exit");
+    assert.match(result.output, /FILE_ROOT_AFTER_DONE/, "the file's own root after hook finishes before the exit");
     assert.match(result.output, /pass 2/, result.output);
     assert.match(result.output, /\[certified-fixture\] 1 fixture cleanup\(s\) remain unverified/);
     assert.match(result.output, /retained-deep-cause/, "the dump shows the nested cleanup errors the reporter cuts off");
     assert.match(result.output, /exact evidence retained at/);
+  } finally { await removeRoots(result.roots); }
+});
+
+test("the test whose fixture cleanup failed still fails the file after the exit", { timeout: CHILD_CEILING_MS + 30_000 }, async () => {
+  const result = await runChild("fail");
+  try {
+    assert.equal(result.killed, false, `the child hung until the ${CHILD_CEILING_MS} ms ceiling:\n${result.output}`);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /pass 1/, result.output);
+    assert.match(result.output, /fail 1/, result.output);
+    assert.match(result.output, /cleanup remains unverified/);
+    assert.match(result.output, /\[certified-fixture\] 1 fixture cleanup\(s\) remain unverified/);
   } finally { await removeRoots(result.roots); }
 });
 
@@ -70,6 +83,7 @@ test("a file whose failed cleanup holds nothing exits by itself, quietly", { tim
     assert.equal(result.killed, false, result.output);
     assert.equal(result.code, 0, result.output);
     assert.match(result.output, /pass 2/, result.output);
+    assert.match(result.output, /FILE_ROOT_AFTER_DONE/);
     assert.doesNotMatch(result.output, /\[certified-fixture\]/);
   } finally { await removeRoots(result.roots); }
 });
@@ -83,7 +97,7 @@ test("a real run whose close fails ends its test file, and on Windows leaves no 
     assert.equal(result.roots.length, 1, result.output);
     if (process.platform === "win32") {
       // The run's construction owner keeps its birth helper when the close fails: this is the hang the guard ends.
-      assert.equal(result.code, 1, result.output);
+      assert.equal(result.code, 0, result.output);
       assert.match(result.output, /\[certified-fixture\] 1 fixture cleanup\(s\) remain unverified/);
       assert.match(result.output, /injected run cleanup fault/);
       // The helper ends on its own when its parent is gone (its control pipe reaches EOF): no orphan is left.
@@ -93,7 +107,7 @@ test("a real run whose close fails ends its test file, and on Windows leaves no 
       assert.deepEqual(running, [], "a process from the retained run outlived its test file");
     } else {
       // Nothing of a POSIX run outlives a failed close here, so the file drains by itself or is ended the same way.
-      assert.ok(result.code === 0 || result.code === 1, result.output);
+      assert.equal(result.code, 0, result.output);
     }
   } finally { await removeRoots(result.roots); }
 });
