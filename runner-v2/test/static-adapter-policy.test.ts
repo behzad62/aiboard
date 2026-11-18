@@ -192,7 +192,88 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
   assert.doesNotMatch(jobHost, /DESKTOP_APP_BREAKAWAY_ENABLE|DESKTOP_APP_BREAKAWAY_OVERRIDE/);
   assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteInt32\(policy, ([^)]+)\)/g)].map((match) => match[1]),
     ["PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE"]);
-});function sourceCodeFiles(root: string): string[] {
+  // 0x1000 is also JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK's value: here it is only an OpenProcess access right.
+  assert.deepEqual([...jobHost.matchAll(/\b0x1000\b/g)].length, 1);
+  assert.match(jobHost, /private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;/);
+  assert.deepEqual([...jobHost.matchAll(/PROCESS_QUERY_LIMITED_INFORMATION/g)].length, 2);
+  assert.match(jobHost, /OpenProcess\(PROCESS_QUERY_LIMITED_INFORMATION, false, pid\)/);
+});
+
+// docs/runner-v2/codex-windows-job-escape-2026-11-18.md §4.2, R4: on Windows 10 1703 (build 15063) or newer a failure to
+// build or update the desktop app policy's attribute list refuses the launch with a coded refusal before CreateProcess;
+// only an older Windows, which has no such attribute, launches without it.
+test("R4: the Job host refuses a launch it cannot give the desktop app policy, before CreateProcess", () => {
+  // A Windows checkout may have CRLF line endings; every pin here reads the source normalized.
+  const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n");
+  const start = jobHost.indexOf("private static bool StartSuspended(");
+  const end = jobHost.indexOf("return CreateProcess(", start);
+  assert.ok(start > 0 && end > start, "StartSuspended ends in its CreateProcess call");
+  const body = jobHost.slice(start, end);
+  assert.match(jobHost, /DESKTOP_APP_POLICY_MIN_BUILD = 15063;/);
+  assert.match(jobHost, /public const string DesktopPolicyRefusalCode = "windows_job_desktop_policy_unavailable";/);
+  assert.match(body, /bool policyRequired = DesktopAppPolicyExpected\(\);/);
+  // Both failure paths (initialize and update) throw the coded refusal when the policy is required, before CreateProcess.
+  assert.equal([...body.matchAll(/if \(policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
+  assert.equal([...body.matchAll(/if \(attributeList == IntPtr\.Zero && policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
+  assert.doesNotMatch(body, /CreateProcess\(/, "nothing is created before the policy is settled");
+  // An unknown version (RtlGetVersion failing) expects the policy: fail closed.
+  assert.match(jobHost, /if \(RtlGetVersion\(ref version\) != 0\) return true;/);
+  // The code reaches the supervisor and the Runner: the host's error event carries it, and launchOwned throws it.
+  assert.match(jobHost, /refused == null \? null : refused\.Code/);
+  const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
+  assert.match(supervisor, /backendFailure\.code = event\.code;/);
+  assert.match(supervisor, /status\.errorCode = error\.code;/);
+  assert.match(supervisor, /if \(backendFailure && status\.status === "starting"\) \{\s+startupFailed\(backendFailure\);/);
+  const tsHost = readFileSync(join(sourceRoot, "windows-job-process-host.ts"), "utf8");
+  assert.match(tsHost, /throw new WindowsJobHostError\(launchRefusalCode\(status\) \?\? "process_start_failed", status\.error\)/);
+});
+
+// R2: the Job's own membership messages, never a host census (DECISION 2026-09-19 §8.1, §14.1).
+test("R2: the Job host watches the Job's membership messages and a packaged member blocks verify-empty and release", () => {
+  const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n");
+  assert.match(jobHost, /private const int JobObjectAssociateCompletionPortInformation = 7;/);
+  assert.match(jobHost, /private const uint JOB_OBJECT_MSG_NEW_PROCESS = 6;/);
+  // Both launches watch from before the root joins: the port is associated right after the Job is made, and the root
+  // is named before AssignProcessToJobObject.
+  assert.equal([...jobHost.matchAll(/SetKillOnClose\(job\);\s+watch = MembershipWatch\.Start\(job, /g)].length, 2);
+  assert.equal([...jobHost.matchAll(/watch\.SetRoot\([^;]+;\s+if \(!AssignProcessToJobObject\(job, processInfo\.hProcess\)\)/g)].length, 2);
+  // Every terminal event the host writes itself comes after the watch has settled.
+  assert.equal([...jobHost.matchAll(/watch\.Settle\(\);\s+(?:Emit|EmitLsp)\((?:eventPath, )?"natural_stopped"/g)].length, 2);
+  assert.match(jobHost, /TerminateAndProve\(job, deadline\);\s+watch\.Settle\(\);\s+Emit\("stopped"/);
+  // The only exemption is a member with exactly the root's own package under the root's desktop app policy.
+  assert.match(jobHost, /if \(rootPolicy && rootPackage != null && String\.Equals\(package, rootPackage, StringComparison\.Ordinal\)\) return;/);
+  // The watch never touches the Job after it settles or once the host closes the Job handle: a query on a closed (or
+  // reused) handle would fail and read as false evidence on a clean stop. Both hosts stop the watch before CloseHandle,
+  // and every step of the loop checks `finished` under the gate first.
+  assert.equal([...jobHost.matchAll(/if \(watch != null\) watch\.Stop\(\);\s+if \(job != IntPtr\.Zero\) CloseHandle\(job\);/g)].length, 2);
+  assert.equal([...jobHost.matchAll(/if \(job != IntPtr\.Zero\) CloseHandle\(job\);/g)].length, 2);
+  assert.equal([...jobHost.matchAll(/lock \(gate\)\s+\{\s+if \(finished\) return;/g)].length, 3);
+  assert.match(jobHost, /CheckAccounting\(true\);[^}]*finished = true;\s+if \(settled != null\) settled\.Set\(\);\s+return;/);
+  // A member event that could not be written never ends as a clean stop, and never ends the host on the watch thread.
+  assert.match(jobHost, /catch \(Exception\) \{ lost = true; \}/);
+  assert.match(jobHost, /if \(lost\) throw new InvalidOperationException\(/);
+  // The only members that are not evidence besides the root's own package: one that already exited before it could be
+  // opened (ERROR_INVALID_PARAMETER), or whose PID now names a process outside this Job. Every other failure is evidence.
+  assert.match(jobHost, /if \(failure == ERROR_INVALID_PARAMETER\) return;/);
+  assert.match(jobHost, /if \(!inJob\) return;/);
+  // No census: the watch never enumerates host processes.
+  assert.doesNotMatch(jobHost, /CreateToolhelp32Snapshot|EnumProcesses|Process\.GetProcesses|Win32_Process/);
+  const backend = readFileSync(join(sourceRoot, "windows-process-backend.ts"), "utf8");
+  assert.match(backend, /if \(snapshot\.memberEvidence\) return \{ empty: false, detail: memberEvidenceDetail\(snapshot\.memberEvidence\) \};/);
+  const tsHost = readFileSync(join(sourceRoot, "windows-job-process-host.ts"), "utf8");
+  // Release (before and inside its fence effect) and record retention all refuse a Job with member evidence.
+  assert.equal([...tsHost.matchAll(/assertNoMemberEvidence\((?:record, status|current, final|current, status)\);/g)].length, 3);
+  assert.match(tsHost, /if \(current\.memberEvidence\)\s+throw new WindowsJobHostError\("process_stop_unproven_packaged_descendant"/);
+});
+
+// R1: a session's pwsh is the Job's own root, never cmd.exe's descendant.
+test("R1: shell sessions never start their shell through cmd.exe", () => {
+  const session = readFileSync(join(sourceRoot, "shell-session.ts"), "utf8");
+  assert.doesNotMatch(session, /command: "cmd(?:\.exe)?"/);
+  assert.doesNotMatch(session, /isStoreAppAlias/);
+  assert.match(session, /return \{ command: pwshExecutable\(\) \?\? "pwsh\.exe", args \};/);
+});
+function sourceCodeFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
     if (entry.isDirectory()) return sourceCodeFiles(path);

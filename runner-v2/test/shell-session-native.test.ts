@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -13,6 +13,7 @@ import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import type { ToolExecutionOutput } from "../src/agent-contracts.js";
 import { bashExecutable, pwshExecutable } from "../src/shell-inventory.js";
+import { sessionLaunch } from "../src/shell-session.js";
 import { bashCall, bashResult } from "../src/anthropic-bash-tool.js";
 import { shellCallBlocks, shellCallOutput } from "../src/openai-shell-tool.js";
 import type { ToolResult } from "../src/agent-contracts.js";
@@ -215,3 +216,46 @@ test("a session takes PowerShell or bash and a name; a longer timeout is capped,
   assert.match(issues({ shell: "pwsh", script: "1", shellSession: "has space" })[0]!, /shellSession is a name/u);
   assert.deepEqual(issues({ shell: "pwsh", script: "1", shellSession: "s", timeoutMs: 120_000 }), []);
 });
+
+// R1 (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §4.2): a pwsh session is the Job's own root, never a
+// descendant of cmd.exe. On a host whose pwsh is the Microsoft Store's, main started it as `cmd.exe /d /c pwsh.exe`:
+// a packaged program started by a descendant has its children created outside the Job (PR #167), so a server the
+// session started with Start-Process (Codex's shape in CW0) outlived the session's stop. Now the managed launch pins the
+// package's own pwsh.exe and the Job host starts it as the root, with the desktop app policy, and the child dies with it.
+const storePwshSkip = !windows ? "Windows Job host"
+  : !pwshExecutable() || !/[\\/]windowsapps[\\/]/iu.test(pwshExecutable()!) ? "needs the Microsoft Store's pwsh first on PATH" : false;
+test("R1: a Store pwsh shell session's child dies with its Job", { skip: storePwshSkip, timeout: 120_000 }, async (t) => {
+  await withHost(t, async ({ project, invoke }) => {
+    const marker = join(project, `r1-child-${process.pid}.pid`);
+    const child = join(project, "r1-child.cjs");
+    await writeFile(child, "require('fs').writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 90000);");
+    let childPid = 0;
+    try {
+      const started = await invoke("process.run", { shell: "pwsh", shellSession: "r1",
+        script: `Start-Process -FilePath '${process.execPath}' -ArgumentList @('${child}', '${marker}') -WindowStyle Hidden; 'started'` });
+      assert.equal(started.isError, false, JSON.stringify(started.content));
+      const processId = (meta(started).shellSession as Record<string, unknown>).processId as string;
+      const deadline = Date.now() + 20_000;
+      while (!childPid && Date.now() < deadline) {
+        try { childPid = Number((await readFile(marker, "utf8")).trim()); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
+      }
+      assert.ok(Number.isSafeInteger(childPid) && childPid > 0, "the session's background child must have started");
+      const stopped = await invoke("process.signal", { processId, signal: "SIGTERM" });
+      assert.equal(stopped.isError, false, JSON.stringify(stopped.content));
+      const gone = Date.now() + 5_000;
+      while (alive(childPid) && Date.now() < gone) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(alive(childPid), false, "the Start-Process child must die with the session's Job");
+    } finally {
+      // This test's own fixture, by the PID it wrote, on a red run only: the Runner never signals outside its Job.
+      if (childPid > 0 && alive(childPid)) { try { process.kill(childPid); } catch {} }
+    }
+  });
+});
+
+test("R1: a session's shell is never started through cmd.exe", () => {
+  for (const shell of ["powershell", "pwsh", "bash"] as const) assert.notEqual(sessionLaunch(shell).command.toLowerCase().replace(/^.*[\\/]/u, ""), "cmd.exe", shell);
+});
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}

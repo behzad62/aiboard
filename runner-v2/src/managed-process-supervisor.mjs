@@ -326,6 +326,7 @@ function currentJobConfiguration() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
 }
 
@@ -520,6 +521,7 @@ function launchWindowsJob() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
   if (config.spare === true) {
     // PX-2c: the supervisor (node) and the Job host (PowerShell) have booted
@@ -607,15 +609,23 @@ function tryMarkStopped() {
 }
 
 function pollInteractiveJobEvents() {
-  if (!config?.eventPath || !existsSync(config.eventPath)) return;
+  if (readNewJobEvents()) tryMarkStopped();
+}
+
+/** Consumes the complete event lines appended since the last read. False when the journal can no longer be trusted. */
+function readNewJobEvents() {
+  if (!config?.eventPath || !existsSync(config.eventPath)) return true;
   // Incremental: the Job host appends periodic accounting events, so never
   // re-read the whole journal on every 10 ms tick. Only complete lines are consumed.
   const descriptor = openSync(config.eventPath, "r");
   let suffix;
   try {
     const size = fstatSync(descriptor).size;
-    if (size < jobEventBytes) return markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
-    if (size === jobEventBytes) return;
+    if (size < jobEventBytes) {
+      markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
+      return false;
+    }
+    if (size === jobEventBytes) return true;
     const bytes = Buffer.alloc(size - jobEventBytes);
     let read = 0;
     while (read < bytes.byteLength) {
@@ -624,14 +634,14 @@ function pollInteractiveJobEvents() {
       read += count;
     }
     const complete = bytes.subarray(0, read).lastIndexOf(0x0a) + 1;
-    if (complete === 0) return;
+    if (complete === 0) return true;
     jobEventBytes += complete;
     suffix = bytes.subarray(0, complete).toString("utf8");
   } finally {
     closeSync(descriptor);
   }
   for (const line of suffix.split(/\r?\n/)) if (line) handleJobEvent(line);
-  tryMarkStopped();
+  return true;
 }
 
 function handleJobEvent(line) {
@@ -662,6 +672,10 @@ function handleJobEvent(line) {
     status.jobEmptyProof = true;
     return;
   }
+  if (event.type === "member") {
+    recordMemberEvidence(event);
+    return;
+  }
   if (event.type === "accounting") {
     // T1 CPU evidence for input-wait detection: in-memory only (served by
     // /status), never persisted, never a lifecycle or ownership fact.
@@ -673,7 +687,29 @@ function handleJobEvent(line) {
   }
   if (event.type === "error") {
     backendFailure = new Error(event.error ?? "Windows Job host failed.");
+    // A coded launch refusal from the Job host (raised before CreateProcess) keeps its Runner code.
+    if (typeof event.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(event.code)) backendFailure.code = event.code;
   }
+}
+
+// R2: evidence that the Job held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify.
+// Windows creates a packaged program's children outside the Job, so the Job becoming empty does not prove that every
+// process the workload started has stopped. The evidence is durable status and is never cleared: the Job host's TS
+// side refuses to verify this Job empty or to release it (DECISION 2026-09-19 §8.3, cleanup_blocked).
+const MEMBER_EVIDENCE_KEEP = 16;
+function recordMemberEvidence(event) {
+  const entry = {
+    pid: Number.isSafeInteger(event.pid) && event.pid >= 0 ? event.pid : 0,
+    evidence: event.evidence === "packaged" ? "packaged" : "unidentified",
+    package: typeof event.package === "string" ? event.package.slice(0, 256) : null,
+    detail: typeof event.detail === "string" ? event.detail.slice(0, 512) : "",
+  };
+  const current = status.memberEvidence ?? { count: 0, entries: [] };
+  status.memberEvidence = {
+    count: current.count + 1,
+    entries: current.entries.length < MEMBER_EVIDENCE_KEEP ? [...current.entries, entry] : current.entries,
+  };
+  persistStatus();
 }
 
 function markRunning(pid) {
@@ -684,6 +720,14 @@ function markRunning(pid) {
 }
 
 function markStopped() {
+  // R2: a member event the Job host wrote just before it ended is read before the stop is recorded.
+  if (config?.interactive && !readNewJobEvents()) return;
+  // A Job host that failed before its workload started (a coded launch refusal raised before CreateProcess, R4/R2)
+  // ends as that failure, never as a clean stop of a workload that never ran.
+  if (backendFailure && status.status === "starting") {
+    startupFailed(backendFailure);
+    return;
+  }
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
@@ -709,6 +753,7 @@ function startupFailed(error) {
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
   status.error = error instanceof Error ? error.message : String(error);
+  if (typeof error?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)) status.errorCode = error.code;
   status.ownershipReleased = true;
   persistStatus();
   childExitResolve();

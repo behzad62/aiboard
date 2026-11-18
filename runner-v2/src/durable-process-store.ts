@@ -2981,10 +2981,10 @@ function parseScrubDecisions(value: unknown): import("./child-environment.js").C
   return value.map((entry) => {
     const o = strictRecord(entry, "scrub decision");
     if (typeof o.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(o.name)) throw new Error("Invalid scrub name.");
-    if (o.kind === "removed_runner_path") {
+    if (o.kind === "removed_runner_path" || o.kind === "removed_packaged_alias_path") {
       assertKeys(o, new Set(["kind", "name", "count"]), "scrub decision");
       if (!Number.isSafeInteger(o.count) || (o.count as number) < 1) throw new Error("Invalid path scrub count.");
-      return {kind: "removed_runner_path", name: o.name, count: o.count as number};
+      return {kind: o.kind, name: o.name, count: o.count as number};
     }
     assertKeys(o, new Set(["kind", "name"]), "scrub decision");
     // VF7b: applied_runner names a Runner-set value (the Playwright CLI session's), never a caller's.

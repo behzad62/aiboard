@@ -492,5 +492,6 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW0 | Done 2026-11-17: report docs/runner-v2/cli-workers-spike-2026-11-17.md and fixtures under runner-v2/test/fixtures/cli-workers/; the plan amended (CWD-10, CWD-11) | #224 |
 | CW1 | Done | #222 (a3a1df1c) |
 | CW5a | Done | #223 (730b8e67) |
-| CW0b | Started 2026-11-17 | — |
+| CW0b | Done 2026-11-18: report docs/runner-v2/codex-windows-job-escape-2026-11-18.md | #228 |
+| CW0b fix (R1–R4, Runner side) | In review 2026-11-18: measured results in the CW0b report §6. Codex stays refused on Windows | this packet's PR |
 | CW2–CW10 | Not started; CW2 can start (CW0 and CW1 are done) | — |

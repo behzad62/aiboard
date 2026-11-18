@@ -281,3 +281,79 @@ tests plus `npm run typecheck:runner-v2`, never the full suite.
 None. This packet was observational by decision. PR #167's measurement (row 3 of the table in §2) is the existing
 Codex-free evidence for M1. A Runner real-host test that pins the descendant shape belongs to the fix packet (§4.2,
 R1 and R2), with its own cleanup by marker.
+
+## 6. The fix packet (R1–R4): what it measured and changed (2026-11-18)
+
+Host: Windows 10 Pro 19045, Store pwsh 7.7.0 (`Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe`), WinDbg from the Store
+(`cdb.exe`, a second packaged console program). Each shape ran through the real Job host (supervisor, PowerShell host,
+desktop app policy on the root), and a raw Job with a completion port for the first two rows. "Members" are the
+processes whose `JOB_OBJECT_MSG_NEW_PROCESS` the Job posted, with their package identity read at once.
+
+| Root → descendants | Packaged members in the Job | Child after the stop |
+|---|---|---|
+| cmd → Store pwsh (alias) → node | none: only cmd and conhost joined; pwsh and node are outside the Job | **survives** (#167 row 3) |
+| cmd → the package's own `pwsh.exe` (real path) → node | none: pwsh is created outside the Job the same way | **survives** |
+| cmd → `cdb.exe` (other package); node | none | dies (node was cmd's child) |
+| Store pwsh root → node | node and conhost, **with the root's own package** | dies |
+| Store pwsh root → the package's own `pwsh.exe` → node | the inner pwsh, node, conhost: the root's package | dies |
+| Store pwsh root → `cdb.exe` (other package); node | none from WinDbg: cdb is created outside the Job | dies |
+| Store pwsh root → Store pwsh **alias** → node | conhost (root's package); the alias pwsh and node are outside | **escapes** (the stop waited ~30 s on the stdout pipe node inherited, until node exited by itself) |
+
+Two more facts:
+- The Store pwsh has its package identity whether CreateProcess names the alias or the package's own `pwsh.exe`
+  (`GetPackageFullName` on both). So 0fb60a60's note that "a directly launched package program has no package
+  identity" does not hold on this host; pinning the real program does not unpackage it.
+- A Job's port receives `NEW_PROCESS` for members of a nested child Job too, and the count matched the Job's
+  `TotalProcesses` (5 of 5).
+
+**What this means.** On this host, every packaged program that a descendant starts (alias or real path, any package)
+is created outside the Job, so the Job's own evidence never shows it. The only packaged members a Job ever held were
+descendants that inherited a packaged root's own identity under the desktop app policy, and those were contained.
+
+**What the packet does:**
+- **R1.** A pwsh shell session is the Job's root (`shell-session.ts` `sessionLaunch`), as `process.run`'s pwsh is: the
+  managed launch pins the package's own `pwsh.exe` and the Job host starts it with the policy. Real-host pin
+  `shell-session-native.test.ts` "R1: a Store pwsh shell session's child dies with its Job" (Start-Process node, the
+  Codex shape) passes; with main's `cmd.exe /d /c pwsh.exe` it fails (node outlives the session's stop).
+- **R2.** The Job host associates a completion port with the Job before the root joins and reads each non-root member's
+  package identity. Evidence (kept durably by the supervisor, never cleared) is: a packaged member that does not carry
+  the root's own package under the root's policy; a member that could not be identified (it could not be opened for a
+  reason other than having exited, or its membership or package could not be read); the Job's `TotalProcesses` ahead
+  of the messages received; a watch that fails or does not settle; or a member event that could not be written (the
+  host then reports an error, never a clean stop). A member that **already exited** before it could be opened
+  (`ERROR_INVALID_PARAMETER`), or whose PID now names a process outside the Job, is not evidence: short-lived members
+  whose parent drops its handle at once (`start /b`, a sequential `cmd /c`) did that routinely here (the plain-burst
+  test failed intermittently on Win32 87 before this rule), and no measured shape put a packaged program in the Job as
+  a member. The residual gap is a packaged member that exits within milliseconds of joining after starting children
+  outside the Job; no shape above produced one. The watch thread runs at high priority, ends when it settles, and is
+  stopped before the host closes the Job handle on every path, so it never queries a closed handle (an independent
+  review found that race producing false evidence on clean stops). A Job with evidence is never verified empty (`cleanup_blocked`, `verified_empty_failed`, with the packaged text)
+  and never released (`process_stop_unproven_packaged_descendant`). The exemption for the root's own package is a
+  deliberate narrowing of §4.2's literal rule ("a packaged non-root process ran in the Job"): measured above, that rule
+  would mark every Store-pwsh-rooted stop unproven (they were all contained) and still never see an escaping shape.
+- **What R2 proves and does not.** It proves that no packaged program other than the root's own inherited package was
+  in the Job, as far as Windows posted the Job's membership messages and the accounting matched, for the members the
+  watch handled before the stop. A non-interactive stop (`process.run`) settles the watch before its terminal event. An
+  interactive stop (`process.start`, shell sessions, spares) ends the host with TerminateProcess, so a member that joined
+  in the last moments before the stop, or an accounting mismatch younger than two 100 ms checks, can go unreported;
+  members that joined earlier were reported when they joined. Settling interactive stops needs a stop request the host
+  handles itself (a follow-up; the kill stays the fallback). It does **not** see a
+  packaged program that a descendant starts, because Windows creates that one outside the Job (every escaping row
+  above), whatever the root. R3 and Codex's refusal remain the protection for that shape, plus the existing output rule:
+  an escapee that holds an inherited stdout or stderr open leaves the stop's output unsettled.
+- **R3.** `%LOCALAPPDATA%\Microsoft\WindowsApps`, its per-package folders and `<drive>:\[Program Files\]WindowsApps\...`
+  leave a Windows child's PATH, compared on the entry and on its real path (`child-environment.ts`
+  `isWindowsAppsPathEntry`, decision `removed_packaged_alias_path`). A check's tool lookup searches the same PATH.
+  Shell detection reads the Runner's own PATH, so the Runner's shells are still listed and started as the Job's root.
+  Cost: a bare `process.start` of an alias-only program (for example `pwsh` on a Store-only host) no longer resolves;
+  `process.run` with `shell: "pwsh"` and pwsh sessions still work. On a host where a check's tool (Python, winget) exists
+  only as a Store alias, that check now reads as `not_run: tool_missing`, and a mandatory one pauses the Build; a lookup
+  reason that says "found only under WindowsApps" is a follow-up.
+- **R4.** On Windows 10 1703 (build 15063) or newer, a failure to build or update the attribute list refuses the launch
+  with `windows_job_desktop_policy_unavailable` before CreateProcess; a failure to watch the Job refuses with
+  `windows_job_membership_watch_unavailable`. Main's supervisor reported such a host-side failure in the interactive
+  path as a clean stop with pid 0; it now ends as the coded startup failure.
+
+**Not changed.** Codex CLI workers stay refused on Windows. Lifting that still needs the owner's trace (§4.1) and a
+CW0-style measurement with Codex runs, with the owner's go. No host census, per-PID killer, breakaway, or change to the
+user's Codex config.

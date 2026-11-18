@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 
 import {
   createChildEnvironmentFactory,
+  isWindowsAppsPathEntry,
+  withoutRunnerInstallPath,
   type RunnerOwnedChildEnvironmentCredentialResolver,
 } from "../src/child-environment.js";
+import { pwshExecutable, shellInventory } from "../src/shell-inventory.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const GENERIC_GRANT_ERROR = /Child environment credential grant (?:is invalid|could not be consumed)\./;
@@ -269,4 +275,68 @@ test("strips Node test-runner coordination variables from ambient and explicit i
     assert.equal(environment.API_KEY, undefined);
   });
   assert.doesNotMatch(JSON.stringify(prepared), /SENTINEL_AMBIENT_KEY/);
+});
+
+// R3 (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §4.2): a packaged program a descendant starts has its children
+// created outside the Job, so the WindowsApps folders never reach a managed child's PATH on Windows.
+test("R3: the WindowsApps alias and package folders are recognised, and nothing else", () => {
+  for (const entry of [
+    "C:\\Users\\dev\\AppData\\Local\\Microsoft\\WindowsApps",
+    "C:\\Users\\dev\\AppData\\Local\\Microsoft\\WindowsApps\\",
+    "c:/users/dev/appdata/local/microsoft/windowsapps/Microsoft.PowerShell_8wekyb3d8bbwe",
+    "\"C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\"",
+    "D:\\WindowsApps\\PythonSoftwareFoundation.PythonManager_1.0.0.0_x64__qbz5n2kfra8p0",
+    "C:\\PROGRA~1\\WindowsApps",
+  ]) assert.equal(isWindowsAppsPathEntry(entry), entry.includes("PROGRA~1") ? false : true, entry);
+  for (const entry of [
+    "C:\\Program Files\\PowerShell\\7", "C:\\Windows\\System32", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+    "C:\\tools\\WindowsAppsHelper", "C:\\x\\Microsoft\\WindowsApps2", "C:\\Program Files\\Git\\cmd", "",
+  ]) assert.equal(isWindowsAppsPathEntry(entry), false, entry);
+});
+
+test("R3: a Windows child's PATH loses the WindowsApps folders, after explicit overrides too; other platforms keep PATH", () => {
+  // Forward-slash entries joined by the host's delimiter, so the case runs the same on every CI host.
+  const alias = "/Users/dev/AppData/Local/Microsoft/WindowsApps";
+  const perPackage = `${alias}/Microsoft.PowerShell_8wekyb3d8bbwe`;
+  const tools = "/tools/bin";
+  const prepare = (platform: NodeJS.Platform, explicitPath?: string) => {
+    const environments = createChildEnvironmentFactory({ credentialResolver: resolver({}), now: () => new Date(NOW), platform });
+    const prepared = environments.prepare({
+      ambient: { PATH: [perPackage, tools, alias].join(delimiter) },
+      ...(explicitPath === undefined ? {} : { explicitOverrides: { PATH: explicitPath } }),
+    });
+    return { audit: prepared.audit, path: environments.withChildEnvironment(prepared.capability, (environment) => environment.PATH) };
+  };
+  const windows = prepare("win32");
+  assert.equal(windows.path, tools);
+  assert.ok(windows.audit.decisions.some((entry) => entry.kind === "removed_packaged_alias_path" && entry.count === 2));
+  assert.equal(prepare("win32", [alias, tools].join(delimiter)).path, tools, "an explicit PATH is filtered the same way");
+  assert.equal(prepare("linux").path, [perPackage, tools, alias].join(delimiter));
+  assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "win32" }), tools,
+    "a check's tool lookup searches the PATH the launch gets");
+  assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "darwin" }), [alias, tools].join(delimiter));
+});
+
+test("R3: a PATH entry that only reaches WindowsApps through its real path is removed too", { skip: process.platform !== "win32" && "real-path spellings are a Windows case" }, () => {
+  const windowsApps = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps") : undefined;
+  if (!windowsApps || !existsSync(windowsApps)) return;
+  const root = mkdtempSync(join(tmpdir(), "aiboard-r3-"));
+  try {
+    const link = join(root, "apps");
+    symlinkSync(windowsApps, link, "junction");
+    assert.equal(realpathSync.native(link).toLowerCase(), realpathSync.native(windowsApps).toLowerCase());
+    assert.equal(withoutRunnerInstallPath([link, root].join(delimiter), { platform: "win32" }), root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("R3: on a real Windows host the Runner's own shells are still found after the filter", { skip: process.platform !== "win32" && "the Runner's shell detection is Windows-specific here" }, async () => {
+  // Detection reads the Runner's own PATH, never a child's, so a Store-only pwsh is still listed and started as the
+  // Job's root (shell-session.ts sessionLaunch, command-line.ts shellInvocation).
+  const shells = await shellInventory();
+  assert.ok(shells.includes("cmd"));
+  assert.ok(shells.some((shell) => shell.startsWith("powershell ")), JSON.stringify(shells));
+  const pwsh = pwshExecutable();
+  if (pwsh) assert.ok(shells.some((shell) => shell.startsWith("pwsh ")), JSON.stringify(shells));
 });

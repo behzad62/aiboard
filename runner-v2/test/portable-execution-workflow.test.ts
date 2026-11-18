@@ -61,6 +61,14 @@ const deterministicPrTests = [
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // R3 (packaged descendants, docs/runner-v2/codex-windows-job-escape-2026-11-18.md §4.2): WindowsApps folders leave a
+  // Windows child's PATH, with an injected platform so every host runs it (in memory, about 1 s with the Windows shell
+  // inventory check).
+  "runner-v2/test/child-environment.test.ts",
+  // R2/R4: the Job host's coded refusals (an injected desktop-policy or membership-watch failure, before any spawn) and
+  // a burst of short-lived plain processes leaving no member evidence; real Job hosts on Windows, about 8 s there, and
+  // skipped elsewhere. Its Store pwsh cases skip on hosts without the Store's pwsh, such as GitHub's runners.
+  "runner-v2/test/windows-job-packaged-members.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

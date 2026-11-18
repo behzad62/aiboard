@@ -55,7 +55,19 @@ export interface WindowsJobProcessSnapshot {
   readonly exitCode: number | null; readonly signal: NodeJS.Signals | null;
   readonly startedAt: string; readonly updatedAt: string;
   readonly stdout: string; readonly stderr: string; readonly ownershipReleased?: boolean;
+  /**
+   * R2: the Job held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify. Windows creates
+   * a packaged program's children outside the Job, so the Job's emptiness does not prove the workload stopped: such a
+   * Job is never verified empty or released (DECISION 2026-09-19 §8.3, cleanup_blocked).
+   */
+  readonly memberEvidence?: WindowsJobMemberEvidence;
 }
+export interface WindowsJobMemberEvidenceEntry {
+  readonly pid: number; readonly evidence: "packaged" | "unidentified"; readonly package: string | null; readonly detail: string;
+}
+export interface WindowsJobMemberEvidence { readonly count: number; readonly entries: readonly WindowsJobMemberEvidenceEntry[] }
+/** Faults a test can inject into the Job host. Each only makes it stricter: the first three refuse the launch before CreateProcess, and membership_ignore_root_package reports every packaged member, the root's own package included. */
+export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package";
 export interface WindowsJobOutputRead {
   readonly stdout: Uint8Array; readonly stderr: Uint8Array;
   readonly next: { readonly stdout: number; readonly stderr: number };
@@ -144,6 +156,8 @@ export interface WindowsJobProcessHostOptions {
   /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
   readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
+  /** Test seam (R2/R4): a fault the Job host injects at launch. It can only refuse a launch, never weaken one. */
+  readonly injectedLaunchFault?: WindowsJobInjectedLaunchFault;
   /**
    * CW3: what the once-only helper-fallback warning is keyed on (default: the state directory). Short-lived private
    * hosts (transient runs) share one key, so they warn once, not once per check.
@@ -214,6 +228,8 @@ interface HostRecord extends WindowsJobOwnershipKey {
    * pass that finds it finishes the deletion without the stop proof, whose status file may already be gone.
    */
   retentionRemovingAt?: string;
+  /** R2: kept once seen and never cleared; see WindowsJobProcessSnapshot.memberEvidence. */
+  memberEvidence?: WindowsJobMemberEvidence;
 }
 interface SupervisorStatus {
   protocol: typeof PROTOCOL; processId: string; supervisorPid: number; childPid: number; port: number;
@@ -229,6 +245,10 @@ interface SupervisorStatus {
   claimed?: boolean;
   spareReady?: boolean;
   spareRetired?: string;
+  /** R2: the Job host's packaged or unidentified member evidence. */
+  memberEvidence?: WindowsJobMemberEvidence;
+  /** R4/R2: a coded launch refusal the Job host raised before CreateProcess. */
+  errorCode?: string;
 }
 
 export class WindowsJobHostError extends Error {
@@ -680,6 +700,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly startDeadlineMs: number;
   private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
+  private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
   private readonly maxRetainedOutputChunks: number;
   private readonly maxRetainedOutputBytes: number;
   private readonly maxRetainedOutputChunkBytes: number;
@@ -733,6 +754,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (!Number.isSafeInteger(this.recordScanLimit) || this.recordScanLimit < 1) throw new Error("Windows Job record scan limit must be positive.");
     this.retentionSupervisorExitMs = options.retentionSupervisorExitMs ?? DEFAULT_RETENTION_SUPERVISOR_EXIT_MS;
     if (!Number.isSafeInteger(this.retentionSupervisorExitMs) || this.retentionSupervisorExitMs < 0) throw new Error("Windows Job retention supervisor wait must not be negative.");
+    this.injectedLaunchFault = options.injectedLaunchFault;
     mkdirSync(this.stateDirectory, { recursive: true });
     // Bounded startup: the constructor reads at most recordScanLimit records, as before every record of a smaller
     // directory. The rest of a larger one gets the same crash recovery in bounded background batches, so no previous
@@ -896,10 +918,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
+        ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
       await this.applyStatus(record, status);
-      if (status.status === "stopped" && status.error) throw new WindowsJobHostError("process_start_failed", status.error);
+      if (status.status === "stopped" && status.error) throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed", status.error);
       if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
     } catch (error) {
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
@@ -1048,6 +1071,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
+        ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         spare: true,
         ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
       }));
@@ -1183,16 +1207,17 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       try {
         const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
         await this.applyStatus(claimed, live);
-        if (live.status === "stopped" && live.error) throw new WindowsJobHostError("process_start_failed", live.error);
+        if (live.status === "stopped" && live.error) throw new WindowsJobHostError(launchRefusalCode(live) ?? "process_start_failed", live.error);
         if (live.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
       } catch (error) {
         // PX-2c repair 1 (M2) + N7: the claim was acked, so the Job host holds
         // the call and may still start its child after any status read (a
         // slow start), and the launcher is already disconnected, so an abort
         // cannot reach that host. No fallback is ever proven here: the call
-        // fails exactly like the normal path, keeping the record.
+        // fails exactly like the normal path, keeping the record. A coded
+        // launch refusal (R4/R2) keeps its code, as on the normal path.
         await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
-        throw new WindowsJobHostError("process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
+        throw new WindowsJobHostError(refusalCodeOf(error) ?? "process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
       }
       this.spareCounts.claims += 1;
       return this.snapshot(claimed);
@@ -1458,6 +1483,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is an unclaimed spare.`);
     if (!current.backendOwnershipReleasedAt || current.status !== "stopped")
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is not released.`);
+    // R2: a record with member evidence is never released, so never retired; checked here as well, fail closed.
+    if (current.memberEvidence)
+      throw new WindowsJobHostError("process_stop_unproven_packaged_descendant", `Windows Job record ${named.processId} holds member evidence.`);
     if (!proveStop) {
       if (current.retentionRemovingAt === undefined) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} lost its retention mark.`);
       return;
@@ -1465,6 +1493,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const status = readSupervisorStatus(current.supervisor.statusPath);
     if (!status) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} has no durable supervisor status.`);
     this.assertStatusIdentity(current, status);
+    assertNoMemberEvidence(current, status);
     if (status.status !== "stopped" || !status.ownershipReleased)
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} stop is not proven.`);
     this.assertJobOutputSettled(current, status);
@@ -1534,6 +1563,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const status = await this.authenticatedStatus(record, false);
     this.assertObservedStatusAuthority(record, status, fence);
     this.throwIfTerminalOutputPending(status);
+    assertNoMemberEvidence(record, status);
     if (status.status !== "stopped" || !status.ownershipReleased) {
       // PX-2b repair 1 (B4): a release refused while retained output is still
       // draining is output-unsettled whether or not the empty proof has
@@ -1558,6 +1588,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       return await this.withFenceEffect(record, fence, "release", async (current) => {
         if (current.startedAt !== expectedStartedAt) throw new WindowsJobHostError("process_identity_mismatch", `Windows Job process ${processId} identity mismatch.`);
         const final = await this.authenticatedStatus(current);
+        assertNoMemberEvidence(current, final);
         if (final.status !== "stopped" || !final.ownershipReleased)
           throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} terminal ownership changed before release.`);
         this.assertJobOutputSettled(current, final);
@@ -1906,6 +1937,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.assertStatusIdentity(record, status); record.pid = status.childPid; record.supervisor.port = status.port;
     record.status = status.status === "stopped" ? "stopped" : status.status === "exited_unknown" ? "exited_unknown" : "running";
     record.exitCode = status.exitCode; record.signal = status.signal; record.updatedAt = status.updatedAt;
+    // R2: sticky. A later status never clears evidence an earlier one carried.
+    if (status.memberEvidence && (!record.memberEvidence || status.memberEvidence.count > record.memberEvidence.count))
+      record.memberEvidence = status.memberEvidence;
   }
   private assertSupervisor(value: SupervisorRecord): void {
     if (value.protocol !== PROTOCOL || value.token.length < 32 || value.supervisorPid < 1 || value.port < 0 || value.port > 65_535)
@@ -1917,6 +1951,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (status.jobEmptyProof !== undefined && typeof status.jobEmptyProof !== "boolean" ||
         status.terminationRequested !== undefined && typeof status.terminationRequested !== "boolean")
       throw new WindowsJobHostError("process_control_unavailable", `Supervisor control status is invalid for ${record.processId}.`);
+    if (status.memberEvidence !== undefined && !isMemberEvidence(status.memberEvidence))
+      throw new WindowsJobHostError("process_control_unavailable", `Supervisor member evidence is invalid for ${record.processId}.`);
   }
   private assertOutputEvidence(record: HostRecord, status: SupervisorStatus): void {
     if (!Number.isSafeInteger(status.retainedOutputChunks) || status.retainedOutputChunks < 0 ||
@@ -2055,7 +2091,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     return candidate;
   }
   private snapshot(record: HostRecord): WindowsJobProcessSnapshot {
-    return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes) };
+    return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes),
+      ...(record.memberEvidence ? { memberEvidence: record.memberEvidence } : {}) };
   }
 }
 
@@ -2063,6 +2100,42 @@ export function createWindowsJobProcessHost(options: WindowsJobProcessHostOption
   return new AuthenticatedWindowsJobProcessHost(options);
 }
 
+/** R4/R2: the Runner code of a launch the Job host refused before CreateProcess, when its status carries one. */
+const JOB_HOST_LAUNCH_REFUSAL_CODES: ReadonlySet<string> = new Set(["windows_job_desktop_policy_unavailable", "windows_job_membership_watch_unavailable"]);
+function launchRefusalCode(status: SupervisorStatus): string | undefined {
+  return typeof status.errorCode === "string" && JOB_HOST_LAUNCH_REFUSAL_CODES.has(status.errorCode) ? status.errorCode : undefined;
+}
+function refusalCodeOf(error: unknown): string | undefined {
+  return error instanceof WindowsJobHostError && JOB_HOST_LAUNCH_REFUSAL_CODES.has(error.code) ? error.code : undefined;
+}
+/** The text a stop shows when a Job held a packaged or unidentified member (R2). */
+export function memberEvidenceDetail(evidence: WindowsJobMemberEvidence): string {
+  const packaged = evidence.entries.find((entry) => entry.evidence === "packaged");
+  if (packaged) {
+    const name = packaged.package ? " (" + packaged.package + ")" : "";
+    return "A packaged (MSIX or Microsoft Store) program" + name + " ran in the Windows Job as a descendant (pid " + packaged.pid +
+      "). Windows creates such a program's children outside the Job, so its processes may still be running; the stop is not proven.";
+  }
+  const members = evidence.count === 1 ? "a member" : evidence.count + " members";
+  return "The Windows Job held " + members + " that could not be identified (" + (evidence.entries[0]?.detail ?? "no detail") +
+    "), so a packaged descendant cannot be ruled out; the stop is not proven.";
+}
+/** R2: a Job that held a packaged or unidentified member is never released (DECISION 2026-09-19 §8.3, cleanup_blocked). */
+function assertNoMemberEvidence(record: HostRecord, status: SupervisorStatus): void {
+  const evidence = record.memberEvidence ?? status.memberEvidence;
+  if (evidence) throw new WindowsJobHostError("process_stop_unproven_packaged_descendant", memberEvidenceDetail(evidence));
+}
+function isMemberEvidence(value: unknown): value is WindowsJobMemberEvidence {
+  if (!value || typeof value !== "object") return false;
+  const evidence = value as { count?: unknown; entries?: unknown };
+  return Number.isSafeInteger(evidence.count) && (evidence.count as number) >= 1 && Array.isArray(evidence.entries) && evidence.entries.length >= 1 &&
+    evidence.entries.every((entry: unknown) => {
+      const item = entry as Partial<WindowsJobMemberEvidenceEntry> | null;
+      return !!item && typeof item === "object" && Number.isSafeInteger(item.pid) && (item.pid as number) >= 0 &&
+        (item.evidence === "packaged" || item.evidence === "unidentified") &&
+        (item.package === null || typeof item.package === "string") && typeof item.detail === "string";
+    });
+}
 function isHostRecord(value: Partial<HostRecord>): value is HostRecord {
   return typeof value.processId === "string" && typeof value.runId === "string" && typeof value.sessionId === "string" && typeof value.startedAt === "string" && typeof value.stdoutPath === "string" && typeof value.stderrPath === "string" && Boolean(value.supervisor);
 }
