@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { describe, type TestContext } from "node:test";
 
 import { composeRunnerProcessEnvironments } from "../src/child-environment.js";
 import { CLI_BROWSER_SESSION_READY_WAIT_MS, CLI_NO_BROWSER_NOTE, createManagedCliBrowserSessions, isPlaywrightCliCheck } from "../src/cli-worker-browser.js";
@@ -250,111 +250,114 @@ function done(checks: Array<Record<string, unknown>>): Record<string, unknown> {
   return { outcome: "done", summary: "Changed value.txt to two and checked the page.", question: null, replanReason: null, checks, notRun: [], concerns: [] };
 }
 
-test("CW8: the fake CLI's playwright-cli reaches the owner's session, a re-run keeps its screenshot as evidence, a failed command fails its re-run, and no session is left", (t) => withFixture(t, "browse", "chromium", true, async (f) => {
-  const record = join(f.h.root, "fake", "browse.json");
-  // A failed command: exit 1 in the CLI's run and in its re-run, so it supports nothing.
-  const click = { label: "submit the form", executable: "playwright-cli", args: ["--json", "click", "e99"], cwd: null, outputs: null, criterionIds: ["value"] };
-  f.scenario({
-    cli: "claude-code", stdout: claudeStream(f.h, done(browserChecks([click]))), record,
-    actions: [
-      { write: "value.txt", content: "two\n" },
-      { run: ["playwright-cli", "--json", "goto", APP] },
-      { run: ["playwright-cli", "--json", "screenshot", `--filename=${SHOT}`] },
-      { run: ["playwright-cli", "--json", "click", "e99"] },
-    ],
-  });
-  const result = await runCliWorkerAttempt(f.deps(), f.h.input());
-  assert.equal(result.type, "submitted", JSON.stringify(result));
+// The two tests have their own harness, host and stand-ins, so they run side by side.
+describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, () => {
+  test("CW8: the fake CLI's playwright-cli reaches the owner's session, a re-run keeps its screenshot as evidence, a failed command fails its re-run, and no session is left", (t) => withFixture(t, "browse", "chromium", true, async (f) => {
+    const record = join(f.h.root, "fake", "browse.json");
+    // A failed command: exit 1 in the CLI's run and in its re-run, so it supports nothing.
+    const click = { label: "submit the form", executable: "playwright-cli", args: ["--json", "click", "e99"], cwd: null, outputs: null, criterionIds: ["value"] };
+    f.scenario({
+      cli: "claude-code", stdout: claudeStream(f.h, done(browserChecks([click]))), record,
+      actions: [
+        { write: "value.txt", content: "two\n" },
+        { run: ["playwright-cli", "--json", "goto", APP] },
+        { run: ["playwright-cli", "--json", "screenshot", `--filename=${SHOT}`] },
+        { run: ["playwright-cli", "--json", "click", "e99"] },
+      ],
+    });
+    const result = await runCliWorkerAttempt(f.deps(), f.h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
 
-  // The CLI's own commands reached the session the Runner started for its owner, in its worktree.
-  const ran = JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord;
-  assert.deepEqual(ran.runs?.map((entry) => entry.exitCode), [0, 0, 1], JSON.stringify(ran.runs));
-  assert.match(ran.runs![2]!.stdout, /"isError":true/);
-  assert.match(ran.stdin, /A browser is running for this task/);
-  assert.ok(ran.stdin.includes(playwrightCliSkillPath()), "the preamble names the skill file by its absolute path");
-  assert.ok(existsSync(playwrightCliSkillPath()));
-  const [cliSession, rerunSession, ...more] = f.daemons();
-  assert.equal(more.length, 0, "one session for the CLI, one for the Runner's re-runs");
-  assert.equal(cliSession!.cwd.toLowerCase(), f.h.workspace.path.toLowerCase());
-  assert.deepEqual(records(f.h)[0]?.browser, { status: "started" });
+    // The CLI's own commands reached the session the Runner started for its owner, in its worktree.
+    const ran = JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord;
+    assert.deepEqual(ran.runs?.map((entry) => entry.exitCode), [0, 0, 1], JSON.stringify(ran.runs));
+    assert.match(ran.runs![2]!.stdout, /"isError":true/);
+    assert.match(ran.stdin, /A browser is running for this task/);
+    assert.ok(ran.stdin.includes(playwrightCliSkillPath()), "the preamble names the skill file by its absolute path");
+    assert.ok(existsSync(playwrightCliSkillPath()));
+    const [cliSession, rerunSession, ...more] = f.daemons();
+    assert.equal(more.length, 0, "one session for the CLI, one for the Runner's re-runs");
+    assert.equal(cliSession!.cwd.toLowerCase(), f.h.workspace.path.toLowerCase());
+    assert.deepEqual(records(f.h)[0]?.browser, { status: "started" });
 
-  // The Runner's re-runs ran in a session of the same owner: the screenshot became evidence through `outputs`, and the
-  // failed command's re-run failed (exit 1) and supports nothing.
-  const reruns = f.reruns();
-  assert.deepEqual(reruns.map((entry) => [entry.command, entry.exitCode]), [["playwright-cli", 0], ["playwright-cli", 0], ["playwright-cli", 1]]);
-  const shot = await f.h.artifacts.get(reruns[1]!.outputs[0]!);
-  assert.ok(shot.subarray(0, PNG.length).equals(PNG));
-  assert.equal(shot.subarray(PNG.length).toString("utf8"),
-    `screenshot of ${APP} by daemon ${rerunSession!.pid} of ${playwrightCliSessionName(RUN, SESSION)}`);
-  const changeSet = (await f.h.sessions.load(SESSION)).changeSet!;
-  assert.deepEqual((changeSet.criterionEvidenceLinks ?? []).map((link) => link.artifactHashes.includes(reruns[1]!.outputs[0]!)), [true],
-    "only the screenshot's re-run supports the criterion, and it cites the screenshot");
+    // The Runner's re-runs ran in a session of the same owner: the screenshot became evidence through `outputs`, and the
+    // failed command's re-run failed (exit 1) and supports nothing.
+    const reruns = f.reruns();
+    assert.deepEqual(reruns.map((entry) => [entry.command, entry.exitCode]), [["playwright-cli", 0], ["playwright-cli", 0], ["playwright-cli", 1]]);
+    const shot = await f.h.artifacts.get(reruns[1]!.outputs[0]!);
+    assert.ok(shot.subarray(0, PNG.length).equals(PNG));
+    assert.equal(shot.subarray(PNG.length).toString("utf8"),
+      `screenshot of ${APP} by daemon ${rerunSession!.pid} of ${playwrightCliSessionName(RUN, SESSION)}`);
+    const changeSet = (await f.h.sessions.load(SESSION)).changeSet!;
+    assert.deepEqual((changeSet.criterionEvidenceLinks ?? []).map((link) => link.artifactHashes.includes(reruns[1]!.outputs[0]!)), [true],
+      "only the screenshot's re-run supports the criterion, and it cites the screenshot");
 
-  // Nothing of either session is left: both daemons stopped with the owner.
-  assert.equal(daemonAlive(cliSession!.pid), false);
-  assert.equal(daemonAlive(rerunSession!.pid), false);
-  assert.deepEqual(await f.running(), []);
-}));
+    // Nothing of either session is left: both daemons stopped with the owner.
+    assert.equal(daemonAlive(cliSession!.pid), false);
+    assert.equal(daemonAlive(rerunSession!.pid), false);
+    assert.deepEqual(await f.running(), []);
+  }));
 
-test("CW8: a session start that fails with the until.pattern wall ceiling is recorded and the CLI runs without a browser; with no browser recorded no session starts", (t) => withFixture(t, "wall-ceiling", "chromium", true, async (f) => {
-  // The busy host's failure, injected where the real one is thrown: the session's ready wait (managed-process-wait.ts).
-  const readOutput = f.run.managedProcesses.readOutput.bind(f.run.managedProcesses);
-  const start = f.run.managedProcesses.start.bind(f.run.managedProcesses);
-  const started: string[] = [];
-  f.run.managedProcesses.start = async (request, context, root) => { started.push(request.command); return await start(request, context, root); };
-  let injected = 0;
-  f.run.managedProcesses.readOutput = async (processId, request, context) => {
-    if (request.until?.pattern) {
-      injected += 1;
-      throw new ManagedProcessError("invalid_arguments", `until.pattern could not be evaluated within ${PATTERN_WALL_CEILING_MS} ms on this busy host.`);
-    }
-    return await readOutput(processId, request, context);
-  };
-  const record = join(f.h.root, "fake", "wall.json");
-  f.scenario({ cli: "claude-code", record, stdout: claudeStream(f.h, done(browserChecks())), actions: [{ write: "value.txt", content: "two\n" }] });
-  let browserUnavailable: boolean | undefined;
-  const deps = f.deps();
-  const rerun = deps.rerunChecks!;
-  const result = await runCliWorkerAttempt({ ...deps, rerunChecks: async (input) => { browserUnavailable = input.browserUnavailable; return await rerun(input); } }, f.h.input());
+  test("CW8: a session start that fails with the until.pattern wall ceiling is recorded and the CLI runs without a browser; with no browser recorded no session starts", (t) => withFixture(t, "wall-ceiling", "chromium", true, async (f) => {
+    // The busy host's failure, injected where the real one is thrown: the session's ready wait (managed-process-wait.ts).
+    const readOutput = f.run.managedProcesses.readOutput.bind(f.run.managedProcesses);
+    const start = f.run.managedProcesses.start.bind(f.run.managedProcesses);
+    const started: string[] = [];
+    f.run.managedProcesses.start = async (request, context, root) => { started.push(request.command); return await start(request, context, root); };
+    let injected = 0;
+    f.run.managedProcesses.readOutput = async (processId, request, context) => {
+      if (request.until?.pattern) {
+        injected += 1;
+        throw new ManagedProcessError("invalid_arguments", `until.pattern could not be evaluated within ${PATTERN_WALL_CEILING_MS} ms on this busy host.`);
+      }
+      return await readOutput(processId, request, context);
+    };
+    const record = join(f.h.root, "fake", "wall.json");
+    f.scenario({ cli: "claude-code", record, stdout: claudeStream(f.h, done(browserChecks())), actions: [{ write: "value.txt", content: "two\n" }] });
+    let browserUnavailable: boolean | undefined;
+    const deps = f.deps();
+    const rerun = deps.rerunChecks!;
+    const result = await runCliWorkerAttempt({ ...deps, rerunChecks: async (input) => { browserUnavailable = input.browserUnavailable; return await rerun(input); } }, f.h.input());
 
-  assert.equal(injected, 1, "one start, never retried");
-  const browser = records(f.h)[0]?.browser;
-  assert.equal(browser?.status, "start_failed");
-  assert.match(browser?.reason ?? "", /could not be evaluated within 8000 ms on this busy host/);
-  assert.match((JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord).stdin, /No browser is running for this task/);
-  // The CLI ran, and its browser checks were not run: no re-run session, no browser re-run.
-  assert.equal(browserUnavailable, true);
-  assert.equal(f.reruns().length, 0);
-  // One session start, whose ready wait failed, then the CLI; nothing of either is left.
-  assert.deepEqual(started, ["playwright-cli-session", process.execPath]);
-  for (const daemon of f.daemons()) assert.equal(daemonAlive(daemon.pid), false);
-  assert.deepEqual(await f.running(), []);
-  // Nothing was submitted: the screenshot criterion has no evidence.
-  assert.match(JSON.stringify(result), /cli_submission_refused/);
-  // Neither bound was raised: the pattern's wall ceiling and the one ready read.
-  assert.equal(PATTERN_WALL_CEILING_MS, 8_000);
-  assert.equal(CLI_BROWSER_SESSION_READY_WAIT_MS, MANAGED_OUTPUT_WAIT_MAX_MS);
-  assert.equal(MANAGED_OUTPUT_WAIT_MAX_MS, 30_000);
+    assert.equal(injected, 1, "one start, never retried");
+    const browser = records(f.h)[0]?.browser;
+    assert.equal(browser?.status, "start_failed");
+    assert.match(browser?.reason ?? "", /could not be evaluated within 8000 ms on this busy host/);
+    assert.match((JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord).stdin, /No browser is running for this task/);
+    // The CLI ran, and its browser checks were not run: no re-run session, no browser re-run.
+    assert.equal(browserUnavailable, true);
+    assert.equal(f.reruns().length, 0);
+    // One session start, whose ready wait failed, then the CLI; nothing of either is left.
+    assert.deepEqual(started, ["playwright-cli-session", process.execPath]);
+    for (const daemon of f.daemons()) assert.equal(daemonAlive(daemon.pid), false);
+    assert.deepEqual(await f.running(), []);
+    // Nothing was submitted: the screenshot criterion has no evidence.
+    assert.match(JSON.stringify(result), /cli_submission_refused/);
+    // Neither bound was raised: the pattern's wall ceiling and the one ready read.
+    assert.equal(PATTERN_WALL_CEILING_MS, 8_000);
+    assert.equal(CLI_BROWSER_SESSION_READY_WAIT_MS, MANAGED_OUTPUT_WAIT_MAX_MS);
+    assert.equal(MANAGED_OUTPUT_WAIT_MAX_MS, 30_000);
 
-  // The run's inventory recorded no browser: the next run of the attempt starts no session, and the CLI is told so.
-  f.run.managedProcesses.readOutput = readOutput;
-  f.sessions.configureRun(RUN, { browser: null });
-  // The failed start's daemon may have registered its port before it was stopped: gone, so no stale port is reached.
-  rmSync(join(f.sessions.ownerFolder({ runId: RUN, sessionId: SESSION }), "registry"), { recursive: true, force: true });
-  started.length = 0;
-  const none = join(f.h.root, "fake", "none.json");
-  f.scenario({
-    cli: "claude-code", record: none, actions: [{ write: "value.txt", content: "two\n" }, { run: ["playwright-cli", "--json", "goto", APP] }],
-    stdout: claudeStream(f.h, done([{ label: "node", executable: "node", args: ["-e", "0"], cwd: null, outputs: null, criterionIds: ["value"] }])),
-  });
-  const second = await runCliWorkerAttempt(f.deps(), f.h.input());
-  assert.equal(second.type, "submitted", JSON.stringify(second));
-  assert.deepEqual(started, [process.execPath], "no session was started");
-  assert.deepEqual(records(f.h).at(-1)?.browser, { status: "none" });
-  const ran = JSON.parse(readFileSync(none, "utf8")) as FakeCliRecord;
-  assert.ok(ran.stdin.includes(CLI_NO_BROWSER_NOTE));
-  // A playwright-cli command finds no session to reach.
-  assert.equal(ran.runs?.[0]?.exitCode, 1);
-  assert.match(ran.runs?.[0]?.stderr ?? "", /is not open/);
-  assert.deepEqual(await f.running(), []);
-}));
+    // The run's inventory recorded no browser: the next run of the attempt starts no session, and the CLI is told so.
+    f.run.managedProcesses.readOutput = readOutput;
+    f.sessions.configureRun(RUN, { browser: null });
+    // The failed start's daemon may have registered its port before it was stopped: gone, so no stale port is reached.
+    rmSync(join(f.sessions.ownerFolder({ runId: RUN, sessionId: SESSION }), "registry"), { recursive: true, force: true });
+    started.length = 0;
+    const none = join(f.h.root, "fake", "none.json");
+    f.scenario({
+      cli: "claude-code", record: none, actions: [{ write: "value.txt", content: "two\n" }, { run: ["playwright-cli", "--json", "goto", APP] }],
+      stdout: claudeStream(f.h, done([{ label: "node", executable: "node", args: ["-e", "0"], cwd: null, outputs: null, criterionIds: ["value"] }])),
+    });
+    const second = await runCliWorkerAttempt(f.deps(), f.h.input());
+    assert.equal(second.type, "submitted", JSON.stringify(second));
+    assert.deepEqual(started, [process.execPath], "no session was started");
+    assert.deepEqual(records(f.h).at(-1)?.browser, { status: "none" });
+    const ran = JSON.parse(readFileSync(none, "utf8")) as FakeCliRecord;
+    assert.ok(ran.stdin.includes(CLI_NO_BROWSER_NOTE));
+    // A playwright-cli command finds no session to reach.
+    assert.equal(ran.runs?.[0]?.exitCode, 1);
+    assert.match(ran.runs?.[0]?.stderr ?? "", /is not open/);
+    assert.deepEqual(await f.running(), []);
+  }));
+});
