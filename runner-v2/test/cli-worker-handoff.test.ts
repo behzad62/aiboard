@@ -628,6 +628,61 @@ describe("CW7: failover across the CLI boundary, with the handoff both ways", { 
     assert.match(earlierWork(fixture.cliRun(2)) ?? "", /was the Claude Code worker claude-code:default\. It stopped: it failed without a usable result \(transient\)/);
   });
 
+  test("a prompt the CLI never took in (undelivered, cancelled, past the deadline) fails over to no one and leaves its health alone", async (t) => {
+    // A CLI that never reads its stdin. "undelivered": the write fails at once; otherwise it waits until the attempt's
+    // signal (its cancellation or deadline) ends it, as ManagedProcessService's write does.
+    let mode: "undelivered" | "unread" = "undelivered";
+    const launcher: CliProcessLauncher = {
+      async start() {
+        return {
+          processId: "proc",
+          write: (_text: string, _closeInput: boolean, signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
+            const fail = () => reject(new Error("The CLI's stdin was not delivered (outcome_unknown: process_input_outcome_unknown)."));
+            if (mode === "undelivered" || !signal || signal.aborted) fail(); else signal.addEventListener("abort", fail, { once: true });
+          }),
+          async read(): Promise<never> { throw new Error("no output is read before the prompt is in"); },
+        };
+      },
+      async stopOwner() {},
+    };
+    let attemptLimitMs = 60_000;
+    const fixture = await handoffFixture(t, "prompt-undelivered", {
+      candidates: [CLAUDE, { ...API, priority: 2 }],
+      cli: [CLAUDE_CONFIG],
+      scenarios: [],
+      // An API worker that would submit at once: any failover would show as its request.
+      models: { [API.runtimeId]: apiCheckAndSubmit("check") },
+      runtime: {
+        launcher,
+        settings: async () => ({ executable: { status: "found", path: process.execPath, source: "home", form: "exe" }, attemptLimitMs, argsPrefix: [FAKE_CLI_SCRIPT] }),
+      },
+    });
+    const untouched = () => {
+      assert.deepEqual(fixture.assignments().map((payload) => payload.runtimeId), [CLAUDE.runtimeId], "no other runtime");
+      assert.equal(fixture.models.get(API.runtimeId)!.requests.length, 0);
+      assert.equal(fixture.health.get("claude-code").status, "healthy");
+      assert.equal(fixture.health.get("claude-code").failureKind, undefined);
+    };
+
+    const undelivered = await fixture.driver.run(fixture.assignment);
+    assert.equal(undelivered.type, "failed", JSON.stringify(undelivered));
+    assert.match(undelivered.type === "failed" ? undelivered.reason : "", /^cli_stdin_undelivered: /);
+    untouched();
+
+    mode = "unread";
+    const cancel = new AbortController();
+    setTimeout(() => cancel.abort(), 100);
+    const cancelled = await fixture.driver.run({ ...fixture.assignment, signal: cancel.signal });
+    assert.deepEqual(cancelled, { type: "paused", reason: "worker_cancelled" });
+    untouched();
+
+    attemptLimitMs = 300;
+    const late = await fixture.driver.run(fixture.assignment);
+    assert.equal(late.type, "failed", JSON.stringify(late));
+    assert.match(late.type === "failed" ? late.reason : "", /^cli_attempt_deadline: .*prompt was still being delivered/);
+    untouched();
+  });
+
   test("every Codex worker cools down together, with the reset Codex stated", async (t) => {
     const codex = (model: string): AgentRuntimeCandidate => ({ runtimeId: `codex-cli:${model}`, providerId: "codex-cli", modelId: model, capabilities: ["code"], priority: 1, workerOnly: true });
     const config = (model: string): CliWorkerRuntimeConfig => ({ runtimeId: `codex-cli:${model}`, providerId: "codex-cli", model });

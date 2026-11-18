@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import ts from "typescript";
-import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
+import { finalizeExpectingUnverifiedCleanup } from "./support/certified-fixture-cleanup.js";
 
 const fixtures = [
   { file: "native-build-capabilities.test.ts", name: "capability startup retries a failed partial-start disposer until its child exits", owners: 0, lifecycle: "start\nextension:1\nextension:2\n" },
@@ -51,7 +51,7 @@ for (const fixture of fixtures) {
       };
       const root = "synthetic-exact-root";
       const scope = {
-        assert, join, finalizeCertifiedFixture,
+        assert, join, finalizeCertifiedFixture: finalizeExpectingUnverifiedCleanup,
         root, state: "state", pidPath: "child.pid", extensionState: "extension", failedState: "failed-state", successState: "success-state",
         expectedLifecycle: fixture.lifecycle,
         childPid: scenario === "missing-marker" ? 0 : 42,
