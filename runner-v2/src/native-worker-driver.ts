@@ -60,11 +60,27 @@ import { runWorkerTask, workerSubmissionContext } from "./worker-runtime.js";
 import type { ChangeSet } from "./change-set.js";
 import {
   proveCliStop,
+  cliAttemptRecords,
   cliHistoryRefusal,
   runCliWorkerAttempt,
   type CliWorkerRuntimeConfig,
   type CliWorkerRuntimeDeps,
 } from "./cli-worker-runtime.js";
+import {
+  apiWorkerLabel,
+  attemptRuntimeAssignments,
+  cliHandoffContinuationMessage,
+  cliRecordLastText,
+  cliWorkerLabel,
+  describeCliRecordStop,
+  describeHandoffCause,
+  earlierWorkSection,
+  lastAssistantText,
+  previousWorker,
+  readWorktreeChanges,
+  workerHandoffCause,
+  type WorkerHandoff,
+} from "./cli-worker-handoff.js";
 import { resolveWorkerSessionId } from "./worker-identity.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
@@ -442,6 +458,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         workspace.path,
         sessionId,
       );
+      // CW7 (§3.9): across a CLI boundary, what the worker before this runtime left on this attempt.
+      const handoff = await this.workerHandoff(assignment, runtimeId, sessionId, workspace);
       const repositoryRevision = /^HEAD ([0-9a-f]{40,64})/.exec(context.repositorySnapshot)?.[1];
       await recordContextPack({
         store: this.options.contextManifests,
@@ -472,6 +490,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           workspace,
           config: cli.config,
           contextText: context.pack.text,
+          ...(handoff ? { earlierWork: earlierWorkSection(handoff.handoff) } : {}),
           submission: workerSubmissionContext({
             ...(this.options.git ? { git: this.options.git } : {}),
             runId: assignment.runId,
@@ -612,16 +631,20 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : {}),
         },
         signal: assignment.signal,
-        continuationMessages: workerContinuationMessages(
-          {
-            id: `context:${context.pack.digest}`,
-            role: "user",
-            content: context.pack.text,
-          },
-          sessionEventCount > 0,
-          assignment.task.id,
-          sessionEventCount
-        ),
+        continuationMessages: [
+          ...workerContinuationMessages(
+            {
+              id: `context:${context.pack.digest}`,
+              role: "user",
+              content: context.pack.text,
+            },
+            sessionEventCount > 0,
+            assignment.task.id,
+            sessionEventCount
+          ),
+          // CW7 (§3.9): CLI → API, one message built from the CLI's latest attempt record.
+          ...(handoff?.fromCli ? [cliHandoffContinuationMessage(handoff.id, handoff.handoff)] : []),
+        ],
         clock: this.clock,
         ...(this.options.allowedCommands
           ? { allowedCommands: this.options.allowedCommands }
@@ -738,8 +761,48 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     if (selection.status === "unavailable") {
       return { type: "outcome", outcome: { type: "paused", reason: "all_worker_runtimes_unavailable" } };
     }
-    this.assignRuntime(assignment, selection.runtime.runtimeId, sessionId);
+    // CW7: the cause is durable on the assignment, so the next worker's handoff says why this one stopped.
+    this.assignRuntime(assignment, selection.runtime.runtimeId, sessionId, workerHandoffCause(runtimeId, failure));
     return { type: "next", runtimeId: selection.runtime.runtimeId };
+  }
+
+  /**
+   * CW7 (§3.9): the handoff from the worker that ran this attempt before `runtimeId`, when one of the two is a CLI. An
+   * API worker that follows another API worker inherits its conversation and gets none. The previous worker's text is
+   * a claim; the changed files and the evidence ids are facts the Runner read.
+   */
+  private async workerHandoff(
+    assignment: WorkerAssignment,
+    runtimeId: string,
+    sessionId: string,
+    workspace: TaskWorkspace,
+  ): Promise<{ handoff: WorkerHandoff; fromCli: boolean; id: string } | undefined> {
+    const key = { runId: assignment.runId, taskId: assignment.task.id, attempt: assignment.attempt, sessionId };
+    const assignments = attemptRuntimeAssignments(this.options.schedulerStore.readRun(assignment.runId), key);
+    const previous = assignments.at(-1)?.runtimeId === runtimeId ? previousWorker(assignments) : undefined;
+    if (!previous) return undefined;
+    const record = cliAttemptRecords(this.options.schedulerStore, key).filter((entry) => entry.runtimeId === previous.runtimeId).at(-1);
+    const previousCli = this.cliRuntime(previous.runtimeId)?.config;
+    const fromCli = record !== undefined || previousCli !== undefined;
+    if (!fromCli && !this.cliRuntime(runtimeId)) return undefined;
+    let lastText = record ? cliRecordLastText(record) : undefined;
+    if (!fromCli) {
+      // The API worker's last words, from its checkpointed conversation in this session.
+      lastText = lastAssistantText((await this.options.sessions.load(sessionId).catch(() => undefined))?.checkpoint?.messages ?? []);
+    }
+    const handoff: WorkerHandoff = {
+      previousWorker: record ? cliWorkerLabel(record)
+        : previousCli ? cliWorkerLabel({ providerId: previousCli.providerId, runtimeId: previous.runtimeId })
+          : apiWorkerLabel(previous.runtimeId, this.candidateById.get(previous.runtimeId)?.modelId),
+      stopped: previous.cause ? describeHandoffCause(previous.cause)
+        : record ? describeCliRecordStop(record) : "the Runner holds no record of why",
+      ...(lastText ? { lastText } : {}),
+      changes: await readWorktreeChanges(requireGitRunner(this.options.git).lifecycle("inspection").run, workspace.path, workspace.baselineRevision),
+      evidenceIds: this.options.evidenceStore.list({ runId: assignment.runId, taskId: assignment.task.id, limit: 1_000 })
+        .filter((entry) => entry.attempt === assignment.attempt)
+        .map((entry) => entry.id),
+    };
+    return { handoff, fromCli, id: `worker-handoff:${assignment.task.id}:${assignment.attempt}:${previous.assignments}` };
   }
 
   private persistedRuntimeAssignment(assignment: WorkerAssignment) {
@@ -753,7 +816,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
   private assignRuntime(
     assignment: WorkerAssignment,
     runtimeId: string,
-    sessionId: string
+    sessionId: string,
+    handoff?: ReturnType<typeof workerHandoffCause>,
   ): void {
     const existingCount = this.options.schedulerStore
       .readRun(assignment.runId)
@@ -769,6 +833,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         attempt: assignment.attempt,
         runtimeId,
         sessionId,
+        ...(handoff ? { handoff } : {}),
         ...(rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)).reviewIntegrityPolicyVersion === 1
           ? { modelIdentity: canonicalModelIdentity(this.candidateById.get(runtimeId)!.modelId) } : {}),
       },

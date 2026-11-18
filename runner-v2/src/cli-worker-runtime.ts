@@ -239,6 +239,8 @@ export interface CliWorkerAttemptInput {
   config: CliWorkerRuntimeConfig;
   /** The same context pack text an API worker gets. */
   contextText: string;
+  /** CW7 (§3.9): the handoff from another worker that ran this attempt before, as the prompt's "Earlier work" section. */
+  earlierWork?: string;
   submission: WorkerSubmissionContext;
   signal?: AbortSignal;
 }
@@ -362,7 +364,10 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   // §3.11 case 1: the Runner's own refusals, before anything starts.
   const settings = await deps.settings(providerId);
   const refusal = launchRefusal(deps.host, providerId, settings.executable, deps.platformRefusal ?? cliWorkerPlatformRefusal);
-  if (refusal && "failure" in refusal) return refusal;
+  if (refusal && "failure" in refusal) {
+    deps.sessions.suspend(input.sessionId, "provider_error", refusal.failure.message, clock());
+    return refusal;
+  }
   if (refusal) return launchUnproven(deps.schedulerStore, input.runId, refusal.code);
   const executable = settings.executable as Extract<CliExecutableResolution, { status: "found" }>;
 
@@ -401,7 +406,11 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   let resultDigest: string;
   try {
     const browser = await startBrowser(deps.browser, input);
-    const prompt = buildCliWorkerPrompt({ taskContext: input.contextText, ...(browser.note ? { browserNote: browser.note } : {}) });
+    const prompt = buildCliWorkerPrompt({
+      taskContext: input.contextText,
+      ...(browser.note ? { browserNote: browser.note } : {}),
+      ...(input.earlierWork ? { earlierWork: input.earlierWork } : {}),
+    });
     let handle: CliProcessHandle;
     try {
       handle = await deps.launcher.start({ owner: input.owner, executable: executable.path, args: [...(settings.argsPrefix ?? []), ...args], cwd: input.workspace.path });
@@ -923,7 +932,11 @@ async function collect(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput,
   if (rewritten !== undefined) return { type: "settled", outcome: { type: "failed", reason: rewritten } };
 
   const outcome = file.reading.outcome;
-  if (outcome.type === "failure") return { type: "provider_failure", failure: outcome.failure };
+  if (outcome.type === "failure") {
+    // CW7 (§3.5 step 7): the session is suspended with provider_error as an API worker's is; the driver fails over.
+    deps.sessions.suspend(input.sessionId, "provider_error", outcome.failure.message, clock());
+    return { type: "provider_failure", failure: outcome.failure };
+  }
   if (outcome.type === "stopped") {
     return outcome.reason === "cancelled"
       ? { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } }
