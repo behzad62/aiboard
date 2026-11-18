@@ -63,7 +63,8 @@ const deterministicPrTests = [
   "runner-v2/test/user-steering-runtime.test.ts",
   // A test file whose fixture cleanup stays unverified ends after its last test instead of holding the job until it
   // is cancelled: a synthetic held handle, and a real ExecutionHost run whose close is made to fail (child test-runner
-  // processes; about 25 s on Windows, where the real run holds its birth helper).
+  // processes; in PR CI at 0e4673e2 about 20 s on Windows, where the real run holds its birth helper, 16 s on Linux and
+  // 18 s on macOS).
   "runner-v2/test/certified-fixture-retained-exit.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",

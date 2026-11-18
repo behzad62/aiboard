@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 // the child file fixtures/retained-cleanup-exit.test.ts as its own test-runner process and needs it to end by itself.
 const tsxCli = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
 const childFile = fileURLToPath(new URL("./fixtures/retained-cleanup-exit.test.ts", import.meta.url));
-/** Far above a held child's measured end (about 3 s locally; the real-host case about 6 s on Windows). Only a hang reaches it. */
+/** Far above a child's measured end (3-6.5 s per case in PR CI at 0e4673e2 on Windows, Linux and macOS; up to 10 s on a
+ * loaded Windows PC). Only a hang reaches it. */
 const CHILD_CEILING_MS = 120_000;
 
 interface ChildResult { readonly code: number | null; readonly output: string; readonly elapsedMs: number; readonly killed: boolean; readonly roots: readonly string[] }

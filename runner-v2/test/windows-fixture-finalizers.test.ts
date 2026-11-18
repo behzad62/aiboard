@@ -60,7 +60,8 @@ for (const name of [...names, "two real concurrent run bindings cannot cross gra
       let inspectionCloses = 0; const cleanupOrder: string[] = [];
       const error = new Error("controlled exact-owner failure");
       const close = async () => { closes++; cleanupOrder.push("workload"); if (scenario === "cleanup-error") throw error; };
-      const scope = { assert, Buffer, join, finalizeCertifiedFixture: finalizeExpectingUnverifiedCleanup, withInspectionFixture,
+      const scope = { assert, Buffer, join, finalizeCertifiedFixture: finalizeExpectingUnverifiedCleanup,
+        withInspectionFixture: (fixture: Parameters<typeof withInspectionFixture>[0]) => withInspectionFixture({ ...fixture, expectUnverifiedCleanup: true }),
         root: "synthetic-root", stateDirectory: "synthetic-state", directory: "synthetic-directory",
         hasPrimaryFailure: scenario === "primary-undefined", primaryFailure: undefined,
         cleanupReleased: false, containedOwner: { close },

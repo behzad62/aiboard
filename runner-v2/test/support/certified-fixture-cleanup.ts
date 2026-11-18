@@ -56,7 +56,8 @@ export const finalizeExpectingUnverifiedCleanup: typeof finalizeCertifiedFixture
  * expectUnverifiedCleanup), and in a held process node:test never reaches its own summary, so a file run directly
  * would otherwise exit 0 with a failed test. The full nested cleanup errors are printed first, because the test
  * reporter shows only their first level. The watch is unref'd, so a process that drains by itself exits as before
- * and prints nothing.
+ * and prints nothing. A cleanup that first fails after the root's after hooks have run (in an unawaited promise or a
+ * beforeExit handler, say) adds a hook that never runs, so it is not bounded; no caller does that.
  */
 const unverifiedCleanups: AggregateError[] = [];
 /** The root reports right after its last `after` hook; this only lets those writes leave the process. */
