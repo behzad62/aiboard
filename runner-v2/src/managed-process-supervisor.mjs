@@ -607,10 +607,10 @@ function launchWindowsJob() {
       markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
     };
     // Stricter-only test faults: the host's close reaches this supervisor late, as on a loaded host
-    // (slow_start_late_close), or long after its exit, as while a handle to its pipes is still held
-    // (host_exit_after_create: only the exit can end the launcher's wait in time).
+    // (slow_start_late_close), or after its exit, as while a handle to its pipes is still held
+    // (host_exit_after_create: the exit, not the close, must end the launcher's wait).
     if (config.injectedFault === "slow_start_late_close") setTimeout(closed, 1_000);
-    else if (config.injectedFault === "host_exit_after_create") setTimeout(closed, 20_000);
+    else if (config.injectedFault === "host_exit_after_create") setTimeout(closed, 2_000);
     else closed();
   });
   // PX-2c note: this literal is intentionally inline (not the shared

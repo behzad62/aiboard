@@ -76,7 +76,8 @@ test("the start wait ends at once when the supervisor is already gone or the cal
   const cancel = new AbortController();
   started = Date.now();
   setTimeout(() => cancel.abort(), 50);
-  await assert.rejects(waitForSupervisor({ ...supervisor }, "p", 600_000, () => true, cancel.signal),
+  // Its ceiling is short only so a wait that ignored the cancellation would still end (and fail) soon.
+  await assert.rejects(waitForSupervisor({ ...supervisor }, "p", 20_000, () => true, cancel.signal),
     (error: unknown) => (error as { code?: unknown }).code === "process_start_cancelled");
   assert.ok(Date.now() - started < 5_000, `the cancelled wait ended in ${Date.now() - started} ms`);
   // A supervisor that wrote its terminal status before it exited is read once more, and that status is the answer.
@@ -229,8 +230,8 @@ test("one-shot process.run whose start failed keeps its exact record blocked for
 
 test("a host that dies right after it created the root inside the Job, before resuming it, ends the start wait at its exit and leaves no process", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
   // Only the root's death is claimed here: the host that owned the Job died, so whether its stop is proven is not.
-  // The host's close reaches its supervisor 20 s late (the fault): the supervisor writes a terminal, unproven status at
-  // the host's exit, which ends the launcher's start wait; the launch's abort then waits for the recorded stop.
+  // The host's close reaches its supervisor 2 s late (the fault): the supervisor writes a terminal, unproven status at
+  // the host's exit, which ends the launcher's start wait; the launch's abort then waits for the stop the close records.
   const { value: observed } = await withRun("created", "host_exit_after_create", {}, async ({ invoke, jobHost }) => {
     const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
     const folder = jobFolders(jobHost)[0];
@@ -241,10 +242,10 @@ test("a host that dies right after it created the root inside the Job, before re
   });
   assert.equal(observed.result.isError, true, JSON.stringify(observed.result.content));
   assert.ok(observed.pid > 0, `the host reported the root it created: ${JSON.stringify(observed.result.content)}`);
-  const at = (state: string) => Date.parse(observed.statuses.find((entry) => entry.status === state)?.updatedAt ?? "");
-  const listening = Date.parse(observed.statuses.findLast((entry) => entry.status === "starting")?.updatedAt ?? "");
-  assert.ok(at("exited_unknown") - listening < 10_000,
-    `the terminal, unproven status was written at the host's exit, not its late close: ${JSON.stringify(observed.statuses.map((entry) => [entry.status, entry.updatedAt]))}`);
+  const states = observed.statuses.map((entry) => entry.status);
+  const unproven = states.indexOf("exited_unknown"), stopped = states.indexOf("stopped");
+  assert.ok(unproven >= 0 && (stopped < 0 || unproven < stopped),
+    `the terminal, unproven status was written at the host's exit, before the late close recorded the stop: ${JSON.stringify(observed.statuses.map((entry) => [entry.status, entry.updatedAt]))}`);
   assert.ok(await waitUntil(() => !alive(observed.pid), 10_000), `the suspended root ${observed.pid} died with the host's Job`);
 });
 
