@@ -256,11 +256,11 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     const deadline: CliWorkerLaunchSettings = { executable: { status: "found", path: process.execPath, source: "home", form: "exe" }, attemptLimitMs: 300, argsPrefix: [FAKE_CLI_SCRIPT] };
     // The same attempt run again after each kind; the submission comes last, since a submitted session is the attempt's
     // outcome from then on.
-    const kinds: Array<{ kind: string; scenario: FakeCliScenario; cancel?: boolean; settings?: CliWorkerLaunchSettings; expect: RegExp }> = [
+    const kinds: Array<{ kind: string; scenario: FakeCliScenario; cancel?: boolean; settings?: CliWorkerLaunchSettings; expect: RegExp; starts?: number }> = [
       { kind: "a provider failure", scenario: { cli: "claude-code", stdout: claudeStream(h, null, { isError: true, result: "API Error: 529 overloaded" }), exitCode: 1 }, expect: /"type":"provider_failure"/ },
       { kind: "the deadline", scenario: { cli: "claude-code", stdout: claudeWorking(h), holdMs: 30_000 }, settings: deadline, expect: /cli_attempt_deadline/ },
       { kind: "a cancel", scenario: { cli: "claude-code", stdout: claudeWorking(h), holdMs: 30_000 }, cancel: true, expect: /worker_cancelled/ },
-      { kind: "a result", scenario: { cli: "claude-code", stdout: claudeStream(h, done()), actions: [{ write: "value.txt", content: "two\n" }] }, expect: /"type":"submitted"/ },
+      { kind: "a result", scenario: { cli: "claude-code", stdout: claudeStream(h, done()), actions: [{ write: "value.txt", content: "two\n" }] }, expect: /"type":"submitted"/, starts: 2 },
     ];
     for (const entry of kinds) {
       const session: FakeSession = { starts: 0, live: false, plan: [] };
@@ -279,7 +279,8 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
         h.input(entry.cancel ? { signal: controller.signal } : {}));
       assert.match(JSON.stringify(result), entry.expect, entry.kind);
       assert.equal(liveAtLaunch, true, `${entry.kind}: the session runs before the CLI starts`);
-      assert.equal(session.starts, 1, entry.kind);
+      // A submitted run also started one for the Runner's re-runs of its checks.
+      assert.equal(session.starts, entry.starts ?? 1, entry.kind);
       assert.equal(session.live, false, `${entry.kind}: no session is left`);
       assert.equal(h.owners.has(OWNER), false, entry.kind);
     }
@@ -318,15 +319,19 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     assert.deepEqual((unproven as { outcome: unknown }).outcome, { type: "failed", reason: "process_stop_unproven" });
     assert.equal(unprovenLauncher.starts.length, 0);
 
-    // A cancel while the session starts: the session stops, no CLI starts, the attempt pauses.
-    const controller = new AbortController();
-    const cancelledSession: FakeSession = { starts: 0, live: false, plan: [], during: () => controller.abort() };
-    const cancelledLauncher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, done()) });
-    const cancelled = await runCliWorkerAttempt(withSession(h, cancelledLauncher, cancelledSession), h.input({ signal: controller.signal }));
-    assert.deepEqual(cancelled, { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } });
-    assert.equal(cancelledLauncher.starts.length, 0);
-    assert.equal(cancelledSession.live, false);
-    assert.equal(h.owners.has(OWNER), false);
+    // A cancel while the session starts: the session stops, no CLI starts, the attempt pauses. The real start reports a
+    // cancelled start as failed (its process start and ready wait throw on the abort); a start that finished first
+    // reports started.
+    for (const status of ["start_failed", "started"] as const) {
+      const controller = new AbortController();
+      const cancelledSession: FakeSession = { starts: 0, live: false, plan: [status], during: () => controller.abort() };
+      const cancelledLauncher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, done()) });
+      const cancelled = await runCliWorkerAttempt(withSession(h, cancelledLauncher, cancelledSession), h.input({ signal: controller.signal }));
+      assert.deepEqual(cancelled, { type: "settled", outcome: { type: "paused", reason: "worker_cancelled" } }, status);
+      assert.equal(cancelledLauncher.starts.length, 0, status);
+      assert.equal(cancelledSession.live, false, status);
+      assert.equal(h.owners.has(OWNER), false, status);
+    }
 
     // Proven: what the failed start left is stopped before the CLI, which runs without a browser.
     const session: FakeSession = { starts: 0, live: false, plan: ["start_failed"] };
@@ -337,6 +342,7 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     assert.equal((await runCliWorkerAttempt(withSession(h, launcher, session), h.input())).type, "submitted");
     assert.equal(liveAtLaunch, false, "what the failed start left was stopped before the CLI");
     assert.deepEqual(records(h).at(-1)?.browser, { status: "start_failed", reason: "the session's ready wait failed" });
+    assert.equal(session.starts, 1, "a CLI that ran without a browser gets no re-run session");
   });
 
   test("CW8: the re-runs of the CLI's browser checks get a session of their own, stopped and proven before anything is submitted", async (t) => {
@@ -357,17 +363,17 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     // Proven: the re-runs ran with the session up, and it was stopped before the submission.
     const session: FakeSession = { starts: 0, live: false, plan: [] };
     const launcher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, reported), actions: [{ write: "value.txt", content: "two\n" }] });
-    let rerunSaw: { live: boolean; browserUnavailable: boolean } | undefined;
+    let rerunSaw: { live: boolean; browserUnavailable: boolean; depth: boolean } | undefined;
     const deps = withSession(h, launcher, session);
     const result = await runCliWorkerAttempt({ ...deps, rerunChecks: async (input) => {
-      rerunSaw = { live: session.live, browserUnavailable: input.browserUnavailable };
+      rerunSaw = { live: session.live, browserUnavailable: input.browserUnavailable, depth: h.owners.has(OWNER) };
       return await h.rerun(input);
     } }, h.input());
     assert.equal(result.type, "submitted", JSON.stringify(result));
-    assert.deepEqual(rerunSaw, { live: true, browserUnavailable: false });
+    assert.deepEqual(rerunSaw, { live: true, browserUnavailable: false, depth: true }, "the owner keeps its MCP depth through the re-runs");
+    assert.equal(h.owners.has(OWNER), false);
     assert.equal(session.starts, 2, "one for the CLI, one for the re-runs");
     assert.equal(session.live, false);
-    // A CLI that reports no browser check gets no re-run session: the first test's submitted run started one session.
 
     // A re-run session that does not start: the re-runs run without a browser, and the Architect reads why.
     const h2 = await harness(t, "browser-reruns-case3");

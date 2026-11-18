@@ -15,7 +15,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
@@ -339,6 +339,8 @@ test("CW8: a session start that fails with the until.pattern wall ceiling is rec
   // The run's inventory recorded no browser: the next run of the attempt starts no session, and the CLI is told so.
   f.run.managedProcesses.readOutput = readOutput;
   f.sessions.configureRun(RUN, { browser: null });
+  // The failed start's daemon may have registered its port before it was stopped: gone, so no stale port is reached.
+  rmSync(join(f.sessions.ownerFolder({ runId: RUN, sessionId: SESSION }), "registry"), { recursive: true, force: true });
   started.length = 0;
   const none = join(f.h.root, "fake", "none.json");
   f.scenario({
@@ -353,5 +355,6 @@ test("CW8: a session start that fails with the until.pattern wall ceiling is rec
   assert.ok(ran.stdin.includes(CLI_NO_BROWSER_NOTE));
   // A playwright-cli command finds no session to reach.
   assert.equal(ran.runs?.[0]?.exitCode, 1);
+  assert.match(ran.runs?.[0]?.stderr ?? "", /is not open/);
   assert.deepEqual(await f.running(), []);
 }));

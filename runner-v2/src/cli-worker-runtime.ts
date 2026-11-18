@@ -77,7 +77,6 @@ import type { SettledWorkerOutcome } from "./task-scheduler.js";
 import type { ValidationScope } from "./validation-scope.js";
 import { requestArchitectGuidance, requestTaskReplan } from "./worker-lifecycle-tools.js";
 import { submitWorkerTask, type WorkerSubmissionContext } from "./worker-runtime.js";
-import { isPlaywrightCliCheck } from "./cli-worker-browser.js";
 import { ForeignHistoryError, type ProjectFolderState, type TaskWorkspace, type WorkspaceManager } from "./workspace-manager.js";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -406,10 +405,11 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   try {
     const browser = await startBrowser(deps.browser, input);
     // CW8: before the CLI starts, a session start that failed (case 3) leaves nothing running, and a cancel during the
-    // start stops the session; either stop is proven like any other (§3.11 case 2 when it is not).
-    if (browser.record?.status === "start_failed" || (browser.record?.status === "started" && input.signal?.aborted)) {
-      const settled = await settleBeforeLaunch(deps, input, browser.record.status === "start_failed"
-        ? undefined : { type: "paused", reason: "worker_cancelled" });
+    // start (which the real start reports as a failed start) stops the session and launches nothing; either stop is
+    // proven like any other (§3.11 case 2 when it is not).
+    const cancelled = input.signal?.aborted === true;
+    if (browser.record?.status === "start_failed" || (browser.record && cancelled)) {
+      const settled = await settleBeforeLaunch(deps, input, cancelled ? { type: "paused", reason: "worker_cancelled" } : undefined);
       if (settled) {
         keepOwner = settled.type === "stop_unproven";
         return settled;
@@ -511,8 +511,7 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
       outcome: { type: "failed", reason: "process_stop_unproven" },
     };
   }
-  deps.owners?.release(input.owner);
-  return await collect(deps, input, { file, resultDigest }, clock);
+  return await collectReleasingOwner(deps, input, { file, resultDigest }, clock);
 }
 
 /**
@@ -724,15 +723,17 @@ async function settleBeforeLaunch(deps: CliWorkerRuntimeDeps, input: CliWorkerAt
 type CliRerunResult = Awaited<ReturnType<CliCheckRerunner>>;
 
 /**
- * CW8: the Runner's re-runs of the CLI's checks (CW6's seam). When the CLI ran with a browser and reported a
- * `playwright-cli` check, the owner's session is started again for the re-runs (the CLI's own session stopped with
- * the CLI) and stopped, proven, before anything is submitted. A session that does not start makes the re-runs run
+ * CW8: the Runner's re-runs of the CLI's checks (CW6's seam). When the CLI ran with a browser and reported checks, the
+ * owner's session is started again for the re-runs (the CLI's own session stopped with the CLI) and stopped, proven,
+ * before anything is submitted. A session that does not start makes the re-runs run
  * without a browser, so its browser checks are not run (case 3).
  */
 async function rerunReportedChecks(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, file: CliRunResultFile, result: CliWorkerResultV1):
   Promise<{ reruns: CliRerunResult; concern?: string } | { stopUnproven: string }> {
   if (!deps.rerunChecks) return { reruns: { criterionEvidenceLinks: [], notRun: [] } };
-  const browsing = file.browser?.status === "started" && result.checks.some(isPlaywrightCliCheck);
+  // Whenever the CLI ran with a browser: a check may browse from inside its own program (one that starts a server,
+  // drives `playwright-cli` and stops it), so the re-runs get the environment the CLI had, not only bare commands.
+  const browsing = file.browser?.status === "started" && result.checks.length > 0;
   const session = browsing ? (await startBrowser(deps.browser, input)).record : undefined;
   let reruns: CliRerunResult | undefined;
   let failure: { error: unknown } | undefined;
@@ -956,8 +957,7 @@ async function collectPending(
   if (now.head !== pending.worktree!.head) return changed(`HEAD is ${now.head}, not ${pending.worktree!.head} as the CLI left it`);
   if (!pending.worktree!.tree || !now.tree) return changed("the working files' tree hash could not be built, so they cannot be compared");
   if (now.tree !== pending.worktree!.tree) return changed(`the working files differ from what the CLI left (tree ${now.tree}, not ${pending.worktree!.tree})`);
-  deps.owners?.release(input.owner);
-  return await collect(deps, input, { file, resultDigest }, clock);
+  return await collectReleasingOwner(deps, input, { file, resultDigest }, clock);
 }
 
 /**
@@ -971,6 +971,23 @@ export function cliHistoryRefusal(error: ForeignHistoryError): string {
   return `${error.code}:${error.kind}: ${error.message}${offBranch
     ? " The task's worktree is kept as the CLI left it, and no CLI run is started in it again; replan the work as a new task."
     : ""}`;
+}
+
+/**
+ * Collects, and releases the owner's depth registration (§3.11) once nothing of the attempt runs: after the re-runs'
+ * browser session (CW8) is proven stopped, not before. A re-run session whose stop is not proven keeps it until the
+ * scheduler's retried stop proves it.
+ */
+async function collectReleasingOwner(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, collectable: Collectable, clock: () => string): Promise<CliWorkerAttemptResult> {
+  let result: CliWorkerAttemptResult;
+  try {
+    result = await collect(deps, input, collectable, clock);
+  } catch (error) {
+    deps.owners?.release(input.owner);
+    throw error;
+  }
+  if (result.type !== "stop_unproven") deps.owners?.release(input.owner);
+  return result;
 }
 
 /** §3.5 steps 6 and 7: after a proven stop. */
