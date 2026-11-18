@@ -13,6 +13,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
+import { windowsJobLaunchRefusal } from "./windows-job-launch-refusal.js";
 import { commandLineShell, shellInvocation } from "./command-line.js";
 import { knownShells, SHELL_NAMES, shellMayRun, type ShellName } from "./shell-inventory.js";
 import { SESSION_MAX_TIMEOUT_MS, SESSION_NAME_PATTERN, SESSION_SHELLS, shellSessionsFor, type SessionShell, type ShellSessions } from "./shell-session.js";
@@ -260,6 +261,9 @@ async function executeProcess(
     const failure = runFailure(result.process.outcome, timeoutMs);
     return await runResult(input, context, result, failure, retention, readTool);
   } catch (error) {
+    // R4/R2: a launch the Windows Job host refused before anything started keeps its own code and words.
+    const refusal = windowsJobLaunchRefusal(error);
+    if (refusal) return processError(refusal.code, refusal.message);
     const value = error as { code?: unknown; message?: unknown };
     const code = typeof value.code === "string" ? value.code : "process_runtime_failed";
     const message = typeof value.message === "string" ? value.message : String(error);

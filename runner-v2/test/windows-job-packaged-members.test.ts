@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,7 @@ import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
 import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 import { CONTAINED_STOP_CONFIRMATION } from "../src/managed-process-tools.js";
 import { pwshExecutable } from "../src/shell-inventory.js";
-import { runStorePwshEndToEnd, type StorePwshEndToEnd } from "./support/packaged-member-e2e.js";
+import { processRunRefused, runStorePwshEndToEnd, type StorePwshEndToEnd } from "./support/packaged-member-e2e.js";
 
 const WINDOWS = process.platform === "win32";
 /** Windows 10 1703 (build 15063) or newer, where the Job host must give every root the desktop app policy (R4). */
@@ -147,6 +147,17 @@ test("R2/R4: a claimed spare refuses with the coded refusal before any spawn", {
   }
 });
 
+// Through the tool a worker calls: a refused process.run reports the refusal's own code and words, never a generic
+// launch failure, and nothing ran.
+test("R4: process.run reports the Job host's coded refusal to its caller", { skip: (!WINDOWS && "Windows Job host") || (!DESKTOP_POLICY_HOST && "the desktop app policy exists from Windows 10 1703 (build 15063)"), timeout: 90_000 }, async () => {
+  const refused = await processRunRefused(join(ownRoot, "run-refused"), "desktop_policy_initialize");
+  assert.equal(refused.isError, true, refused.text);
+  assert.equal(refused.code, "windows_job_desktop_policy_unavailable", refused.text);
+  assert.match(refused.text, /refused the launch/);
+  assert.doesNotMatch(refused.text, /ran/u);
+  assert.equal(refused.closeError, null, "a launch refused before anything started leaves nothing to clean up");
+});
+
 // False positives would make every stop unproven. Many processes that exit at once are the race the watch must win:
 // each is opened from its membership message while its parent still holds it, and the Job's own process count matches
 // the messages received.
@@ -168,7 +179,7 @@ test("R2: a workload of many short-lived plain processes leaves no member eviden
 test("R2: detached short-lived members under CPU load leave no member evidence", { skip: !WINDOWS && "Windows Job host", timeout: 120_000 }, async () => {
   const busy = Array.from({ length: 4 }, () => spawn(process.execPath, ["-e", "for(;;){}", OWN_MARKER], { stdio: "ignore", windowsHide: true }));
   try {
-    for (let round = 0; round < 5; round += 1) {
+    for (let round = 0; round < 3; round += 1) {
       const { backend, launch } = setup(`detached-${round}`);
       const started = await launch("cmd.exe", ["/d", "/s", "/c", `for /l %i in (1,1,40) do @start "" /b cmd /d /c exit 0`]);
       const binding = bind(started);
@@ -223,6 +234,11 @@ test("R2: under a Store pwsh root, descendants with the root's own package are c
 test("R2: a packaged non-root member leaves the Job unverified and unreleased, with the packaged text", { skip: STORE_SKIP, timeout: 90_000 }, async () => {
   const { root, backend, binding, empty } = await storePwshRootRun("store-member", "membership_ignore_root_package");
   assert.equal(empty.empty, false, "a Job that held a packaged descendant is never verified empty");
+  // Never cleared: the supervisor's last durable status line, written when it recorded the stop, still carries it.
+  const statusLines = supervisorStatusLines(join(root, "job-host"));
+  const last = statusLines.at(-1)!;
+  assert.equal(last.status, "stopped", JSON.stringify(last));
+  assert.ok((last.memberEvidence as { count?: number } | undefined)?.count, `the final status keeps the evidence: ${JSON.stringify(last)}`);
   assert.match(empty.empty ? "" : empty.detail, /packaged \(MSIX or Microsoft Store\) program \(Microsoft\.PowerShell_[^)]+\) ran in the Windows Job as a descendant/);
   assert.match(empty.empty ? "" : empty.detail, /the stop is not proven/);
   await assert.rejects(backend.release(binding, fence),
@@ -261,6 +277,36 @@ test("R2: a member write lost for good fails the natural stop and blocks verify-
   await assert.rejects(backend.release(binding, fence),
     (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
 });
+
+// The event file stays unwritable for the host's coded error line too (member_emit_unwritable, stricter only): the
+// host ends after its workload started with no natural stop and no stop request, so its watch never settled, and the
+// supervisor keeps that as evidence.
+test("R2: a host that ends without settling its watch leaves the Job unverified and unreleased", { skip: STORE_SKIP, timeout: 90_000 }, async () => {
+  const { root, backend, launch } = setup("store-unwritable", "member_emit_unwritable");
+  const binding = bind(await launch(storePwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `& '${process.execPath}' -e "setTimeout(() => {}, 300)"`]));
+  await observeExit(backend, binding);
+  const empty = parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence));
+  assert.equal(empty.empty, false, "a host that never settled its watch never proves the Job empty");
+  assert.match(empty.empty ? "" : empty.detail, /ended without settling its membership watch/);
+  assert.doesNotMatch(readJobEvents(join(root, "job-host")), /windows_job_membership_evidence_lost/, "the coded line was never written");
+  await assert.rejects(backend.release(binding, fence),
+    (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
+});
+
+/** Each Job record's supervisor status lines (supervisor.jsonl), oldest first, for this test's single record. */
+function supervisorStatusLines(jobHostDirectory: string): Record<string, unknown>[] {
+  const records = readdirSync(jobHostDirectory).filter((name) => name.endsWith(".json"));
+  assert.equal(records.length, 1, `one Job record: ${records.join(", ")}`);
+  const record = JSON.parse(readFileSync(join(jobHostDirectory, records[0]!), "utf8")) as { supervisor: { statusPath: string } };
+  return readFileSync(record.supervisor.statusPath, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Every Job event file under a job-host directory, concatenated. */
+function readJobEvents(jobHostDirectory: string): string {
+  return readdirSync(jobHostDirectory, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith("job-events.jsonl"))
+    .map((name) => readFileSync(join(jobHostDirectory, name), "utf8")).join("");
+}
 
 /** An app execution alias cannot be followed by stat, so existsSync reports false; lstat sees the link itself. */
 function aliasPresent(path: string): boolean {

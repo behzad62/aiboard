@@ -133,7 +133,6 @@ jobs:
           runner-v2/test/cli-worker-processes.test.ts
           runner-v2/test/user-steering-runtime.test.ts
           runner-v2/test/child-environment.test.ts
-          runner-v2/test/windows-job-packaged-members.test.ts
       # FL2/FL3: the OS-lock core and the Runner's async claims on every host (about 15 s); its own step so the claim p95 it reports is not measured
       # under the parallel contract files above.
       - name: Run owned fence lock contracts
@@ -157,6 +156,15 @@ jobs:
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/managed-refused-launch-windows.test.ts
+      # R2/R4: real Job hosts on Windows (coded launch refusals before any spawn, member evidence, a burst of detached
+      # short-lived processes under CPU load from its own busy loops). Its own step so that load never runs beside the
+      # timing-sensitive parallel files above; its Store pwsh cases skip where the Store's pwsh is absent, as on
+      # GitHub's runners (about 13 s on a Windows PC with them skipped; about 25 s with all of them).
+      - name: Run Windows Job packaged-member contracts on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/windows-job-packaged-members.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

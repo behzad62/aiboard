@@ -1,7 +1,7 @@
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import type { Stats } from "node:fs";
 import { lstat, readlink, realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 
 const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
 const WINDOWS_NATIVE_EXTENSIONS = new Set([".exe", ".com"]);
@@ -250,6 +250,34 @@ async function canonicalExecutablePath(
     if (!isAbsolute(target) || target.includes("\0")) throw error;
     return await realpath(target);
   }
+}
+
+/**
+ * R3: the package's own program for a bare command whose first match, in the launcher's search order over
+ * `rootProgramEnvironment`'s PATH, is a Microsoft Store program (an app execution alias in a WindowsApps folder), so
+ * the launch starts that program itself as the Job's root, as process.start and the pwsh shells do (the child's PATH no
+ * longer holds WindowsApps). Undefined in every other case, which leaves the launch as it was: a first match outside
+ * WindowsApps, no match, or a match that cannot be read. Never hashes; the launch identifies what it starts.
+ */
+export async function packagedRootProgram(
+  command: string,
+  workingDirectory: string,
+  rootProgramEnvironment: NodeJS.ProcessEnv,
+  isPackagedFolder: (folder: string) => boolean,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | undefined> {
+  if (platform !== "win32" || !isBareCommand(command)) return undefined;
+  for (const candidate of languageServerCommandCandidates(command, { commandSearchDirectory: workingDirectory, environment: rootProgramEnvironment, platform })) {
+    let metadata: Stats;
+    try { metadata = await lstat(candidate); } catch { continue; }
+    if (metadata.isDirectory()) continue;
+    if (!isPackagedFolder(dirname(candidate))) return undefined;
+    try {
+      const program = await canonicalExecutablePath(candidate, metadata, platform);
+      return WINDOWS_NATIVE_EXTENSIONS.has(extname(program).toLowerCase()) ? program : undefined;
+    } catch { return undefined; }
+  }
+  return undefined;
 }
 
 function isBareCommand(command: string): boolean {

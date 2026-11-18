@@ -34,6 +34,9 @@ let backendInput;
 let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
+// R2: whether the Job host reported its workload started, and whether it settled its membership watch itself.
+let workloadStarted = false;
+let naturalStopSeen = false;
 let settled = false;
 let backendFailure;
 const retainedOutput = [];
@@ -664,6 +667,7 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "natural_stopped") {
+    naturalStopSeen = true;
     status.exitCode = event.exitCode;
     status.jobEmptyProof = true;
     return;
@@ -716,7 +720,20 @@ function recordMemberEvidence(event) {
   persistStatus();
 }
 
+// R2: an interactive Job host settles its membership watch only when its workload ends by itself (natural_stopped);
+// the Runner's own stops end it by a kill it requested. A host that ended after starting its workload with neither
+// (it failed, or could not write its events) never settled the watch, so its evidence may be incomplete: that is
+// itself evidence, and the Job is never verified empty or released.
+function recordUnsettledInteractiveWatch() {
+  if (!config?.interactive || !workloadStarted || naturalStopSeen || interactiveTerminationRequested) return;
+  recordMemberEvidence({
+    pid: 0, evidence: "unidentified", package: null,
+    detail: "The Job host ended without settling its membership watch and without a stop request.",
+  });
+}
+
 function markRunning(pid) {
+  workloadStarted = true;
   status.childPid = pid ?? 0;
   status.status = "running";
   status.error = null;
@@ -732,6 +749,7 @@ function markStopped() {
     startupFailed(backendFailure);
     return;
   }
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
@@ -753,6 +771,7 @@ function markOwnershipUncertain(message) {
 
 function startupFailed(error) {
   if (settled) return;
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";

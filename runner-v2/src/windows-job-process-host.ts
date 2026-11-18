@@ -1,4 +1,5 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: Windows Job containment host and helper probes require direct OS process APIs.
+import { WINDOWS_JOB_LAUNCH_REFUSAL_CODES } from "./windows-job-launch-refusal.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
@@ -67,7 +68,7 @@ export interface WindowsJobMemberEvidenceEntry {
 }
 export interface WindowsJobMemberEvidence { readonly count: number; readonly entries: readonly WindowsJobMemberEvidenceEntry[] }
 /** Faults a test can inject into the Job host. Each only makes it stricter: the first three refuse the launch before CreateProcess, and membership_ignore_root_package reports every packaged member, the root's own package included. */
-export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost";
+export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable";
 export interface WindowsJobOutputRead {
   readonly stdout: Uint8Array; readonly stderr: Uint8Array;
   readonly next: { readonly stdout: number; readonly stderr: number };
@@ -2101,7 +2102,7 @@ export function createWindowsJobProcessHost(options: WindowsJobProcessHostOption
 }
 
 /** R4/R2: the Runner code of a launch the Job host refused before CreateProcess, when its status carries one. */
-const JOB_HOST_LAUNCH_REFUSAL_CODES: ReadonlySet<string> = new Set(["windows_job_desktop_policy_unavailable", "windows_job_membership_watch_unavailable"]);
+const JOB_HOST_LAUNCH_REFUSAL_CODES = WINDOWS_JOB_LAUNCH_REFUSAL_CODES;
 function launchRefusalCode(status: SupervisorStatus): string | undefined {
   return typeof status.errorCode === "string" && JOB_HOST_LAUNCH_REFUSAL_CODES.has(status.errorCode) ? status.errorCode : undefined;
 }

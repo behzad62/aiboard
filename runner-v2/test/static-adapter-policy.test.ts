@@ -216,8 +216,10 @@ test("R4: the Job host refuses a launch it cannot give the desktop app policy, b
   assert.equal([...body.matchAll(/if \(policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
   assert.equal([...body.matchAll(/if \(attributeList == IntPtr\.Zero && policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
   assert.doesNotMatch(body, /CreateProcess\(/, "nothing is created before the policy is settled");
-  // An unknown version (RtlGetVersion failing) expects the policy: fail closed.
+  // An unknown version (RtlGetVersion failing) expects the policy: fail closed. The structure is the Unicode one
+  // (276 bytes, the size RtlGetVersion accepts), so on a real host the version is read rather than failing.
   assert.match(jobHost, /if \(RtlGetVersion\(ref version\) != 0\) return true;/);
+  assert.match(jobHost, /\[StructLayout\(LayoutKind\.Sequential, CharSet = CharSet\.Unicode\)\]\s+private struct OSVERSIONINFOW/);
   // The code reaches the supervisor and the Runner: the host's error event carries it, and launchOwned throws it.
   assert.match(jobHost, /refused == null \? null : refused\.Code/);
   const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
@@ -256,6 +258,10 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   assert.match(jobHost, /Flush\(false\);[^}]*if \(pending\.Count > 0\) throw new LaunchRefusedException\(MembershipEvidenceLostCode,/);
   const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
   assert.match(supervisor, /if \(event\.code === "windows_job_membership_evidence_lost"\)\s+recordMemberEvidence\(/);
+  // An interactive host that ended after starting its workload with neither a natural stop (the only settle) nor a
+  // stop the Runner requested never settled its watch: evidence, on both ways the supervisor records the end.
+  assert.match(supervisor, /if \(!config\?\.interactive \|\| !workloadStarted \|\| naturalStopSeen \|\| interactiveTerminationRequested\) return;\s+recordMemberEvidence\(/);
+  assert.equal([...supervisor.matchAll(/^\s+recordUnsettledInteractiveWatch\(\);$/gm)].length, 2);
   // The only members that are not evidence besides the root's own package: one that already exited before it could be
   // opened (ERROR_INVALID_PARAMETER), or whose PID now names a process outside this Job. Every other failure is evidence.
   assert.match(jobHost, /if \(failure == ERROR_INVALID_PARAMETER\) return;/);

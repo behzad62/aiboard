@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -291,6 +291,8 @@ test("R3: the WindowsApps alias and package folders are recognised, and nothing 
   for (const entry of [
     "C:\\Program Files\\PowerShell\\7", "C:\\Windows\\System32", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
     "C:\\tools\\WindowsAppsHelper", "C:\\x\\Microsoft\\WindowsApps2", "C:\\Program Files\\Git\\cmd", "",
+    // Anchored: a folder that is merely named WindowsApps is not one Windows uses for packaged programs.
+    "D:\\WindowsApps\\mytools", "D:\\projects\\Microsoft\\WindowsApps\\bin", "C:\\tools\\WindowsApps",
   ]) assert.equal(isWindowsAppsPathEntry(entry), false, entry);
 });
 
@@ -305,21 +307,30 @@ test("R3: a Windows child's PATH loses the WindowsApps folders, after explicit o
       ambient: { PATH: [perPackage, tools, alias].join(delimiter) },
       ...(explicitPath === undefined ? {} : { explicitOverrides: { PATH: explicitPath } }),
     });
-    return { audit: prepared.audit, path: environments.withChildEnvironment(prepared.capability, (environment) => environment.PATH) };
+    return { audit: prepared.audit, ...environments.withChildEnvironment(prepared.capability, (environment, root) =>
+      ({ path: environment.PATH, rootPath: root?.PATH, sameRoot: root === environment })) };
   };
   const windows = prepare("win32");
   assert.equal(windows.path, tools);
   assert.ok(windows.audit.decisions.some((entry) => entry.kind === "removed_packaged_alias_path" && entry.count === 2));
+  // The launch's own program is looked up on the PATH that keeps them, in their places; the child never gets it.
+  assert.equal(windows.rootPath, [perPackage, tools, alias].join(delimiter));
   assert.equal(prepare("win32", [alias, tools].join(delimiter)).path, tools, "an explicit PATH is filtered the same way");
-  assert.equal(prepare("linux").path, [perPackage, tools, alias].join(delimiter));
-  assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "win32" }), tools,
-    "a check's tool lookup searches the PATH the launch gets");
+  const linux = prepare("linux");
+  assert.equal(linux.path, [perPackage, tools, alias].join(delimiter));
+  assert.equal(linux.sameRoot, true, "with nothing removed the root program is looked up in the child's own environment");
+  assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "win32" }), tools, "the child's PATH");
+  assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "win32", purpose: "root_program" }), [alias, tools].join(delimiter),
+    "a check's tool lookup searches where the launch looks for its own program");
   assert.equal(withoutRunnerInstallPath([alias, tools].join(delimiter), { platform: "darwin" }), [alias, tools].join(delimiter));
 });
 
-test("R3: a PATH entry that only reaches WindowsApps through its real path is removed too", { skip: process.platform !== "win32" && "real-path spellings are a Windows case" }, () => {
-  const windowsApps = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps") : undefined;
-  if (!windowsApps || !existsSync(windowsApps)) return;
+const HOST_WINDOWS_APPS = process.platform === "win32" && process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps") : undefined;
+test("R3: a PATH entry that only reaches WindowsApps through its real path is removed too", {
+  skip: (process.platform !== "win32" && "real-path spellings are a Windows case") ||
+    ((!HOST_WINDOWS_APPS || !existsSync(HOST_WINDOWS_APPS)) && "needs %LOCALAPPDATA%\\Microsoft\\WindowsApps on this host"),
+}, () => {
+  const windowsApps = HOST_WINDOWS_APPS!;
   const root = mkdtempSync(join(tmpdir(), "aiboard-r3-"));
   try {
     const link = join(root, "apps");
@@ -332,11 +343,24 @@ test("R3: a PATH entry that only reaches WindowsApps through its real path is re
 });
 
 test("R3: on a real Windows host the Runner's own shells are still found after the filter", { skip: process.platform !== "win32" && "the Runner's shell detection is Windows-specific here" }, async () => {
-  // Detection reads the Runner's own PATH, never a child's, so a Store-only pwsh is still listed and started as the
-  // Job's root (shell-session.ts sessionLaunch, command-line.ts shellInvocation).
+  // The filter runs on this host's own PATH: the child's PATH holds no WindowsApps folder, while detection reads the
+  // Runner's own PATH, never a child's, so a Store-only pwsh is still listed and started as the Job's root
+  // (shell-session.ts sessionLaunch, command-line.ts shellInvocation), and the launch's own lookup PATH still holds it.
+  const environments = createChildEnvironmentFactory({ credentialResolver: resolver({}), now: () => new Date(NOW), platform: "win32" });
+  const hostPath = Object.entries(process.env).find(([name]) => name.toUpperCase() === "PATH")?.[1] ?? "";
+  const prepared = environments.prepare({ ambient: { Path: hostPath } });
+  const pathOf = (environment: Readonly<Record<string, string>>) => Object.entries(environment).find(([name]) => name.toUpperCase() === "PATH")?.[1] ?? "";
+  const { child, root } = environments.withChildEnvironment(prepared.capability, (environment, rootProgram) =>
+    ({ child: pathOf(environment).split(delimiter), root: pathOf(rootProgram ?? environment).split(delimiter) }));
+  assert.equal(child.filter(isWindowsAppsPathEntry).length, 0, "the child's PATH holds no WindowsApps folder");
   const shells = await shellInventory();
   assert.ok(shells.includes("cmd"));
   assert.ok(shells.some((shell) => shell.startsWith("powershell ")), JSON.stringify(shells));
   const pwsh = pwshExecutable();
   if (pwsh) assert.ok(shells.some((shell) => shell.startsWith("pwsh ")), JSON.stringify(shells));
+  if (pwsh && isWindowsAppsPathEntry(dirname(pwsh))) {
+    const folder = dirname(pwsh).toLowerCase();
+    assert.ok(root.some((entry) => entry.toLowerCase().replace(/\\+$/u, "") === folder), "the launch's own lookup PATH keeps the Store pwsh's folder");
+    assert.ok(!child.some((entry) => entry.toLowerCase().replace(/\\+$/u, "") === folder));
+  }
 });

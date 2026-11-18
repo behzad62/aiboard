@@ -159,7 +159,7 @@ public static class ManagedProcessJobHost
         public IntPtr CompletionPort;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct OSVERSIONINFOW
     {
         public int dwOSVersionInfoSize;
@@ -536,6 +536,10 @@ public static class ManagedProcessJobHost
     {
         private static readonly UIntPtr SettleKey = new UIntPtr(2);
         private const int MaxReports = 16;
+        // The settle wait returns the moment the watch has handled its queue (an event, never a sleep); this is only its
+        // ceiling. Measured 2026-11-18 (16 cores; single process, 40 sequential and 40 detached children, a Store pwsh
+        // root starting node; idle and under 4 and 6 busy cores): 120 of 120 settles took under 1 ms (watch_settled).
+        // A settle past the ceiling is evidence (fail closed), so it sits thousands of times above the measured worst.
         private const int SettleWaitMs = 5000;
         private readonly IntPtr job;
         private readonly IntPtr port;
@@ -605,7 +609,8 @@ public static class ManagedProcessJobHost
                 rootPid = pid;
                 // Test faults, stricter only: each treats the root as unpackaged, so its members are reported; the
                 // member_emit_* ones also fail member writes (see Flush).
-                bool emitFault = injectedFault == "member_emit_retry" || injectedFault == "member_emit_lost";
+                bool emitFault = injectedFault == "member_emit_retry" || injectedFault == "member_emit_lost" ||
+                    injectedFault == "member_emit_unwritable";
                 rootPackage = injectedFault == "membership_ignore_root_package" || emitFault ? null : package;
                 failEmits = emitFault ? injectedFault : null;
                 rootPolicy = desktopPolicy;
@@ -619,6 +624,7 @@ public static class ManagedProcessJobHost
         public void Settle()
         {
             ManualResetEvent done = new ManualResetEvent(false);
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
             lock (gate)
             {
                 if (finished) throw new InvalidOperationException("The Job's membership watch was already settled or stopped.");
@@ -633,6 +639,9 @@ public static class ManagedProcessJobHost
             lock (gate)
             {
                 finished = true;
+                // Evidence only, never a lifecycle fact: how long the settle took, the measure SettleWaitMs is set from.
+                try { emit("{\"type\":\"watch_settled\",\"ms\":" + clock.ElapsedMilliseconds + ",\"members\":" + seen + "}"); }
+                catch (Exception) { }
                 Flush(false);
                 // A member event that could not be written must not end as a clean stop: the host reports an error.
                 if (pending.Count > 0) throw new LaunchRefusedException(MembershipEvidenceLostCode,
@@ -767,14 +776,16 @@ public static class ManagedProcessJobHost
         // losing the evidence while the host's exit still read as the Job's empty proof. A line that cannot be written
         // stays pending and is retried at the watch's next wake (at most 100 ms later); one still pending when the watch
         // settles fails the stop (MembershipEvidenceLostCode). injectFailure fails this attempt (stricter-only test
-        // faults: member_emit_retry fails each line's first attempt, member_emit_lost every attempt).
+        // faults: member_emit_retry fails each line's first attempt; member_emit_lost and member_emit_unwritable every
+        // attempt, and member_emit_unwritable also the host's coded error line).
         private void Flush(bool injectFailure)
         {
             while (pending.Count > 0)
             {
                 try
                 {
-                    if (injectFailure || failEmits == "member_emit_lost") throw new IOException("injected " + failEmits);
+                    if (injectFailure || (failEmits != null && failEmits != "member_emit_retry"))
+                        throw new IOException("injected " + failEmits);
                     emit(pending[0]);
                     pending.RemoveAt(0);
                 }
@@ -952,6 +963,10 @@ public static class ManagedProcessJobHost
             string detail = native == null
                 ? error.Message
                 : error.Message + " (Win32 " + native.NativeErrorCode + ")";
+            // Stricter-only test fault: the event file stays unwritable for the coded line too. The supervisor then sees
+            // a host that ended after its workload started with no natural stop and no stop request (R2 evidence).
+            if (refused != null && refused.Code == MembershipEvidenceLostCode && injectedFault == "member_emit_unwritable")
+                throw new IOException("injected member_emit_unwritable");
             EmitLsp(eventPath, "error", processInfo.dwProcessId, null, 0, detail, refused == null ? null : refused.Code);
             return 1;
         }

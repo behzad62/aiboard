@@ -70,9 +70,15 @@ export interface PreparedChildEnvironment {
 
 export interface ChildEnvironmentFactory {
   prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment;
+  /**
+   * `rootProgramEnvironment` is the environment the launch's own program is looked up in (R3): the child's, except that
+   * its PATH keeps the WindowsApps folders the child's PATH lost, in their places, so an installed Store program
+   * (pwsh, python3, winget) is still found and pinned to its package's own program, started as the Job's root. It is
+   * never a child's environment.
+   */
   withChildEnvironment<T>(
     capability: ChildEnvironmentCapability,
-    trustedSpawn: (environment: Readonly<Record<string, string>>) => T,
+    trustedSpawn: (environment: Readonly<Record<string, string>>, rootProgramEnvironment?: Readonly<Record<string, string>>) => T,
   ): T;
 }
 
@@ -115,6 +121,7 @@ export function createChildEnvironmentFactory(
   options: CreateChildEnvironmentFactoryOptions,
 ): ChildEnvironmentFactory {
   const environments = new WeakMap<object, Readonly<Record<string, string>>>();
+  const rootProgramEnvironments = new WeakMap<object, Readonly<Record<string, string>>>();
   const redeemedGrantIds = new Set<string>();
   const now = options.now ?? (() => new Date());
   const mcpChildDepth = options.mcpChildDepth ?? parseMcpDepth(process.env.AIBOARD_MCP_DEPTH) + 1;
@@ -184,13 +191,17 @@ export function createChildEnvironmentFactory(
         decisions.push({ kind: "applied_runner", name });
       }
       const path = environment.get("PATH");
+      // R3: the PATH the launch's own program is looked up in keeps the WindowsApps entries the child's PATH loses.
+      let rootProgramPath: string | undefined;
       if (path) {
         const entries = path.value.split(delimiter);
-        const outsideInstall = entries.filter((entry) => keepsPathEntry(entry, installRoots, request.workingDirectory));
-        const retained = platform === "win32" ? outsideInstall.filter((entry) => !namesWindowsApps(entry, request.workingDirectory)) : outsideInstall;
+        const { outsideInstall, retained } = filterPathEntries(entries, installRoots, request.workingDirectory, platform);
         if (retained.length !== entries.length) setEnvironment(environment, path.name, retained.join(delimiter));
         if (outsideInstall.length !== entries.length) decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - outsideInstall.length });
-        if (retained.length !== outsideInstall.length) decisions.push({ kind: "removed_packaged_alias_path", name: path.name, count: outsideInstall.length - retained.length });
+        if (retained.length !== outsideInstall.length) {
+          decisions.push({ kind: "removed_packaged_alias_path", name: path.name, count: outsideInstall.length - retained.length });
+          rootProgramPath = outsideInstall.join(delimiter);
+        }
       }
       const prepend = runner?.pathPrepend ?? [];
       if (prepend.some((entry) => typeof entry !== "string" || !isAbsolute(entry) || entry.includes(delimiter))) {
@@ -200,10 +211,16 @@ export function createChildEnvironmentFactory(
         const current = environment.get("PATH");
         const name = current?.name ?? (process.platform === "win32" ? "Path" : "PATH");
         setEnvironment(environment, name, [...prepend, ...(current?.value ? [current.value] : [])].join(delimiter));
+        if (rootProgramPath !== undefined) rootProgramPath = [...prepend, ...(rootProgramPath ? [rootProgramPath] : [])].join(delimiter);
         decisions.push({ kind: "applied_runner", name });
       }
       const capability = Object.freeze({}) as ChildEnvironmentCapability;
-      environments.set(capability, createRawEnvironment(environment));
+      const raw = createRawEnvironment(environment);
+      environments.set(capability, raw);
+      if (rootProgramPath !== undefined) {
+        const pathName = environment.get("PATH")!.name;
+        rootProgramEnvironments.set(capability, Object.freeze({ ...raw, [pathName]: rootProgramPath }));
+      }
       return Object.freeze({
         capability,
         audit: freezeAudit(inheritedNames, removedNames, explicitSafeNames, grantedNames, decisions),
@@ -212,13 +229,15 @@ export function createChildEnvironmentFactory(
 
     withChildEnvironment<T>(
       capability: ChildEnvironmentCapability,
-      trustedSpawn: (environment: Readonly<Record<string, string>>) => T,
+      trustedSpawn: (environment: Readonly<Record<string, string>>, rootProgramEnvironment?: Readonly<Record<string, string>>) => T,
     ): T {
       if (!capability || typeof capability !== "object") throw invalidGrant();
       const environment = environments.get(capability);
       if (!environment) throw invalidGrant();
       environments.delete(capability);
-      return trustedSpawn(environment);
+      const rootProgramEnvironment = rootProgramEnvironments.get(capability) ?? environment;
+      rootProgramEnvironments.delete(capability);
+      return trustedSpawn(environment, rootProgramEnvironment);
     },
   });
 }
@@ -357,23 +376,33 @@ function runnerInstallRoots(runnerInstallRoot?: string): string[] {
   return [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
 }
 
-function keepsPathEntry(entry: string, installRoots: readonly string[], workingDirectory?: string): boolean {
-  const candidate = pathEntryCandidate(entry, workingDirectory);
-  return candidate === undefined || !installRoots.some((root) => insideInstall(root, candidate));
-}
-
 /**
  * VF4b: the PATH a launch in `workingDirectory` searches before the owner's folders are put first: the same entries
  * `prepare` keeps (outside the Runner's own installation and, on Windows, outside WindowsApps), so a check's tool
  * lookup never finds a tool the launch cannot find.
  */
-export function withoutRunnerInstallPath(path: string, options: { readonly workingDirectory?: string; readonly runnerInstallRoot?: string; readonly delimiter?: string; readonly platform?: NodeJS.Platform } = {}): string {
+export function withoutRunnerInstallPath(path: string, options: {
+  readonly workingDirectory?: string; readonly runnerInstallRoot?: string; readonly delimiter?: string; readonly platform?: NodeJS.Platform;
+  /** "root_program": the PATH a launch's own program is looked up in, which keeps the WindowsApps folders (R3). */
+  readonly purpose?: "child" | "root_program";
+} = {}): string {
   const separator = options.delimiter ?? delimiter;
   const installRoots = runnerInstallRoots(options.runnerInstallRoot);
-  const windows = (options.platform ?? process.platform) === "win32";
-  return path.split(separator)
-    .filter((entry) => keepsPathEntry(entry, installRoots, options.workingDirectory) && !(windows && namesWindowsApps(entry, options.workingDirectory)))
-    .join(separator);
+  const { outsideInstall, retained } = filterPathEntries(path.split(separator), installRoots, options.workingDirectory, options.platform ?? process.platform);
+  return (options.purpose === "root_program" ? outsideInstall : retained).join(separator);
+}
+
+/** Both PATH filters with each entry's real path resolved once: the Runner's installation, then WindowsApps (win32). */
+function filterPathEntries(entries: readonly string[], installRoots: readonly string[], workingDirectory: string | undefined, platform: NodeJS.Platform): { outsideInstall: string[]; retained: string[] } {
+  const outsideInstall: string[] = [], retained: string[] = [];
+  for (const entry of entries) {
+    const candidate = pathEntryCandidate(entry, workingDirectory);
+    if (candidate !== undefined && installRoots.some((root) => insideInstall(root, candidate))) continue;
+    outsideInstall.push(entry);
+    if (platform === "win32" && (isWindowsAppsPathEntry(entry) || (candidate !== undefined && isWindowsAppsPathEntry(candidate)))) continue;
+    retained.push(entry);
+  }
+  return { outsideInstall, retained };
 }
 
 /**
@@ -388,16 +417,21 @@ export function withoutRunnerInstallPath(path: string, options: { readonly worki
  * honest. The Runner's own shells are found from its own PATH (shell-inventory.ts) and started as the Job's root.
  */
 export function isWindowsAppsPathEntry(entry: string): boolean {
-  const value = entry.trim().replace(/^"(.*)"$/u, "$1").replaceAll("/", "\\").replace(/\\+$/u, "").toLowerCase();
-  return /\\microsoft\\windowsapps(?:\\|$)/u.test(value) ||
-    /^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)(?:\\program files)?\\windowsapps(?:\\|$)/u.test(value);
+  const value = normalizeWindowsPathEntry(entry);
+  // Anchored to the folders Windows uses, never any folder that happens to be named WindowsApps: a user's
+  // %LOCALAPPDATA%\Microsoft\WindowsApps (as the Runner sees it, and under any profile), the Program Files package root,
+  // and a package's folder on another volume's package root (<drive>:\WindowsApps\<Name>_<Version>_<Arch>_<Res>_<PublisherId>).
+  const localAppData = process.env.LOCALAPPDATA ? normalizeWindowsPathEntry(process.env.LOCALAPPDATA) : undefined;
+  if (localAppData && (value === `${localAppData}\\microsoft\\windowsapps` || value.startsWith(`${localAppData}\\microsoft\\windowsapps\\`))) return true;
+  // A drive, a UNC share, or a driveless rooted path (the current drive's root).
+  const root = String.raw`^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)?`;
+  return new RegExp(`${root}\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\microsoft\\\\windowsapps(?:\\\\|$)`, "u").test(value) ||
+    new RegExp(`${root}\\\\program files\\\\windowsapps(?:\\\\|$)`, "u").test(value) ||
+    new RegExp(`${root}\\\\windowsapps\\\\[^\\\\]+_[a-z0-9]{13}(?:\\\\|$)`, "u").test(value);
 }
 
-/** The entry as written, or the real path it names (an 8.3 name or a link to a WindowsApps folder). */
-function namesWindowsApps(entry: string, workingDirectory?: string): boolean {
-  if (isWindowsAppsPathEntry(entry)) return true;
-  const candidate = pathEntryCandidate(entry, workingDirectory);
-  return candidate !== undefined && isWindowsAppsPathEntry(candidate);
+function normalizeWindowsPathEntry(entry: string): string {
+  return entry.trim().replace(/^"(.*)"$/u, "$1").replaceAll("/", "\\").replace(/\\+$/u, "").toLowerCase();
 }
 
 function defaultRunnerInstallRoot(): string {

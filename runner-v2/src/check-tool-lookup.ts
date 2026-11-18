@@ -180,9 +180,12 @@ export async function lookUpCheckTool(
   const pathName = Object.keys(input.environment).find((name) => platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH");
   const rawPath = pathName ? input.environment[pathName] : undefined;
   // VF4b: a launch removes the PATH entries inside the Runner's own installation before it puts the owner's folders
-  // first (child-environment.ts prepare), so the lookup searches what the launch searches.
+  // first (child-environment.ts prepare), so the lookup searches what the launch searches. R3: a check's own program is
+  // looked up where the launch looks for it, on the PATH that keeps the WindowsApps folders (a Store python3 or winget
+  // is started as the Job's root, pinned to its package's program); only the check's children lose those folders.
   const ambientPath = rawPath?.trim()
-    ? withoutRunnerInstallPath(rawPath, { workingDirectory: input.cwd, delimiter: separator, ...(input.runnerInstallRoot ? { runnerInstallRoot: input.runnerInstallRoot } : {}) })
+    ? withoutRunnerInstallPath(rawPath, { workingDirectory: input.cwd, delimiter: separator, platform, purpose: "root_program",
+      ...(input.runnerInstallRoot ? { runnerInstallRoot: input.runnerInstallRoot } : {}) })
     : rawPath;
   const prepend = (input.pathPrepend ?? []).filter((entry) => typeof entry === "string" && entry.length > 0);
   if (!ambientPath?.trim() && prepend.length === 0) {

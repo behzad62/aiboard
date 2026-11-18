@@ -41,6 +41,9 @@ export function observeWindowsFixtureJob(child: ChildProcessWithoutNullStreams, 
     try {
       if (line.length > 16_384) throw new Error("Fixture Job record exceeded its bound.");
       const event = JSON.parse(line) as { type: string; pid: number; activeProcesses: number; error: unknown };
+      // R2: how long the Job host's membership watch took to settle. Evidence only, never a lifecycle fact or a proof;
+      // any other unknown record (a member event included) still fails the fixture closed below.
+      if (event.type === "watch_settled") { options.record({ type: "watch_settled" }); return; }
       if (!Number.isSafeInteger(event.pid) || event.pid <= 0 || !Number.isSafeInteger(event.activeProcesses) || event.activeProcesses < 0)
         throw new Error("Fixture Job record identity/count is invalid.");
       options.record({ type: event.type, pid: event.pid, activeProcesses: event.activeProcesses, hasError: event.error !== null });
