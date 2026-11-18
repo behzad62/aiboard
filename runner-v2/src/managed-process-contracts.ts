@@ -89,7 +89,19 @@ export interface ManagedProcessOutputRead {
  */
 export const MANAGED_INPUT_MAX_BYTES = 64 * 1024;
 export const MANAGED_INPUT_HISTORY_LIMIT = 256;
-export const MANAGED_INPUT_WRITE_TIMEOUT_MS = 15_000;
+/**
+ * The ceiling on one stdin write: the time the Runner waits, while the write is still pending, for the process to
+ * drain it. A write settles the moment the pipe takes the bytes (tens of ms when the reader keeps up), fails at once
+ * when the reader closes its stdin, exits or is stopped, and is cut off here when the process stays alive without
+ * reading (coded `process_input_outcome_unknown`; never resent). A write blocks only while the pipe buffer is full,
+ * so in practice this covers a reader that has not started reading yet: a CLI still starting with a prompt bigger
+ * than the pipe buffer. The wait never holds the process's writer fence, so stop, output reads and acknowledgements
+ * are never queued behind it. CW0's recorded real-CLI runs (idle PC) bound start-to-first-read at 6.8-7.7 s for agy
+ * and at 10.8 s for Claude Code (that run includes one model request); 60 s is 5.6x the largest of them, and the
+ * largest bound under the tool broker's 120 s call limit with room for process.interact's 30 s read wait. Busy-host
+ * and cold-start times are not measured yet. Measurements: docs/runner-v2/managed-stdin-write-bound.md.
+ */
+export const MANAGED_INPUT_WRITE_CEILING_MS = 60_000;
 /** Incremental output (N2): per-call default/maximum and bounded wait for new output. */
 export const MANAGED_OUTPUT_READ_DEFAULT_BYTES = 16 * 1024;
 export const MANAGED_OUTPUT_READ_MAX_BYTES = 64 * 1024;
