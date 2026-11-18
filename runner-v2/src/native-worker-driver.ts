@@ -55,11 +55,12 @@ import type {
 } from "./task-scheduler.js";
 import { AgentCleanupUnverifiedError, errorMessage, isProcessStopUnprovenError, boundedText } from "./process-stop-proof.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
-import type { WorkspaceManager } from "./workspace-manager.js";
+import { ForeignHistoryError, type TaskWorkspace, type WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask, workerSubmissionContext } from "./worker-runtime.js";
 import type { ChangeSet } from "./change-set.js";
 import {
   proveCliStop,
+  cliHistoryRefusal,
   runCliWorkerAttempt,
   type CliWorkerRuntimeConfig,
   type CliWorkerRuntimeDeps,
@@ -415,16 +416,24 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         }
         throw error;
       }
-      const workspace = await this.options.workspaceManager.createTaskWorkspace(
-        assignment.task.id,
-        {
-          workspaceId:
-            assignment.task.workspaceId ?? assignment.task.id,
-          ...(assignment.task.workspaceBaselineRevision
-            ? { baselineRevision: assignment.task.workspaceBaselineRevision }
-            : {}),
-        }
-      );
+      let workspace: TaskWorkspace;
+      try {
+        workspace = await this.options.workspaceManager.createTaskWorkspace(
+          assignment.task.id,
+          {
+            workspaceId:
+              assignment.task.workspaceId ?? assignment.task.id,
+            ...(assignment.task.workspaceBaselineRevision
+              ? { baselineRevision: assignment.task.workspaceBaselineRevision }
+              : {}),
+          }
+        );
+      } catch (error) {
+        // §3.7: the same attempt run again (a Resume after its stop was proven, a restart) finds the worktree its CLI
+        // left detached or on another branch. The workspace refuses it as before; the CLI worker's failure is coded.
+        if (cli && error instanceof ForeignHistoryError) return { type: "failed", reason: cliHistoryRefusal(error) };
+        throw error;
+      }
       const validationBudgetMs = this.options.validationBudgetMsForTask
         ? await this.options.validationBudgetMsForTask({ taskId: assignment.task.id, baselineRevision: workspace.baselineRevision, workspacePath: workspace.path })
         : this.options.validationBudgetMs;

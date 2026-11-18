@@ -17,7 +17,7 @@ import test from "node:test";
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { runGit } from "./support/git-fixture.js";
 import { ForeignHistoryError, NoTaskChangesError, PROJECT_STATE_MAX_OUTPUT_BYTES } from "../src/workspace-manager.js";
-import type { GitCommandOptions } from "../src/git-command.js";
+import { GitCommandError, type GitCommandOptions } from "../src/git-command.js";
 import { inspectSubmissionTree } from "../src/submission-guard-git.js";
 import { policyGit } from "./support/cli-worker-fixture.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
@@ -720,6 +720,11 @@ test("CW5 undoForeignCommits refuses rewritten history, a detached HEAD, another
     await cli.manager.assertOnTaskBranch(cli.workspace);
     await cli.cliGit("checkout", "-q", "--detach");
     await assert.rejects(cli.manager.assertOnTaskBranch(cli.workspace), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    // createTaskWorkspace (every worker's entry) refuses it as before, now typed, so the CLI driver can code it.
+    await assert.rejects(cli.manager.createTaskWorkspace("task_cli"), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    await cli.cliGit("checkout", "-q", "-b", "cli-elsewhere");
+    await assert.rejects(cli.manager.createTaskWorkspace("task_cli"),
+      (error: unknown) => error instanceof ForeignHistoryError && error.kind === "other_branch" && /unexpected branch/.test(error.message));
   } finally {
     cli.cleanup();
   }
@@ -798,6 +803,18 @@ test("CW5 projectFolderState reads past Git's 4 MiB default and takes no optiona
     assert.equal(PROJECT_STATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024);
     assert.deepEqual(calls.find((call) => call.args[0] === "status")?.env, { GIT_OPTIONAL_LOCKS: "0" });
     assert.deepEqual(readFileSync(index), indexBefore, "status left the user's index as it was");
+
+    // Past even that limit, Git's runner throws output_limit whatever allowFailure says: that read is "unknown" (the
+    // before/after comparison skips it), never a thrown error that fails the attempt. Any other error still throws.
+    const limited = (failing: string, error: Error) => new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: state.head,
+      execute: async (options) => { if (options.args[0] === failing) throw error; return await policyGit(options); },
+    });
+    const huge = await limited("ls-files", new GitCommandError("output_limit", "Git output exceeded 67108864 bytes.")).projectFolderState();
+    assert.deepEqual(huge, { head: state.head, index: "unknown", status: huge.status });
+    assert.match(huge.status, /^[a-f0-9]{64}$/);
+    await assert.rejects(limited("status", new GitCommandError("command_failed", "Git runtime did not finish.")).projectFolderState(), /did not finish/);
   } finally {
     cli.cleanup();
   }

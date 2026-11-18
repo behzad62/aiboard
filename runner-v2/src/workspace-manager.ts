@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
-import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
+import { GitCommandError, unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   classifyOwnedWorktreeAssociations,
@@ -333,8 +333,16 @@ export class WorkspaceManager {
   async projectFolderState(): Promise<ProjectFolderState> {
     // Read only: the listings of a large repository go well past Git's default 4 MiB capture (the limit
     // inspectSubmissionTree uses), and status takes no optional index lock, so it never writes to the user's repository.
-    const read = (args: readonly string[], env?: Readonly<Record<string, string>>) =>
-      this.execute({ cwd: this.repositoryRoot, args, allowFailure: true, maxOutputBytes: PROJECT_STATE_MAX_OUTPUT_BYTES, ...(env ? { env } : {}) });
+    // A listing past even that limit is thrown whatever allowFailure says: read as a failed read, "unknown", which the
+    // before/after comparison skips, so an attempt never fails on the size of the user's repository.
+    const read = async (args: readonly string[], env?: Readonly<Record<string, string>>) => {
+      try {
+        return await this.execute({ cwd: this.repositoryRoot, args, allowFailure: true, maxOutputBytes: PROJECT_STATE_MAX_OUTPUT_BYTES, ...(env ? { env } : {}) });
+      } catch (error) {
+        if (error instanceof GitCommandError && error.code === "output_limit") return { exitCode: -1, stdout: "", stderr: "" };
+        throw error;
+      }
+    };
     const [head, index, status] = await Promise.all([
       read(["rev-parse", "HEAD"]),
       read(["ls-files", "--stage", "-z"]),
@@ -695,7 +703,7 @@ export class WorkspaceManager {
   ): Promise<void> {
     const [root, branch, ancestry] = await Promise.all([
       this.git(workspace.path, ["rev-parse", "--show-toplevel"]),
-      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"]),
+      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true),
       this.git(
         workspace.path,
         ["merge-base", "--is-ancestor", workspace.baselineRevision, "HEAD"],
@@ -708,8 +716,13 @@ export class WorkspaceManager {
     if (resolve(root.stdout.trim()) !== workspace.path) {
       throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
     }
+    // Refused as before, typed so the CLI worker's driver can give the coded cli_history_rewritten:<kind> (§3.7) when
+    // a CLI left the worktree off its branch; an API worker gets the same throw.
+    if (branch.exitCode !== 0) {
+      throw new ForeignHistoryError("detached", `Task workspace ${workspace.taskId} has a detached HEAD, not its task branch.`);
+    }
     if (branch.stdout.trim() !== workspace.branch) {
-      throw new Error(`Task workspace ${workspace.taskId} is on an unexpected branch.`);
+      throw new ForeignHistoryError("other_branch", `Task workspace ${workspace.taskId} is on an unexpected branch.`);
     }
     if (ancestry.exitCode !== 0) {
       throw new Error(`Task workspace ${workspace.taskId} escaped its baseline.`);

@@ -155,6 +155,8 @@ export interface CliBrowserSessions {
    * `unknown` leaves the stop unproven; a known escape stays so until a later check proves it gone.
    */
   checkAfterStop?(owner: CliWorkerOwner): Promise<"none" | "exited" | "escaped" | "unknown">;
+  /** The PIDs of the owner's browsers the last check found still running, for the pause reason the owner reads. */
+  escapedPids?(owner: CliWorkerOwner): readonly number[];
 }
 
 /** CW6: the Runner's re-runs of the checks the CLI reported, as the assigned worker (§3.6). */
@@ -384,7 +386,7 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
     await deps.workspaceManager.assertOnTaskBranch(input.workspace);
   } catch (error) {
     if (!(error instanceof ForeignHistoryError)) throw error;
-    return { type: "settled", outcome: { type: "failed", reason: historyRefusal(error) } };
+    return { type: "settled", outcome: { type: "failed", reason: cliHistoryRefusal(error) } };
   }
   const { recordedTip, projectBefore } = await launchBaseline(deps, input, folder, runNumber);
   const usage = beginUsage(deps.budgetLedger, input, clock, runNumber);
@@ -547,7 +549,15 @@ export async function proveCliStop(deps: Pick<CliWorkerRuntimeDeps, "launcher" |
   } catch {
     browser = "unknown";
   }
-  if (browser === "escaped" || browser === "unknown") return `the browser the CLI's session ran is ${browser === "escaped" ? "still running" : "not known to be stopped"}`;
+  if (browser === "escaped") {
+    // The owner's way out: stop that browser, then Resume. Its PIDs, so the owner need not read the Runner's log.
+    let pids: readonly number[] = [];
+    try { pids = deps.browser?.escapedPids?.(owner) ?? []; } catch { /* the reason still stands without them */ }
+    return `the browser the CLI's session ran is still running (${pids.length ? `PID${pids.length > 1 ? "s" : ""} ${pids.slice(0, 16).join(", ")}` : "its PIDs are in the Runner's log"}); stop it, then Resume`;
+  }
+  if (browser === "unknown") {
+    return "the browser the CLI's session ran is not known to be stopped: the Runner could not read its processes (the Runner's log names what it found); Resume checks again";
+  }
   return undefined;
 }
 
@@ -880,7 +890,7 @@ async function collectPending(
  * left off the task branch (detached, another branch, an unsettled operation) is kept as the CLI left it, files
  * included, and every later CLI run in it is refused before its launch: the work needs a new task (a new worktree).
  */
-function historyRefusal(error: ForeignHistoryError): string {
+export function cliHistoryRefusal(error: ForeignHistoryError): string {
   const offBranch = error.kind === "detached" || error.kind === "other_branch" || error.kind === "unsettled";
   return `${error.code}:${error.kind}: ${error.message}${offBranch
     ? " The task's worktree is kept as the CLI left it, and no CLI run is started in it again; replan the work as a new task."
@@ -897,7 +907,7 @@ async function collect(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput,
     replacedCliCommits = (await deps.workspaceManager.undoForeignCommits(input.workspace, file.recordedTip)).replacedCommits;
   } catch (error) {
     if (!(error instanceof ForeignHistoryError)) throw error;
-    rewritten = historyRefusal(error);
+    rewritten = cliHistoryRefusal(error);
   }
   const restoredProjectDocs = rewritten === undefined ? await deps.workspaceManager.restoreProjectDocs(input.workspace) : [];
   const projectAfter = await deps.workspaceManager.projectFolderState();

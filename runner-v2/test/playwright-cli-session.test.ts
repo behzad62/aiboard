@@ -902,6 +902,7 @@ test("CW5: checkOwnerBrowsers reads the owner folder afresh after a stop: a know
     await symlink("box-800", join(dir, "SingletonLock"));
     table.set(800, { pid: 800, pgid: 800, birth: "b800", command: `/chrome --user-data-dir=${dir}`, alive: true });
     assert.equal(await sessions.checkOwnerBrowsers(owner), "escaped");
+    assert.deepEqual(sessions.knownEscapePids(owner), [800], "the PIDs the pause reason names");
     assert.equal(table.get(800)!.alive, true, "never signalled");
     // The profile no longer names it, but the escape is known: a later check still reports it.
     await rm(join(dir, "SingletonLock"));
@@ -912,6 +913,7 @@ test("CW5: checkOwnerBrowsers reads the owner folder afresh after a stop: a know
     readable = true;
     table.get(800)!.alive = false;
     assert.equal(await sessions.checkOwnerBrowsers(owner), "exited", "a later check proves the known escape gone");
+    assert.deepEqual(sessions.knownEscapePids(owner), []);
     assert.equal(await sessions.checkOwnerBrowsers(owner), "none");
     assert.ok(sessions.cleanupRecords().every((record) => record.processId === "owner"), "each check is recorded");
 

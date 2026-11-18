@@ -90,15 +90,19 @@ test("case 2: a browser still running after the stop leaves it unproven until a 
   // escaped on every later check while it runs.
   let browser: "escaped" | "exited" | "unknown" = "escaped";
   const checks: string[] = [];
-  const deps = h.deps(launcher, { rerunChecks: h.rerun, browser: { checkAfterStop: async () => { checks.push(browser); return browser; } } });
+  const deps = h.deps(launcher, { rerunChecks: h.rerun, browser: {
+    checkAfterStop: async () => { checks.push(browser); return browser; },
+    escapedPids: () => (browser === "escaped" ? [4242, 4243] : []),
+  } });
   const first = await runCliWorkerAttempt(deps, h.input());
   assert.equal(first.type, "stop_unproven");
-  assert.match(JSON.stringify(first), /the browser the CLI's session ran is still running/);
+  // The owner's way out is in the reason: which browser to stop before Resume.
+  assert.match(JSON.stringify(first), /the browser the CLI's session ran is still running \(PIDs 4242, 4243\); stop it, then Resume/);
   assert.equal(records(h)[0]?.collected, false);
   // The next run checks again before it collects: still escaped, still pending.
   assert.deepEqual((await runCliWorkerAttempt(deps, h.input())).type === "stop_unproven", true);
   browser = "unknown";
-  assert.match(JSON.stringify(await runCliWorkerAttempt(deps, h.input())), /not known to be stopped/);
+  assert.match(JSON.stringify(await runCliWorkerAttempt(deps, h.input())), /not known to be stopped: the Runner could not read its processes \(the Runner's log names what it found\); Resume checks again/);
   browser = "exited";
   assert.equal((await runCliWorkerAttempt(deps, h.input())).type, "submitted");
   assert.deepEqual(checks, ["escaped", "escaped", "unknown", "exited"]);

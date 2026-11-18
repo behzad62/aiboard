@@ -163,6 +163,12 @@ test("the managed launcher runs the fake as the worker's owner at AIBOARD_MCP_DE
   assert.equal(ran.mcpDepth, "2");
   if (windows) assert.throws(() => process.kill(ran.grandchildPid!, 0), "the owner's stop proved the detached grandchild stopped");
   } finally {
-    await run.close();
+    // The host too, not only the run's binding: its Job host and fact probe keep pipes open, and on GitHub's Windows
+    // image an unclosed host kept this file's process alive after its last test (CI run 44307474932).
+    try {
+      await run.close();
+    } finally {
+      await managedHost.close();
+    }
   }
 });

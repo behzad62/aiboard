@@ -1111,6 +1111,24 @@ test("CW5: a mixed crew assigns the task to the CLI worker, whose done result is
   assert.equal((assignmentEvent?.payload as { runtimeId?: string } | undefined)?.runtimeId, "claude-code:default");
 });
 
+test("CW5 §3.7: the same attempt run again finds the worktree its CLI left detached or on another branch: a coded failure", async (t) => {
+  for (const [label, leave] of [["detached", ["checkout", "-q", "--detach"]], ["other_branch", ["checkout", "-q", "-b", "cli-branch"]]] as const) {
+    const fixture = await cliDriverFixture(t, `reentry-${label}`);
+    fixture.launcher.stopFailures = 1;
+    const driver = fixture.driver();
+    const first = await driver.run(fixture.assignment);
+    assert.deepEqual((first as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_collect_pending:task_a" });
+    // What the CLI left before its stop was proven: the worktree off its task branch.
+    await runGit({ cwd: fixture.assignment.workspacePath, args: [...leave] });
+    await driver.retryStop(fixture.assignment);
+    // The Resume: the workspace is refused as before (createTaskWorkspace), and the CLI worker's failure is coded.
+    const again = await driver.run(fixture.assignment);
+    assert.equal(again.type, "failed", JSON.stringify(again));
+    assert.match((again as { reason: string }).reason, new RegExp(`^cli_history_rewritten:${label}: `));
+    assert.equal(fixture.launcher.starts.length, 1, "no CLI is started in it");
+  }
+});
+
 test("CW5: case 1 fails the attempt and leaves the CLI's health untouched", async (t) => {
   const fixture = await cliDriverFixture(t, "case1");
   const before = fixture.health.snapshot();

@@ -1385,7 +1385,10 @@ export class NativeBuildFactory {
                 owners: cliWorkerOwners,
                 ...(budgetLedger ? { budgetLedger } : {}),
                 ...(this.options.playwrightCli
-                  ? { browser: { checkAfterStop: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.checkOwnerBrowsers(owner) } }
+                  ? { browser: {
+                      checkAfterStop: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.checkOwnerBrowsers(owner),
+                      escapedPids: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.knownEscapePids(owner),
+                    } }
                   : {}),
               },
             },
