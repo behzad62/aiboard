@@ -1,6 +1,10 @@
 import { configureMcpServers, mcpConfigurationDigest } from "./mcp-configuration.js";
 import { installPlaywrightCliShims, PlaywrightCliSessions, resolvePlaywrightCliInstall } from "./playwright-cli.js";
 import { BrowserInstallService } from "./browser-install.js";
+import { createCheckToolLookup } from "./check-tool-lookup.js";
+import { CliWorkerDetection } from "./cli-worker-detection.js";
+import { createRunnerCapabilityContract } from "./runner-capability-contract.js";
+import { createExecutionHostCliWorkerProcesses } from "./cli-worker-processes.js";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, realpath, stat } from "node:fs/promises";
@@ -391,6 +395,22 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     } catch (error) {
       process.stderr.write(`AIBoard: the Playwright CLI commands could not be prepared, so Builds browse without them: ${error instanceof Error ? error.message : String(error)}\n`);
     }
+    // CLI workers CW3: the free checks and the Test button run under a worker's process ownership (a transient run
+    // binding of the execution host: the Windows Job or the POSIX process group), from Runner-owned folders. The same
+    // service gives CW4 its checks before a Build plans and after each resume.
+    const cliWorkerDetection = new CliWorkerDetection({
+      stateDirectory: options.stateDirectory,
+      processes: createExecutionHostCliWorkerProcesses({
+        host: executionHost,
+        capabilitiesConfig: () => capabilitiesConfig,
+        capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: options.stateDirectory }),
+      }),
+      lookup: createCheckToolLookup({ environment: () => executionHost.filteredEnvironmentSource() }),
+      ...(homeLocation ? { home: homeLocation } : {}),
+      windowsBatchArgv: async () => (await executionHost.windowsProcessFacts?.())?.windowsBatchArgv,
+      windowsJobContainment: async () => (await executionHost.windowsProcessFacts?.())?.jobContainment,
+    });
+    resources.cliWorkers = cliWorkerDetection;
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
@@ -406,6 +426,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       closeProviderConfigs: false,
       environmentInventory: true,
       ...(playwrightCli ? { playwrightCli } : {}),
+      // CW4: the crew's CLI workers are checked before planning and after each resume.
+      cliWorkerFreeChecks: cliWorkerDetection.freeChecks,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
@@ -556,6 +578,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
         environment: executionHost.filteredEnvironmentSource(),
         workingDirectory: options.stateDirectory,
       }),
+      // CLI workers CW3: the Settings routes (free checks and the Test button) need the home the Tests are saved to.
+      ...(homeLocation ? { cliWorkers: cliWorkerDetection } : {}),
       ...(modelProxy ? { modelProxy } : {}),
       localAgentsUnavailableNestedState: remoteOnly,
       remoteStatus: () => remote.current()?.status(),

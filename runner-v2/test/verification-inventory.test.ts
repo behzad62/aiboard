@@ -34,6 +34,9 @@ import {
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { captureGitBaseline, NativeBuildFactory, runGit } from "./support/git-fixture.js";
 import { createProductionOneShotCommandFixture } from "./support/one-shot-command-executor.js";
+import { CliWorkerDetection } from "../src/cli-worker-detection.js";
+import { cliFixture, writeFakeCliScenario } from "./support/fake-cli.js";
+import { fakeProcesses } from "./support/fake-cli-processes.js";
 
 const NO_BROWSERS = async () => ({ browsers: [] as InventoryBrowserRecord[], notes: [] as string[] });
 
@@ -595,6 +598,100 @@ test("CW4 a factory-built run checks its CLI workers before the Architect's firs
       event.sequence > resumed.sequence && (event.payload.state as { providerId: string }).providerId === providerId);
     assert.deepEqual(sinceResume("agy").map((event) => (event.payload.state as { status: string }).status), ["healthy"]);
     assert.deepEqual(sinceResume("claude-code"), [], "the check writes nothing over the driver's cooldown");
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("CW3 + CW4: a factory-built run records cli_workers.checked from CW3's free checks of a fake CLI", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-cw3-factory-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  const scenarios = join(root, "scenarios");
+  const runId = "run_cw3_factory";
+  const model = new RecordingModel();
+  let factory: InstanceType<typeof NativeBuildFactory> | undefined;
+  let handle: Awaited<ReturnType<InstanceType<typeof NativeBuildFactory>["create"]>> | undefined;
+  try {
+    for (const folder of [project, state, scenarios]) mkdirSync(folder);
+    writeFileSync(join(project, "README.md"), "cw3\n");
+    const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+    const version = join(root, "version.txt");
+    writeFileSync(version, "2.1.326 (Claude Code)\n");
+    const claude = writeFakeCliScenario(scenarios, { cli: "claude-code", responses: [
+      { args: ["--version"], stdout: version },
+      { args: ["auth", "status"], stdout: cliFixture("claude-code/free/auth-status.logged-in.json") },
+    ] }, "claude.json");
+    const agy = writeFakeCliScenario(scenarios, { cli: "agy", responses: [
+      { args: ["--version"], stdout: version },
+      { args: ["models"], stderr: cliFixture("agy/free/models-logged-out.synthetic.stderr.txt"), exitCode: 1 },
+    ] }, "agy.json");
+    const processes = fakeProcesses(new Map([["C:\\bin\\claude.exe", claude], ["C:\\bin\\agy.exe", agy]]));
+    const detection = new CliWorkerDetection({
+      stateDirectory: state,
+      processes,
+      lookup: async (name) => (name === "claude" || name === "agy" ? { status: "found", path: `C:\\bin\\${name}.exe` } : { status: "missing" }),
+      platform: "win32",
+      isRoot: () => false,
+      inspect: async () => "file",
+      windowsBatchArgv: async () => "verified",
+      windowsJobContainment: async () => "verified",
+    });
+    const cli = (providerId: "claude-code" | "agy") => ({
+      runtimeId: `${providerId}:default`, providerId, modelId: "default", transport: "cli" as const, secret: "",
+      capabilities: ["*"], priority: 2, billingBasis: "account_not_metered" as const,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: project,
+      stateDirectory: state,
+      providerConfigs: {
+        load: () => [{
+          runtimeId: "fixture:model", providerId: "fixture", modelId: "model", transport: "openai-compatible",
+          baseUrl: "http://127.0.0.1:9", secret: "unused", capabilities: ["code"], priority: 1,
+        }, cli("claude-code"), cli("agy")],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      baselineFor: () => baseline.revision,
+      providerModelFactory: () => model,
+      cliWorkerHost: { platform: "win32", isRoot: false, windowsBatchArgv: "verified" },
+      cliWorkerFreeChecks: detection.freeChecks,
+    });
+    handle = await factory.create(await factory.prepareSpec({
+      version: 2 as const,
+      runId,
+      projectId: "cw3-project",
+      objective: "Check the CLI workers.",
+      architectRuntimeId: "fixture:model",
+      workerRuntimeIds: ["fixture:model", "claude-code:default", "agy:default"],
+      verifierRuntimeIds: ["fixture:model"],
+      alwaysRequireIndependentVerifier: false,
+      maxConcurrency: 3,
+      permissionProfile: "full" as const,
+      runPolicy: "finish" as const,
+      budgetLimits: {},
+      createdAt: "2026-11-18T00:00:00.000Z",
+      idempotencyKey: `cw3:${runId}`,
+    }));
+    const runtime = handle.runtime;
+    model.events = () => runtime.events().length;
+    await runtime.step().catch(() => undefined);
+    const checked = runtime.projection().cliWorkersChecked;
+    assert.ok(checked, runtime.events().map((event) => event.type).join(", "));
+    assert.equal(checked.trigger, "planning");
+    assert.deepEqual(checked.clis.map((entry) => [entry.providerId, entry.status, entry.failureKind]), [
+      ["claude-code", "ready", undefined],
+      ["agy", "unhealthy", "authentication"],
+    ]);
+    assert.match(checked.clis[1]!.reason ?? "", /not logged in/);
+    assert.ok(processes.launches.length > 0 && processes.launches.every((launch) => launch.purpose === "check" && launch.workingDirectory === join(state, "cli-workers", "lookup")),
+      "the free checks ran their probes from the Runner-owned lookup folder");
+    assert.equal(processes.launched("test").length, 0, "a Build start never runs a Test");
+    assert.equal(runtime.projection().runtime.providerHealth.agy?.status, "cooldown");
+    const text = JSON.stringify(runtime.events());
+    for (const canary of ["canary@example.test", "Canary Org"]) assert.ok(!text.includes(canary), `${canary} reached the Build's events`);
   } finally {
     await handle?.close();
     await factory?.close();

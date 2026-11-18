@@ -29,10 +29,12 @@ import {
 } from "../src/runner-capability-contract.js";
 import {
   configuredModelUsageRuntime,
+  endProviderCooldownInBuild,
   providerHealthFromSchedulerEvents,
   selectRuntimeCandidates,
 } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
+import { ProviderHealthRegistry } from "../src/provider-health.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
@@ -4136,6 +4138,75 @@ test("startup recovery returns typed failure details instead of silently accepti
     assert.match(String(report.failures[0]?.error), /owned backend recovery remained unresolved/i);
   } finally {
     await manager.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a passing provider test ends that provider's cooldown in running and paused Builds through a durable event (CLI workers CW3)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-provider-test-"));
+  const schedulers: SqliteSchedulerStore[] = [];
+  const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+  // run_broken is first: its store refuses the event, and the Builds after it still end their cooldowns.
+  const statuses: Record<string, SchedulerProjection["status"]> = { run_broken: "running", run_running: "running", run_paused: "paused", run_done: "completed" };
+  const registries = new Map<string, ProviderHealthRegistry>();
+  const cooldown = { providerId: "claude-code", status: "cooldown" as const, consecutiveFailures: 1, updatedAt: 1, failureKind: "authentication" as const,
+    failureMessage: "Claude Code is not logged in.", cooldownUntil: Date.now() + 86_400_000 };
+  try {
+    const manager = new NativeBuildManager({
+      specs,
+      shouldAutoRun: () => false,
+      createRuntime: async (input) => {
+        const scheduler = new SqliteSchedulerStore(join(root, `${input.runId}.sqlite`));
+        schedulers.push(scheduler);
+        scheduler.append({ runId: input.runId, type: "run.initialized", occurredAt: "2026-11-18T00:00:00.000Z",
+          actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "run-initialized", payload: { objective: spec.objective } });
+        scheduler.append({ runId: input.runId, type: "provider.health_changed", occurredAt: "2026-11-18T00:00:00.000Z",
+          actor: { role: "runner", id: "runtime-router" }, idempotencyKey: "provider-health:seed", payload: { state: cooldown } });
+        const health = new ProviderHealthRegistry({ initial: providerHealthFromSchedulerEvents(scheduler.readRun(input.runId)) });
+        registries.set(input.runId, health);
+        const runtime = fakeRuntime(input.runId);
+        const projection = runtime.projection.bind(runtime);
+        runtime.projection = () => ({ ...projection(), status: statuses[input.runId]! });
+        return {
+          ...handleProjections(input.runId),
+          runtime,
+          usage: () => emptyBudget(input.runId),
+          observability: async () => emptyObservability(input.runId),
+          projectHandoff: async () => { throw new Error("unused"); },
+          cleanup: () => undefined,
+          close: () => undefined,
+          endProviderCooldown: (providerId: string, source: string) => {
+            if (input.runId === "run_broken") throw new Error("the scheduler store is closing");
+            return endProviderCooldownInBuild(health, scheduler, input.runId, providerId, source);
+          },
+        };
+      },
+    });
+    for (const runId of Object.keys(statuses)) await manager.create({ ...spec, runId, idempotencyKey: `build-spec:${runId}` });
+
+    assert.deepEqual(await manager.providerTestPassed("codex-cli"), [], "a provider no Build cooled down changes nothing");
+    assert.deepEqual((await manager.providerTestPassed("claude-code")).sort(), ["run_paused", "run_running"]);
+    for (const [index, runId] of Object.keys(statuses).entries()) {
+      const events = schedulers[index]!.readRun(runId);
+      const durable = providerHealthFromSchedulerEvents(events).find((state) => state.providerId === "claude-code");
+      const live = registries.get(runId)!;
+      if (runId === "run_done" || runId === "run_broken") {
+        assert.equal(durable?.status, "cooldown", `${runId}: a terminal Build, or one whose store refused, keeps its record`);
+        assert.equal(live.isAvailable("claude-code"), false);
+        continue;
+      }
+      assert.equal(durable?.status, "healthy", `${runId}: the durable event a resume or a restart reads`);
+      assert.equal(durable?.consecutiveFailures, 0);
+      assert.equal(live.isAvailable("claude-code"), true, `${runId}: the live registry the routers read`);
+      const appended = events.filter((event) => event.type === "provider.health_changed").at(-1)!;
+      assert.equal(appended.actor.role, "runner");
+      assert.match(appended.idempotencyKey, /^provider-health:provider-test:/);
+    }
+    assert.deepEqual(await manager.providerTestPassed("claude-code"), [], "a second pass finds nothing left to end");
+    await manager.close();
+  } finally {
+    for (const scheduler of schedulers) scheduler.close();
+    try { specs.close(); } catch { /* the manager closed it */ }
     rmSync(root, { recursive: true, force: true });
   }
 });
