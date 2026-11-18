@@ -20,7 +20,6 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1194,8 +1193,16 @@ test(
       raw.close();
     }
     // Tamper-evidence: editing a record in a COPY fails on read.
+    // The store is in WAL mode and its writer is still open, so the main file alone may not hold the table yet
+    // (only a checkpoint moves it there, and whether one has run is timing). A file copy then read "no such table:
+    // durable_processes". VACUUM INTO writes a consistent snapshot that includes the WAL's committed content.
     const copyPath = join(h.root, `px2t-tampered-${randomUUID().slice(0, 8)}.sqlite`);
-    copyFileSync(h.dbPath, copyPath);
+    const snapshot = new DatabaseSync(h.dbPath, { readOnly: true });
+    try {
+      snapshot.prepare("VACUUM INTO ?").run(copyPath);
+    } finally {
+      snapshot.close();
+    }
     let victimId = "";
     try {
       const copy = new DatabaseSync(copyPath);

@@ -61,6 +61,10 @@ const deterministicPrTests = [
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // A test file whose fixture cleanup stays unverified ends after its last test instead of holding the job until it
+  // is cancelled: a synthetic held handle, and a real ExecutionHost run whose close is made to fail (child test-runner
+  // processes; about 25 s on Windows, where the real run holds its birth helper).
+  "runner-v2/test/certified-fixture-retained-exit.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
