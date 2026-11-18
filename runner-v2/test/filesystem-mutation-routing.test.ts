@@ -17,12 +17,23 @@ const privateOwners = new Set([
   // through FileStorageKeyProvider (unlinking it only in resetHomeCredentials when it is corrupt).
   // Targets are fixed names under AIBOARD_HOME or ~/.aiboard and the data root, never model-selected paths.
   "aiboard-home-store.ts",
+  // Reviewed 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw3.md): CLI worker detection and the Test
+  // button. It creates the empty lookup folder <state>/cli-workers/lookup and, per Test, <state>/cli-worker-tests/<16 hex>
+  // with an empty work/ folder, writes the fixed result.schema.json beside work/, and removes that one Test folder after
+  // a verified stop (kept after an unverified one). Every name is Runner-built; none is model- or caller-selected.
+  "cli-worker-detection.ts",
   "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "command-evidence-identity.ts", // private GIT_INDEX_FILE snapshots under attested run root outside cwd; separate index per capture, cleans only created tmp.
   "durable-process-store.ts",
   // Reviewed again 2026-11-17 (docs/runner-v2/filesystem-owner-review-2026-11-17-cw1.md): besides its envelope it now
   // replaces the fixed sibling cli-worker-configs.json (plain JSON, no secret) through the same exclusive 0600
   // temporary and rename, so a rolled-back Runner never meets a `cli` transport inside the envelope.
-  "encrypted-provider-config-store.ts", "execution-host.ts", "execution-isolation-provider.ts",
+  "encrypted-provider-config-store.ts",
+  // Reviewed again 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw3.md): a transient binding (CLI
+  // worker checks and Tests) mkdirs <state>/transient-runs/<runId> for its run root, private record store, private
+  // Job host and artifacts, and removes exactly that folder only after the binding's close proved every process stopped
+  // (or after a construction that rolled back completely, which started nothing). It waits for the private Job host's
+  // supervisors to exit first; a removal that still fails empties the folder's files (truncate) and names any it can't.
+  "execution-host.ts", "execution-isolation-provider.ts",
   "final-verification-cleanup.ts", "final-verification-port-authority.ts", "final-verification-profile.ts",
   "git-baseline.ts", "git-bootstrap.ts", "git-preflight.ts", "integration-manager.ts", "managed-process-record.ts",
   "managed-process-supervisor.mjs", "managed-process.ts", "native-build-factory.ts", "native-process-backend.ts",

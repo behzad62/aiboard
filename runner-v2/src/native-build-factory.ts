@@ -2619,6 +2619,10 @@ export class NativeBuildFactory {
           }),
         };
       },
+      // CLI workers §3.4 (CW3), CWD-4: a passing Settings test ends this provider's cooldown in the live registry
+      // the routers read, and records it durably, so a resume or a restart reads the same health.
+      endProviderCooldown: (providerId, source) =>
+        endProviderCooldownInBuild(health, schedulerStore, spec.runId, providerId, source),
       observability: async (): Promise<BuildObservabilitySnapshot> => {
         const agentSessions = await sessions.listRun(spec.runId);
         const toolCalls = summarizeToolCalls(ledger.listRun(spec.runId));
@@ -4250,6 +4254,24 @@ export function cooldownCausedByCliCheck(events: readonly SchedulerEvent[], prov
     return event.idempotencyKey.startsWith(`provider-health:${CLI_WORKER_CHECK_HEALTH_SOURCE}:`);
   }
   return false;
+}
+
+/**
+ * CLI workers §3.4 (CW3), CWD-4: a passing Settings test of `providerId`. When the Build's live registry holds a
+ * cooldown or failures for it, the registry records success and a durable `provider.health_changed` event is
+ * appended, so a paused Build resumes, and a restarted Runner rebuilds, with the same health. Returns whether it did.
+ */
+export function endProviderCooldownInBuild(
+  health: ProviderHealthRegistry,
+  store: SqliteSchedulerStore,
+  runId: string,
+  providerId: string,
+  source: string,
+): boolean {
+  const current = health.get(providerId);
+  if (current.status === "healthy" && current.consecutiveFailures === 0) return false;
+  persistProviderHealth(store, runId, health.recordSuccess(providerId), source);
+  return true;
 }
 
 function persistProviderHealth(

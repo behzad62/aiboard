@@ -40,6 +40,8 @@ export class RunnerCleanupBlockedError extends AggregateError {
 
 export interface RunnerResources {
   remote?: ClosableRunnerResource;
+  /** CW3: the CLI worker checks and Tests; closed before the server answers its last requests and the host closes. */
+  cliWorkers?: ClosableRunnerResource;
   server?: ClosableRunnerResource;
   builds?: ClosableRunnerResource;
   buildFactory?: ClosableRunnerResource;
@@ -63,6 +65,7 @@ const REQUIRED_STARTUP_RESOURCE_CLASSES: readonly RunnerStartupResourceClass[] =
 
 const RUNNER_RESOURCE_CLOSE_ORDER: readonly (keyof RunnerResources)[] = Object.freeze([
   "remote",
+  "cliWorkers",
   "server",
   "builds",
   "buildFactory",

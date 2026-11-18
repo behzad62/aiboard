@@ -76,6 +76,12 @@ export interface NativeBuildRuntimeHandle {
   ): Promise<void>;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
+  /**
+   * CLI workers §3.4 (CW3) and CWD-4: a passing Settings test for this provider. When the Build's provider health
+   * holds a cooldown or failures for it, the live registry records success and a durable `provider.health_changed`
+   * event is appended; returns whether it did. Absent on historical handles.
+   */
+  endProviderCooldown?(providerId: string, source: string): boolean;
 }
 
 /** Authoritative lifecycle states that may be projected by a terminal reader. */
@@ -613,6 +619,35 @@ export class NativeBuildManager implements BuildControlPlane {
         refreshed.push(runId);
       }
       return refreshed;
+    });
+  }
+
+  /**
+   * CLI workers §3.4 (CW3) and CWD-4: a Settings test of this provider passed, so a cooldown it earned in a Build
+   * (logged out, out of usage, a model the owner since fixed) no longer describes it. In every running and paused
+   * Build this Runner owns, the live provider health records success and a durable `provider.health_changed` event
+   * says so; a paused Build resumes with it, and a Runner restart reads it back. Terminal and historical Builds are
+   * left alone. Returns the run ids whose health changed.
+   */
+  async providerTestPassed(providerId: string): Promise<string[]> {
+    if (!providerId) throw new Error("providerId is required.");
+    return await this.serialized(async () => {
+      const ended: string[] = [];
+      const source = `provider-test:${Date.now()}`;
+      for (const [runId, handle] of [...this.handles.entries()]) {
+        if (handle.historical || !handle.endProviderCooldown) continue;
+        const status = handle.runtime.projection().status;
+        if (status !== "running" && status !== "paused") continue;
+        // One Build whose store refuses the event (closing under it, say) keeps its cooldown; the others still end theirs.
+        try {
+          await this.withRuntimeActivity(async () => {
+            if (handle.endProviderCooldown!(providerId, source)) ended.push(runId);
+          });
+        } catch (error) {
+          console.warn(`[runner] a passing ${providerId} test could not end Build ${runId}'s cooldown: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      return ended;
     });
   }
 

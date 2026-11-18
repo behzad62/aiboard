@@ -67,6 +67,8 @@ import { catalogVersion } from "./generated/model-catalog.js";
 import { snapshotProvider } from "./home-model-policy.js";
 import { loadStoredProviderConfigs, PushedConfigError, resolvePushedConfig, takesKeyFromHome } from "./home-provider-configs.js";
 import { MANUAL_PROXY_PRINCIPAL, type ModelProxy } from "./model-proxy.js";
+import { CliWorkerShutdownError, CliWorkerTestBusyError, CliWorkerTestRefusedError, type CliWorkerDetection } from "./cli-worker-detection.js";
+import { isCliWorkerProviderId } from "./cli-worker-config.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -105,6 +107,8 @@ export interface ControlServerOptions {
   modelProxy?: ModelProxy;
   /** VF7b: `/v2/browser` (installed browsers) and `POST /v2/browser/install`, the Settings > Tools button. */
   browserInstall?: BrowserInstallService;
+  /** CLI workers CW3: `GET /v2/cli-workers` (the free checks) and `POST /v2/cli-workers/<providerId>/test`. */
+  cliWorkers?: Pick<CliWorkerDetection, "list" | "test" | "during">;
 }
 
 export interface RunBootstrapInput {
@@ -280,6 +284,7 @@ export class ControlServer {
   private readonly home?: AiboardHomeLocation;
   private readonly modelProxy?: ModelProxy;
   private readonly browserInstall?: BrowserInstallService;
+  private readonly cliWorkers?: Pick<CliWorkerDetection, "list" | "test" | "during">;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
   private server: Server | undefined;
@@ -315,6 +320,7 @@ export class ControlServer {
     this.home = options.home;
     this.modelProxy = options.modelProxy;
     this.browserInstall = options.browserInstall;
+    this.cliWorkers = options.cliWorkers;
     // Revoking a paired session revokes its proxy token (§9 "Proxy token").
     const proxy = this.modelProxy;
     if (proxy) this.localPairing?.onSessionEnded((sessionId) => proxy.endSession(`paired:${sessionId}`));
@@ -563,6 +569,12 @@ export class ControlServer {
       if (segments.length === 3 && segments[2] === "install" && request.method === "POST") { sendJson(response, 202, install.start()); return; }
       throw new HttpError(404, "not_found", "Unknown browser endpoint.");
     }
+    if (segments[1] === "cli-workers") {
+      // The checks and the Test start CLI agents: refused with every other local agent route in nested state.
+      if (this.localAgentsUnavailableNestedState) throw new LocalAgentsUnavailableError();
+      await this.routeCliWorkers(request, response, url, segments);
+      return;
+    }
     if (segments.length === 3 && segments[1] === "remote" && segments[2] === "status" && request.method === "GET") {
       const status = this.remoteStatus?.();
       if (status === undefined) throw new HttpError(503, "remote_unavailable", "Remote service is unavailable.");
@@ -584,6 +596,8 @@ export class ControlServer {
           modelProxy: Boolean(this.home && this.modelProxy?.url),
           secretlessProviderConfigs: Boolean(this.home && this.providerConfigs),
           browserInstall: Boolean(this.browserInstall),
+          // CW3: the `/v2/cli-workers` routes exist. Not `/v2/home`'s `capabilities.cliWorkers` (CW1: the home section).
+          cliWorkerChecks: Boolean(this.cliWorkers),
         },
         catalogVersion,
         ...(this.localAgentsUnavailableNestedState ? { localAgents: "unavailable_nested_state" } : {}),
@@ -1495,6 +1509,11 @@ export class ControlServer {
       try {
         const result = await applyHomeBatch(home, { baseRevision: body.baseRevision as number, ops: body.ops as HomeOp[] });
         sendJson(response, 200, { revision: result.revision, touched: result.touched, removedCredentials: result.removedCredentials });
+        // After the response: the Build manager's lock can be held by a resume or a rebuild, and a Settings save never
+        // waits on it. A failure is only logged; the home write already succeeded.
+        void this.endCooldownsForPassedKeyTests(body.ops as unknown[]).catch((error: unknown) => {
+          console.warn(`[runner] a passing key test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+        });
       } catch (error) {
         if (error instanceof AiboardHomeError && error.code === "home_conflict") {
           // The current values of every conflicting section; credential sections say only whether a key is saved.
@@ -1571,6 +1590,89 @@ export class ControlServer {
       }
     }
     throw new HttpError(404, "not_found", "Route not found.");
+  }
+
+  /**
+   * CWD-4: the web saves a passing API key test as `providers.<id>` with `lastValidationSucceeded: true` (Settings'
+   * Test button). Once saved, that provider's cooldowns end in the Runner's running and paused Builds, through the
+   * same route as a passing CLI worker test. It runs after the response; a Build that cannot record it is only
+   * logged. Custom models are left out: every custom endpoint's health is kept under the one provider id `custom`,
+   * so one endpoint's passing test cannot vouch for the others.
+   */
+  private async endCooldownsForPassedKeyTests(ops: readonly unknown[]): Promise<void> {
+    const builds = this.builds;
+    if (!builds?.providerTestPassed) return;
+    const passed = new Set<string>();
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const { path, op: kind, value } = op as { path?: unknown; op?: unknown; value?: unknown };
+      if (typeof path !== "string" || (kind !== "set" && kind !== "merge") || !value || typeof value !== "object") continue;
+      const match = /^providers\.([^.]+)$/.exec(path);
+      if (match && (value as { lastValidationSucceeded?: unknown }).lastValidationSucceeded === true) passed.add(match[1]!);
+    }
+    for (const providerId of passed) {
+      try {
+        await builds.providerTestPassed(providerId);
+      } catch (error) {
+        console.warn(`[runner] a passing ${providerId} test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+      }
+    }
+  }
+
+  /** CLI workers CW3: the free checks and the Test button (plan §3.2, §3.4). */
+  private async routeCliWorkers(request: IncomingMessage, response: ServerResponse, url: URL, segments: string[]): Promise<void> {
+    const cliWorkers = this.cliWorkers;
+    if (!cliWorkers) throw new HttpError(404, "cli_workers_unavailable", "This Runner cannot check CLI workers; update AI Board.");
+    if (segments.length === 2 && request.method === "GET") {
+      const refresh = url.searchParams.get("refresh");
+      if (refresh !== null && refresh !== "1") invalidBody();
+      sendJson(response, 200, await cliWorkers.list({ refresh: refresh === "1" }));
+      return;
+    }
+    if (segments.length === 4 && segments[3] === "test" && request.method === "POST") {
+      const providerId = segments[2]!;
+      if (!isCliWorkerProviderId(providerId)) throw new HttpError(404, "unknown_cli_worker", "Unknown CLI worker.");
+      const body = await readJson<unknown>(request, 4_096);
+      if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
+      const record = body as Record<string, unknown>;
+      assertExactBodyKeys(body, "reasoningEffort" in record ? ["model", "reasoningEffort"] : ["model"]);
+      if (record.model !== null && typeof record.model !== "string") invalidBody();
+      if (record.reasoningEffort !== undefined && typeof record.reasoningEffort !== "string") invalidBody();
+      // The whole request, answer included, counts as running for the Runner's shutdown (CliWorkerDetection.close).
+      await cliWorkers.during((async () => {
+        let result;
+        try {
+          result = await cliWorkers.test(providerId, {
+            model: record.model as string | null,
+            ...(record.reasoningEffort !== undefined ? { reasoningEffort: record.reasoningEffort as string } : {}),
+          });
+        } catch (error) {
+          if (error instanceof CliWorkerTestRefusedError) {
+            sendJson(response, 409, { code: error.code, error: error.message, check: error.check });
+            return;
+          }
+          if (error instanceof CliWorkerTestBusyError) throw new HttpError(409, error.code, error.message);
+          // Answered here, inside `during`, so the shutdown waits for this answer before the server closes.
+          if (error instanceof CliWorkerShutdownError) {
+            sendJson(response, 503, { error: error.message, code: error.code });
+            return;
+          }
+          if (error instanceof TypeError) throw new HttpError(400, "invalid_body", error.message);
+          throw error;
+        }
+        let endedCooldownIn: string[] = [];
+        if (result.lastTest.outcome === "passed" && this.builds?.providerTestPassed) {
+          try {
+            endedCooldownIn = await this.builds.providerTestPassed(providerId);
+          } catch (error) {
+            console.warn(`[runner] a passing ${providerId} test was saved; a Build kept its cooldown: ${describeInternalError(error)}`);
+          }
+        }
+        sendJson(response, 200, { ...result, endedCooldownIn });
+      })());
+      return;
+    }
+    throw new HttpError(404, "not_found", "Unknown CLI workers endpoint.");
   }
 
   private requireProviderConfigs(): ProviderConfigStore {

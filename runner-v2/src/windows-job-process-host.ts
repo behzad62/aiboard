@@ -111,6 +111,13 @@ export interface WindowsJobProcessHost {
    * a timed delay.
    */
   waitOwnedStatusChange?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number, sinceUpdatedAt?: string): Promise<void>;
+  /**
+   * CW3: waits, polling, until every supervisor process this host's records name has exited, up to `timeoutMs`.
+   * Read-only: it signals nothing and changes no record. A released process's supervisor exits just after it reports
+   * the stop, still holding its output logs; a caller that removes this host's state folder waits for this first.
+   * Returns the supervisor PIDs still alive at the deadline.
+   */
+  awaitSupervisorsExited?(timeoutMs: number): Promise<readonly number[]>;
 }
 /** A Job process a run's owner recorded as released: the identity its backend binding names. */
 export interface WindowsJobReleasedRecord { readonly processId: string; readonly sessionId: string; readonly startedAt: string }
@@ -137,6 +144,11 @@ export interface WindowsJobProcessHostOptions {
   /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
   readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
+  /**
+   * CW3: what the once-only helper-fallback warning is keyed on (default: the state directory). Short-lived private
+   * hosts (transient runs) share one key, so they warn once, not once per check.
+   */
+  readonly helperFallbackWarningKey?: string;
   /** Record files one maintenance scan (the startup scan, each run-end spare sweep) reads at most. Default 512. */
   readonly maxRecordScan?: number;
 }
@@ -648,6 +660,7 @@ export function logJobHostHelperFallbackOnce(stateDirectory: string, reason: str
 /** Concrete authenticated owner of Job records, supervisors, control and output. */
 export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost {
   private readonly stateDirectory: string;
+  private readonly helperFallbackWarningKey: string;
   private readonly platform: NodeJS.Platform;
   private readonly idFactory: () => string;
   private readonly clock: () => string;
@@ -682,6 +695,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
 
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
+    this.helperFallbackWarningKey = options.helperFallbackWarningKey ?? this.stateDirectory;
     this.platform = options.platform ?? process.platform;
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -802,7 +816,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // spawned supervisor behind a persisted `running` record: the call simply
     // omits the helper fields and falls back.
     const helperAssembly = await ensureJobHostHelperAssembly().catch(() => null);
-    if (!helperAssembly) logJobHostHelperFallbackOnce(this.stateDirectory, "no-helper-config");
+    if (!helperAssembly) logJobHostHelperFallbackOnce(this.helperFallbackWarningKey, "no-helper-config");
     const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
     const processDirectory = this.containedProcessPath(processId, "");
@@ -928,6 +942,19 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     return { ...this.spareCounts };
   }
 
+  async awaitSupervisorsExited(timeoutMs: number): Promise<readonly number[]> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    // The records' supervisors, and any launcher still tracked (a record written before its PID was known has 0).
+    const pids = [...this.records.values()].map((record) => record.supervisor.supervisorPid);
+    for (const launcher of this.launchers) if (launcher.pid) pids.push(launcher.pid);
+    let alive = [...new Set(pids.filter((pid) => pid > 0))];
+    for (;;) {
+      alive = alive.filter(processIsAlive);
+      if (alive.length === 0 || Date.now() >= deadline) return alive;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    }
+  }
+
   private async startSpare(owner: WindowsJobOwnershipKey): Promise<WindowsJobSpareInfo> {
     // PX-2a repair 1 (N2): resolve the precompiled helper BEFORE spawning the
     // supervisor. ensureJobHostHelperAssembly never throws, so a helper-side
@@ -935,7 +962,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // spawned supervisor behind a persisted `running` record: the call simply
     // omits the helper fields and falls back.
     const helperAssembly = await ensureJobHostHelperAssembly().catch(() => null);
-    if (!helperAssembly) logJobHostHelperFallbackOnce(this.stateDirectory, "no-helper-config");
+    if (!helperAssembly) logJobHostHelperFallbackOnce(this.helperFallbackWarningKey, "no-helper-config");
     const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
     const processDirectory = this.containedProcessPath(processId, "");
@@ -2309,6 +2336,15 @@ async function retireVerifiedClaimWindowTree(record: HostRecord, durable: Superv
   }
 }
 
+/** CW3: whether `pid` names a live process (EPERM: alive, not ours to signal). */
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 /**
  * PX-2c repair 1 (B2): the single supervisor spawn shared by the normal
  * launch path and the spare prestart. One raw spawn site, allowlisted once;
