@@ -10,6 +10,7 @@ export interface PreparedGitExecutionPolicy {
 
 const ALLOWED_CALLER_ENV = new Set([
   "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_INDEX_FILE",
+  "GIT_OPTIONAL_LOCKS",
 ]);
 
 const REMOVE_AMBIENT_ENV = [
@@ -169,6 +170,8 @@ function canonicalCallerEnvironment(
     if (seen.has(name)) throw policyError(`Git environment override '${rawName}' duplicates another canonical variable.`);
     seen.add(name);
     if (!ALLOWED_CALLER_ENV.has(name)) throw policyError(`Git environment override '${rawName}' is not permitted.`);
+    // CW5: read-only status on the user's project takes no optional index lock; only turning those locks off is allowed.
+    if (name === "GIT_OPTIONAL_LOCKS" && value !== "0") throw policyError("Git environment override GIT_OPTIONAL_LOCKS may only be 0.");
     result[name] = value;
   }
   return result;

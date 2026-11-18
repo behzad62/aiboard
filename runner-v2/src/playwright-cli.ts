@@ -433,6 +433,28 @@ export class PlaywrightCliSessions {
   }
 
   /**
+   * CW5 (CLI workers plan §3.10): the browser check of an owner whose processes were just proven stopped, as
+   * `removeRun` checks each owner folder: the browsers its profiles name plus its known escapes, gone within the grace
+   * or still there. It reads afresh, so it never depends on which stop recorded what: a known escape stays `escaped`
+   * until a later check proves it gone. Recorded like a stop's check, never signalled. On Windows the owner's Job
+   * holds the browser, so there is nothing to check.
+   */
+  async checkOwnerBrowsers(owner: Readonly<{ runId: string; sessionId: string }>): Promise<BrowserCleanupRecord["status"]> {
+    if (this.platform === "win32") return "none";
+    const folder = this.ownerFolder(owner);
+    const read = existsSync(folder) ? this.leaders(folder) : [];
+    const outcome = await this.clean({ runId: owner.runId, sessionId: owner.sessionId, processId: "owner" }, folder,
+      read && withKnown(this.knownEscapes.get(folder), read), false);
+    // This check's own outcome, never the shared record list, where another owner's check may be newer.
+    return Array.isArray(outcome) ? "escaped" : outcome;
+  }
+
+  /** CW5: the PIDs of the owner's browsers its last check found still running (its known escapes), for a pause reason. */
+  knownEscapePids(owner: Readonly<{ runId: string; sessionId: string }>): number[] {
+    return (this.knownEscapes.get(this.ownerFolder(owner)) ?? []).map((entry) => entry.pid);
+  }
+
+  /**
    * VF4b: the newest browser check recorded for the stop of this exact session process, or undefined when none was
    * recorded (not a session process, or not POSIX, where the session's Job or group takes its browser with it).
    * A final check reads it right after its program's stop returned, which awaits the check (`observeManagedStops`).
@@ -468,7 +490,7 @@ export class PlaywrightCliSessions {
         const leaders = this.leaders(owner);
         const outcome = await this.clean({ runId, sessionId: name, processId: "run" }, owner, leaders && withKnown(this.knownEscapes.get(owner), leaders), false);
         if (outcome === "unknown") unknown = true;
-        else if (outcome !== "clean") survivors.push(...outcome.map((entry) => entry.pid));
+        else if (Array.isArray(outcome)) survivors.push(...outcome.map((entry) => entry.pid));
       }
       if (unknown || survivors.length > 0) {
         throw new ManagedProcessError("process_cleanup_unverified", unknown
@@ -588,16 +610,17 @@ export class PlaywrightCliSessions {
    * outcome. A browser still there is a known escape: recorded, kept for the owner folder's later checks and
    * returned, never signalled (DECISION 2026-09-19 §8.3). "clean", "unknown" or the escaped browsers.
    */
-  private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"clean" | "unknown" | AttributedBrowserProcess[]> {
+  /** The check's outcome: no browser (`none`), all gone in the grace (`exited`), unreadable, or the ones still there. */
+  private async clean(owner: Owner, folder: string, attributed: readonly AttributedBrowserProcess[] | undefined, removeFolder: boolean): Promise<"none" | "exited" | "unknown" | AttributedBrowserProcess[]> {
     if (attributed === undefined) {
       this.record(owner, "unknown", this.knownEscapes.get(folder) ?? [], []);
       return "unknown";
     }
-    const done = (status: BrowserCleanupRecord["status"]): "clean" => {
+    const done = <S extends "none" | "exited">(status: S): S => {
       this.knownEscapes.delete(folder);
       this.record(owner, status, attributed, []);
       if (removeFolder) { try { rmSync(folder, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* removed with the run */ } }
-      return "clean";
+      return status;
     };
     if (attributed.length === 0) return done("none");
     const lingering = await this.waitGone(attributed, this.options.graceMs ?? POSIX_BROWSER_EXIT_GRACE_MS);

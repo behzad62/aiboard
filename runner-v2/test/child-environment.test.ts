@@ -5,12 +5,15 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  LOCAL_MCP_DEPTH_LIMIT,
+  composeRunnerProcessEnvironments,
   createChildEnvironmentFactory,
   isWindowsAppsPathEntry,
   withoutRunnerInstallPath,
   type RunnerOwnedChildEnvironmentCredentialResolver,
 } from "../src/child-environment.js";
 import { pwshExecutable, shellInventory } from "../src/shell-inventory.js";
+import { CliWorkerOwners } from "../src/cli-worker-runtime.js";
 
 const NOW = "2026-08-28T12:00:00.000Z";
 const GENERIC_GRANT_ERROR = /Child environment credential grant (?:is invalid|could not be consumed)\./;
@@ -363,4 +366,50 @@ test("R3: on a real Windows host the Runner's own shells are still found after t
     assert.ok(root.some((entry) => entry.toLowerCase().replace(/\\+$/u, "") === folder), "the launch's own lookup PATH keeps the Store pwsh's folder");
     assert.ok(!child.some((entry) => entry.toLowerCase().replace(/\\+$/u, "") === folder));
   }
+});
+
+test("CW5: a CLI worker's owner gets AIBOARD_MCP_DEPTH at the local limit; other owners keep the Runner's next depth", () => {
+  const owners = new CliWorkerOwners();
+  const playwright = (owner: { runId: string; sessionId: string }) => owner.sessionId === "cli" || owner.sessionId === "api"
+    ? { values: { PLAYWRIGHT_CLI_SESSION: `t-${owner.sessionId}` }, pathPrepend: ["/pw/bin"] } : undefined;
+  const environment = createChildEnvironmentFactory({
+    credentialResolver: { consume() { throw new Error("none"); } }, mcpChildDepth: 1,
+    processEnvironment: composeRunnerProcessEnvironments(playwright, owners.environmentFor),
+  });
+  const read = (sessionId: string, explicit: Record<string, string> = {}) => {
+    const prepared = environment.prepare({ ambient: { PATH: "/usr/bin", AIBOARD_MCP_DEPTH: "0" }, explicitOverrides: explicit, runId: "r", sessionId });
+    return environment.withChildEnvironment(prepared.capability, (values) => ({ ...values }));
+  };
+  assert.equal(read("cli").AIBOARD_MCP_DEPTH, "1", "an unregistered owner gets the Runner's next depth");
+  owners.register({ runId: "r", sessionId: "cli" });
+  const cli = read("cli", { AIBOARD_MCP_DEPTH: "0" });
+  assert.equal(cli.AIBOARD_MCP_DEPTH, String(LOCAL_MCP_DEPTH_LIMIT), "Runner authority wins over a caller's value");
+  assert.equal(cli.PLAYWRIGHT_CLI_SESSION, "t-cli", "the Playwright CLI values stay beside the depth");
+  assert.equal((cli.PATH ?? cli.Path)!.split(process.platform === "win32" ? ";" : ":")[0], "/pw/bin");
+  assert.equal(read("api").AIBOARD_MCP_DEPTH, "1");
+  owners.release({ runId: "r", sessionId: "cli" });
+  assert.equal(read("cli").AIBOARD_MCP_DEPTH, "1");
+});
+
+test("CW5: composed owner environments refuse a conflicting value and an invalid depth, and a depth never lowers the Runner's", () => {
+  assert.equal(composeRunnerProcessEnvironments(undefined, undefined), undefined);
+  const one = () => ({ values: { A: "1" }, pathPrepend: [] });
+  assert.equal(composeRunnerProcessEnvironments(undefined, one), one);
+  const conflict = composeRunnerProcessEnvironments(one, () => ({ values: { A: "2" }, pathPrepend: [] }))!;
+  assert.throws(() => conflict({ runId: "r", sessionId: "s" }), /Runner process environment is invalid/);
+  // Windows names are case-insensitive: a second spelling of one name is refused even with the same value.
+  const spelling = composeRunnerProcessEnvironments(one, () => ({ values: { a: "1" }, pathPrepend: [] }))!;
+  assert.throws(() => spelling({ runId: "r", sessionId: "s" }), /Runner process environment is invalid/);
+  const merged = composeRunnerProcessEnvironments(one, () => ({ values: { A: "1", B: "2" }, pathPrepend: ["/x"], mcpDepth: 2 }), () => ({ values: {}, pathPrepend: ["/y"], mcpDepth: 1 }))!;
+  assert.deepEqual(merged({ runId: "r", sessionId: "s" }), { values: { A: "1", B: "2" }, pathPrepend: ["/x", "/y"], mcpDepth: 2 });
+
+  for (const mcpDepth of [0, -1, 1.5, Number.NaN, 2_000_000]) {
+    const environment = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("none"); } }, mcpChildDepth: 1,
+      processEnvironment: () => ({ values: {}, pathPrepend: [], mcpDepth }) });
+    assert.throws(() => environment.prepare({ ambient: {}, runId: "r", sessionId: "s" }), /Runner process environment is invalid/, String(mcpDepth));
+  }
+  const nested = createChildEnvironmentFactory({ credentialResolver: { consume() { throw new Error("none"); } }, mcpChildDepth: 4,
+    processEnvironment: () => ({ values: {}, pathPrepend: [], mcpDepth: 2 }) });
+  const prepared = nested.prepare({ ambient: {}, runId: "r", sessionId: "s" });
+  assert.equal(nested.withChildEnvironment(prepared.capability, (values) => values.AIBOARD_MCP_DEPTH), "4");
 });

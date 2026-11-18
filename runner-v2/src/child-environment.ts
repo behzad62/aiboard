@@ -57,8 +57,44 @@ export interface PrepareChildEnvironmentInput {
 export interface RunnerProcessEnvironment {
   readonly values: Readonly<Record<string, string>>;
   readonly pathPrepend: readonly string[];
+  /**
+   * CW5 (CLI workers plan §3.11): the `AIBOARD_MCP_DEPTH` every process of this owner gets, when it is above the
+   * Runner's own next depth; never lower. A CLI worker's owner gets LOCAL_MCP_DEPTH_LIMIT, so an `aiboard mcp serve`
+   * or `aiboard exec` the CLI starts refuses by depth.
+   */
+  readonly mcpDepth?: number;
 }
 export type RunnerProcessEnvironmentResolver = (owner: { readonly runId: string; readonly sessionId: string }) => RunnerProcessEnvironment | undefined;
+
+/**
+ * Several per-owner sources as one (the Playwright CLI session's values, a CLI worker's depth). Values and PATH
+ * entries are merged in order; a name two sources set to different values is refused, and the depth is the highest.
+ */
+export function composeRunnerProcessEnvironments(...resolvers: readonly (RunnerProcessEnvironmentResolver | undefined)[]): RunnerProcessEnvironmentResolver | undefined {
+  const present = resolvers.filter((resolver): resolver is RunnerProcessEnvironmentResolver => resolver !== undefined);
+  if (present.length <= 1) return present[0];
+  return (owner) => {
+    const found = present.map((resolver) => resolver(owner)).filter((entry): entry is RunnerProcessEnvironment => entry !== undefined);
+    if (found.length <= 1) return found[0];
+    const values: Record<string, string> = {};
+    // Windows environment names are case-insensitive: two spellings of one name are one name, and are refused.
+    const spelled = new Map<string, string>();
+    for (const entry of found) {
+      for (const [name, value] of Object.entries(entry.values)) {
+        const earlier = spelled.get(name.toUpperCase());
+        if (earlier !== undefined && (earlier !== name || values[earlier] !== value)) throw new Error("Runner process environment is invalid.");
+        spelled.set(name.toUpperCase(), name);
+        values[name] = value;
+      }
+    }
+    const depths = found.map((entry) => entry.mcpDepth).filter((depth): depth is number => depth !== undefined);
+    return Object.freeze({
+      values: Object.freeze(values),
+      pathPrepend: Object.freeze(found.flatMap((entry) => entry.pathPrepend)),
+      ...(depths.length > 0 ? { mcpDepth: Math.max(...depths) } : {}),
+    });
+  };
+}
 
 /** Opaque capability valid only in the factory closure that issued it. */
 export interface ChildEnvironmentCapability { readonly _opaque?: never }
@@ -178,11 +214,15 @@ export function createChildEnvironmentFactory(
         }
       }
 
-      // This is Runner authority, never a caller-controlled environment override.
-      setEnvironment(environment, "AIBOARD_MCP_DEPTH", String(mcpChildDepth));
       const runner = nonEmpty(request.runId) && nonEmpty(request.sessionId)
         ? options.processEnvironment?.({ runId: request.runId, sessionId: request.sessionId })
         : undefined;
+      const ownerDepth = runner?.mcpDepth;
+      if (ownerDepth !== undefined && (!Number.isSafeInteger(ownerDepth) || ownerDepth < 1 || ownerDepth > 1_000_000)) {
+        throw new Error("Runner process environment is invalid.");
+      }
+      // This is Runner authority, never a caller-controlled environment override. An owner's depth only raises it.
+      setEnvironment(environment, "AIBOARD_MCP_DEPTH", String(Math.max(mcpChildDepth, ownerDepth ?? 0)));
       for (const [name, value] of sortedEntries(runner?.values ?? {})) {
         if (value === undefined) continue;
         assertEnvironmentEntry(name, value);

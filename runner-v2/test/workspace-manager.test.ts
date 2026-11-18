@@ -5,16 +5,21 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { runGit } from "./support/git-fixture.js";
-import { NoTaskChangesError } from "../src/workspace-manager.js";
+import { ForeignHistoryError, NoTaskChangesError, PROJECT_STATE_MAX_OUTPUT_BYTES } from "../src/workspace-manager.js";
+import { GitCommandError, type GitCommandOptions } from "../src/git-command.js";
+import { inspectSubmissionTree } from "../src/submission-guard-git.js";
+import { policyGit } from "./support/cli-worker-fixture.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
 
 test("T4 exclusive worktree ownership refuses a second task writer", async () => {
@@ -605,3 +610,222 @@ test("cleanup rejects a missing descriptor associated with another worktree path
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// CW5 (CLI workers plan §3.5, §3.7): what a CLI at Full access may leave in its worktree.
+
+async function cliWorktree(label: string, withDocs = true) {
+  // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
+  // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-cw5-${label}-`)));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  if (withDocs) {
+    mkdirSync(join(project, "docs", "project"), { recursive: true });
+    writeFileSync(join(project, "docs", "project", "STATE.md"), "state\n");
+  }
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: "run_cw5" });
+  // Production runs the manager's Git through the Runner Git policy; the fixture's plain runGit would hide a refused verb.
+  const manager = new WorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId: "run_cw5", baselineRevision: baseline.revision, execute: policyGit });
+  const workspace = await manager.createTaskWorkspace("task_cli");
+  const cliGit = async (...args: string[]) =>
+    await gitText(workspace.path, ["-c", "user.name=Fake CLI", "-c", "user.email=fake-cli@example.invalid", "-c", "commit.gpgsign=false", ...args]);
+  return { root, project, manager, workspace, cliGit, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
+}
+
+test("CW5 undoForeignCommits moves the task branch back to the recorded tip and keeps the CLI's content for the guarded commit", async () => {
+  const cli = await cliWorktree("undo");
+  try {
+    const tip = await gitText(cli.workspace.path, ["rev-parse", "HEAD"]);
+    assert.deepEqual(await cli.manager.undoForeignCommits(cli.workspace, tip), { replacedCommits: 0, head: tip });
+    writeFileSync(join(cli.workspace.path, "value.txt"), "two\n");
+    await cli.cliGit("commit", "-q", "-am", "one");
+    writeFileSync(join(cli.workspace.path, "extra.txt"), "extra\n");
+    await cli.cliGit("add", "extra.txt");
+    await cli.cliGit("commit", "-q", "-m", "two");
+    assert.deepEqual(await cli.manager.undoForeignCommits(cli.workspace, tip), { replacedCommits: 2, head: tip });
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), tip);
+    assert.equal(readFileSync(join(cli.workspace.path, "value.txt"), "utf8"), "two\n");
+    const commit = await cli.manager.commitWorkspace(cli.workspace, "The Runner's commit");
+    assert.deepEqual([...commit.changedPaths].sort(), ["extra.txt", "value.txt"]);
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD~1"]), tip);
+  } finally {
+    cli.cleanup();
+  }
+});
+
+test("CW5 a CLI's committed secret is refused by the guarded commit after the undo, and the branch stays at the recorded tip", async () => {
+  const cli = await cliWorktree("secret");
+  try {
+    const tip = await gitText(cli.workspace.path, ["rev-parse", "HEAD"]);
+    // Built at runtime so this file holds no literal key header.
+    writeFileSync(join(cli.workspace.path, "notes.txt"), `${["-----BEGIN", "PRIVATE", "KEY-----"].join(" ")}\nnot a real key\n`);
+    await cli.cliGit("add", "notes.txt");
+    await cli.cliGit("commit", "-q", "-m", "key");
+    assert.equal((await cli.manager.undoForeignCommits(cli.workspace, tip)).replacedCommits, 1);
+    await assert.rejects(
+      cli.manager.commitWorkspace(cli.workspace, "The Runner's commit", async (candidateRevision) => {
+        await inspectSubmissionTree({ git: runGit, workspacePath: cli.workspace.path, baselineRevision: cli.workspace.baselineRevision,
+          candidateRevision, claim: { writableSurfaces: ["**"], forbiddenSurfaces: [] } });
+      }),
+      /Submission refused: secret or key material detected/,
+    );
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), tip);
+  } finally {
+    cli.cleanup();
+  }
+});
+
+test("CW5 undoForeignCommits refuses rewritten history, a detached HEAD, another branch and an unsettled operation, changing nothing", async () => {
+  const cli = await cliWorktree("refuse");
+  try {
+    writeFileSync(join(cli.workspace.path, "value.txt"), "runner\n");
+    const runnerCommit = (await cli.manager.commitWorkspace(cli.workspace, "Runner commit")).revision;
+    await cli.cliGit("reset", "-q", "--hard", "HEAD~1");
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit),
+      (error: unknown) => error instanceof ForeignHistoryError && error.code === "cli_history_rewritten" && error.kind === "rewritten");
+    await cli.cliGit("reset", "-q", "--hard", runnerCommit);
+
+    await cli.cliGit("checkout", "-q", "--detach");
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    await cli.cliGit("checkout", "-q", "-b", "cli-branch");
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "other_branch");
+    await cli.cliGit("checkout", "-q", cli.workspace.branch.replace(/^refs\/heads\//, ""));
+
+    const mergeHead = resolve(cli.workspace.path, await gitText(cli.workspace.path, ["rev-parse", "--git-path", "MERGE_HEAD"]));
+    writeFileSync(mergeHead, `${runnerCommit}\n`);
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "unsettled");
+    rmSync(mergeHead);
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), runnerCommit);
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, "not-a-commit"), /not a commit id/);
+
+    // A merge after the recorded tip brings in history from outside the task branch: refused, the branch unmoved.
+    await cli.cliGit("checkout", "-q", "-b", "side", runnerCommit);
+    writeFileSync(join(cli.workspace.path, "side.txt"), "side\n");
+    await cli.cliGit("add", "side.txt");
+    await cli.cliGit("commit", "-q", "-m", "side");
+    await cli.cliGit("checkout", "-q", cli.workspace.branch.replace(/^refs\/heads\//, ""));
+    writeFileSync(join(cli.workspace.path, "main.txt"), "main\n");
+    await cli.cliGit("add", "main.txt");
+    await cli.cliGit("commit", "-q", "-m", "on the task branch");
+    await cli.cliGit("merge", "-q", "--no-ff", "--no-edit", "side");
+    const merged = await gitText(cli.workspace.path, ["rev-parse", "HEAD"]);
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit),
+      (error: unknown) => error instanceof ForeignHistoryError && error.code === "cli_history_rewritten" && error.kind === "merge");
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), merged);
+    // The same check runs before a launch: on the task branch it passes; detached it refuses.
+    await cli.manager.assertOnTaskBranch(cli.workspace);
+    await cli.cliGit("checkout", "-q", "--detach");
+    await assert.rejects(cli.manager.assertOnTaskBranch(cli.workspace), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    // createTaskWorkspace (every worker's entry) refuses it as before, now typed, so the CLI driver can code it.
+    await assert.rejects(cli.manager.createTaskWorkspace("task_cli"), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
+    // Only exit 1 is a detached HEAD: Git's fatal 128 (a broken repository, a missing worktree) stays Git's error.
+    const fatal = new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: cli.workspace.baselineRevision,
+      execute: async (options) => options.args[0] === "symbolic-ref"
+        ? { exitCode: 128, stdout: "", stderr: "fatal: not a git repository" }
+        : await policyGit(options),
+    });
+    await assert.rejects(fatal.createTaskWorkspace("task_cli"),
+      (error: unknown) => error instanceof GitCommandError && !(error instanceof ForeignHistoryError) && /symbolic-ref --quiet HEAD failed: fatal: not a git repository/.test(error.message));
+    await cli.cliGit("checkout", "-q", "-b", "cli-elsewhere");
+    await assert.rejects(cli.manager.createTaskWorkspace("task_cli"),
+      (error: unknown) => error instanceof ForeignHistoryError && error.kind === "other_branch" && /unexpected branch/.test(error.message));
+  } finally {
+    cli.cleanup();
+  }
+});
+
+test("CW5 restoreProjectDocs puts docs/project back to the baseline in the worktree and the index, with or without it in the baseline", async () => {
+  const cli = await cliWorktree("docs");
+  try {
+    assert.deepEqual(await cli.manager.restoreProjectDocs(cli.workspace), []);
+    writeFileSync(join(cli.workspace.path, "docs", "project", "STATE.md"), "changed\n");
+    writeFileSync(join(cli.workspace.path, "docs", "project", "staged.md"), "staged\n");
+    await cli.cliGit("add", "docs/project/staged.md");
+    mkdirSync(join(cli.workspace.path, "docs", "project", "deep"));
+    writeFileSync(join(cli.workspace.path, "docs", "project", "deep", "new.md"), "new\n");
+    writeFileSync(join(cli.workspace.path, "value.txt"), "kept\n");
+    assert.deepEqual(await cli.manager.restoreProjectDocs(cli.workspace),
+      ["docs/project/STATE.md", "docs/project/deep/new.md", "docs/project/staged.md"]);
+    assert.equal(readFileSync(join(cli.workspace.path, "docs", "project", "STATE.md"), "utf8"), "state\n");
+    assert.equal(existsSync(join(cli.workspace.path, "docs", "project", "staged.md")), false);
+    assert.equal(existsSync(join(cli.workspace.path, "docs", "project", "deep")), false);
+    assert.equal(await gitText(cli.workspace.path, ["diff", "--cached", "--name-only"]), "");
+    assert.equal(readFileSync(join(cli.workspace.path, "value.txt"), "utf8"), "kept\n", "only docs/project is restored");
+  } finally {
+    cli.cleanup();
+  }
+
+  const bare = await cliWorktree("docs-absent", false);
+  try {
+    mkdirSync(join(bare.workspace.path, "docs", "project"), { recursive: true });
+    writeFileSync(join(bare.workspace.path, "docs", "project", "a.md"), "a\n");
+    writeFileSync(join(bare.workspace.path, "docs", "project", "b.md"), "b\n");
+    await bare.cliGit("add", "docs/project/b.md");
+    assert.deepEqual(await bare.manager.restoreProjectDocs(bare.workspace), ["docs/project/a.md", "docs/project/b.md"]);
+    assert.equal(existsSync(join(bare.workspace.path, "docs", "project", "a.md")), false);
+    assert.equal(existsSync(join(bare.workspace.path, "docs", "project", "b.md")), false);
+    assert.equal(await gitText(bare.workspace.path, ["status", "--porcelain"]), "");
+  } finally {
+    bare.cleanup();
+  }
+});
+
+test("CW5 projectFolderState changes with the project folder's HEAD, index and status", async () => {
+  const cli = await cliWorktree("project-state");
+  try {
+    const before = await cli.manager.projectFolderState();
+    assert.match(before.head, /^[a-f0-9]{40,64}$/);
+    writeFileSync(join(cli.project, "outside.txt"), "written outside the worktree\n");
+    const after = await cli.manager.projectFolderState();
+    assert.equal(after.head, before.head);
+    assert.equal(after.index, before.index);
+    assert.notEqual(after.status, before.status);
+    await gitText(cli.project, ["add", "outside.txt"]);
+    assert.notEqual((await cli.manager.projectFolderState()).index, before.index);
+  } finally {
+    cli.cleanup();
+  }
+});
+
+test("CW5 projectFolderState reads past Git's 4 MiB default and takes no optional lock, so it never writes the user's index", async () => {
+  const cli = await cliWorktree("project-state-limit");
+  try {
+    const calls: GitCommandOptions[] = [];
+    const recording = new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: await gitText(cli.project, ["rev-parse", "HEAD"]),
+      execute: async (options) => { calls.push(options); return await policyGit(options); },
+    });
+    // A tracked file whose stat changed: a status with optional locks would refresh and rewrite the index.
+    const index = join(cli.project, ".git", "index");
+    const indexBefore = readFileSync(index);
+    utimesSync(join(cli.project, "value.txt"), new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    const state = await recording.projectFolderState();
+    assert.notEqual(state.status, "unknown");
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((call) => call.maxOutputBytes === PROJECT_STATE_MAX_OUTPUT_BYTES));
+    assert.equal(PROJECT_STATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024);
+    assert.deepEqual(calls.find((call) => call.args[0] === "status")?.env, { GIT_OPTIONAL_LOCKS: "0" });
+    assert.deepEqual(readFileSync(index), indexBefore, "status left the user's index as it was");
+
+    // Past even that limit, Git's runner throws output_limit whatever allowFailure says: that read is "unknown" (the
+    // before/after comparison skips it), never a thrown error that fails the attempt. Any other error still throws.
+    const limited = (failing: string, error: Error) => new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: state.head,
+      execute: async (options) => { if (options.args[0] === failing) throw error; return await policyGit(options); },
+    });
+    const huge = await limited("ls-files", new GitCommandError("output_limit", "Git output exceeded 67108864 bytes.")).projectFolderState();
+    assert.deepEqual(huge, { head: state.head, index: "unknown", status: huge.status });
+    assert.match(huge.status, /^[a-f0-9]{64}$/);
+    await assert.rejects(limited("status", new GitCommandError("command_failed", "Git runtime did not finish.")).projectFolderState(), /did not finish/);
+  } finally {
+    cli.cleanup();
+  }
+});
