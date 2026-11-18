@@ -95,7 +95,7 @@ import {
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
 import { checkToolLookupFor, createCheckToolLookup, mandatoryProjectCheckTools, type MandatoryCheckTools } from "./check-tool-lookup.js";
-import { isPlaywrightCliBrowser } from "./playwright-cli.js";
+import { isPlaywrightCliBrowser, playwrightCliSkillPath } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
@@ -258,6 +258,7 @@ import { composeRunnerProcessEnvironments, createChildEnvironmentFactory } from 
 import { resolveCliExecutable } from "./cli-worker-adapters.js";
 import { cliAttemptLimitMinutes, CLI_DEFAULT_MODEL_ID, isCliWorkerProviderId, type CliWorkerProviderId, type HomeCliWorkersV1 } from "./cli-worker-config.js";
 import { CliWorkerOwners, createManagedCliProcessLauncher, type CliWorkerRuntimeConfig } from "./cli-worker-runtime.js";
+import { createManagedCliBrowserSessions } from "./cli-worker-browser.js";
 import {
   createExecutionGrantAuthority,
   type ExecutionGrantAuthority,
@@ -1384,11 +1385,13 @@ export class NativeBuildFactory {
                 captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
                 owners: cliWorkerOwners,
                 ...(budgetLedger ? { budgetLedger } : {}),
+                // CW8 (§3.10): the owner's Playwright CLI session, started before the CLI when the inventory recorded a
+                // browser, stopped with the owner, and its owner folder checked afresh after that stop.
                 ...(this.options.playwrightCli
-                  ? { browser: {
-                      checkAfterStop: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.checkOwnerBrowsers(owner),
-                      escapedPids: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.knownEscapePids(owner),
-                    } }
+                  ? { browser: createManagedCliBrowserSessions({
+                      managedProcesses, executionGrants, permissionProfile: spec.permissionProfile,
+                      runs: this.options.playwrightCli, skillPath: playwrightCliSkillPath(),
+                    }) }
                   : {}),
               },
             },
