@@ -57,14 +57,22 @@ const deterministicPrTests = [
   // and 10 s on macOS, and 61 s on Windows inside this parallel step.
   "runner-v2/test/control-server-cli-workers.test.ts",
   "runner-v2/test/cli-worker-processes.test.ts",
-  // The adaptive stdin write bound on this host's real backend (Job or process group): a late reader, a stop during an
-  // undrained write, a reader's exit and the ceiling, with fake readers and injected host facts (about 17 s on a
-  // Windows PC, 27 s in Linux Docker; one 6 s wait is the late reader's).
+  // The adaptive stdin write bound on this host's real backend (Job or process group): a stop during an undrained
+  // write, a reader's exit and the ceiling, with fake readers and injected host facts (about 20 s on a Windows PC with
+  // the 6 s late reader, which runs on Windows only; about 13 s in Linux Docker).
   "runner-v2/test/managed-stdin-slow-reader.test.ts",
+  // The Job drain loop against a fake supervisor that counts polls, the supervisor's wait parsing from its source, and
+  // on Windows a real supervisor's sequence refusals (about 5 s on Windows, 3 s elsewhere).
+  "runner-v2/test/managed-stdin-drain.test.ts",
   // User steering and Architect questions in the Build runtime: guidance, question resume and supersession across
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // A test file whose fixture cleanup stays unverified ends after its last test instead of holding the job until it
+  // is cancelled: a synthetic held handle, and a real ExecutionHost run whose close is made to fail (child test-runner
+  // processes; in PR CI at 0e4673e2 about 20 s on Windows, where the real run holds its birth helper, 16 s on Linux and
+  // 18 s on macOS).
+  "runner-v2/test/certified-fixture-retained-exit.test.ts",
   // CW5: the CLI worker loop against the fake CLI run as a child (no real CLI, no prompt): temporary git checkouts and
   // short fake runs, in three files the parallel step runs side by side. Each file's tests run four at a time on one
   // baseline repository copied per test, with async fixture Git. Run alone on a busy Windows PC: outcomes and case 1
@@ -73,6 +81,10 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
+  // CW8: the CLI worker's browser session end to end through the real ExecutionHost (the Job or the process group),
+  // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side and one
+  // unit test, with the host's process facts injected on Windows; about 14 s on a loaded Windows PC run alone.
+  "runner-v2/test/cli-worker-browser.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

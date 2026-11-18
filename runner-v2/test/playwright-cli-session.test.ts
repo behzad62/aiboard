@@ -42,13 +42,33 @@ import {
   resolvePlaywrightCliInstall,
   type PlaywrightCliBrowser,
   type PosixProcessTable,
+  playwrightCliSkillPath,
 } from "../src/playwright-cli.js";
-import { refusalFor, rewriteNotOpen, sanitizeCliEnvironment } from "../src/playwright-cli-guard.mjs";
+import {
+  CLI_WORKER_START_INSTRUCTION,
+  refusalFor,
+  rewriteNotOpen,
+  sanitizeCliEnvironment,
+  START_INSTRUCTION,
+  startInstructionFor,
+} from "../src/playwright-cli-guard.mjs";
 import type { PosixProcessIdentityInspection } from "../src/portable-process-posix-control.mjs";
 import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { loadPlaywrightRegistry } from "../src/verification-inventory.js";
+import { createManagedCliBrowserSessions } from "../src/cli-worker-browser.js";
+import { CLI_WORKER_MARKER_ENV, runCliWorkerAttempt, type CliProcessLauncher } from "../src/cli-worker-runtime.js";
+import type { ExecutionGrantAuthority } from "../src/execution-grants.js";
+import {
+  OWNER as CLI_OWNER,
+  RUN as CLI_RUN,
+  SESSION as CLI_SESSION,
+  TASK as CLI_TASK,
+  claudeStream as cliClaudeStream,
+  done as cliDone,
+  harness as cliHarness,
+} from "./support/cli-worker-runtime-harness.js";
 
 const WINDOWS = process.platform === "win32";
 const execFileAsync = promisify(execFile);
@@ -430,6 +450,28 @@ test("the playwright-cli shim refuses what would escape the managed session and 
   const thrown = rewriteNotOpen("Browser 't-1' is not open. Run\n\n  playwright-cli open\n\nto start the browser session.\n");
   assert.match(thrown, /is not running/);
   assert.doesNotMatch(thrown, /playwright-cli open|to start the browser session/);
+});
+
+test("CW8: a CLI worker's playwright-cli is never told to start a session with process.start: no browser is available, so its browser checks are not run", () => {
+  // The CLI worker's owner marks every process it starts (CliWorkerOwners.environmentFor).
+  const cli = startInstructionFor({ [CLI_WORKER_MARKER_ENV]: "1" });
+  assert.equal(cli, CLI_WORKER_START_INSTRUCTION);
+  assert.equal(startInstructionFor({}), START_INSTRUCTION, "an AIBoard model's own session keeps the process.start instruction");
+  assert.equal(startInstructionFor({ [CLI_WORKER_MARKER_ENV]: "0" }), START_INSTRUCTION);
+  assert.doesNotMatch(cli, /process\.start|playwright-cli-session/);
+  const text = rewriteNotOpen("The browser 't-1' is not open, please run open first\n\n  playwright-cli -s=t-1 open [params]\n", cli);
+  assert.match(text, /Browser session 't-1' is not running\. AIBoard starts this task's browser session for you/);
+  assert.match(text, /no browser is available for this run: do not start one yourself, and report your browser checks as not run \(notRun\)/);
+  assert.doesNotMatch(text, /process\.start|playwright-cli -s=t-1 open/);
+  const json = rewriteNotOpen(`{"isError":true,"error":"The browser 't-1' is not open, please run open first"}\n`, cli);
+  assert.match((JSON.parse(json) as { error: string }).error, /notRun/);
+  // The refusals that name the instruction give the CLI's too.
+  for (const args of [["open", "https://example.com"], ["attach", "x"]]) {
+    const refusal = refusalFor(args, "t-0000aaaa", undefined, cli) ?? "";
+    assert.match(refusal, /AIBoard starts this task's browser session/, args.join(" "));
+    assert.doesNotMatch(refusal, /process\.start/, args.join(" "));
+  }
+  assert.doesNotMatch(refusalFor(["-s=x", "goto", "y"], undefined, undefined, cli) ?? "", /process\.start/);
 });
 
 // ---------------------------------------------------------------- environment, naming and state folders (no browser)
@@ -922,4 +964,87 @@ test("CW5: checkOwnerBrowsers reads the owner folder afresh after a stop: a know
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
+});
+
+test("CW8: a CLI worker's browser that outlives its owner's stop, or cannot be read, is case 2: nothing is submitted until checkOwnerBrowsers proves it gone", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async (t) => {
+  const h = await cliHarness(t, "pw-case2");
+  type Proc = { pid: number; pgid: number; birth: string; command: string; alive: boolean; escapes: boolean };
+  const table = new Map<number, Proc>();
+  let readable = true;
+  const processes: PosixProcessTable = {
+    inspect: (pids) => new Map<number, PosixProcessIdentityInspection>(pids.map((pid): [number, PosixProcessIdentityInspection] => {
+      if (!readable) return [pid, { state: "unknown" }];
+      const p = table.get(pid);
+      return [pid, p?.alive ? { state: "present", value: { pid, groupId: p.pgid, birth: p.birth } } : { state: "absent" }];
+    })),
+    commandLine: (pid) => (table.get(pid)?.alive ? table.get(pid)!.command : undefined),
+    groupAlive: (groupId) => [...table.values()].some((p) => p.alive && p.pgid === groupId),
+    hostname: () => "box",
+  };
+  const sessions = new PlaywrightCliSessions({ stateRoot: join(h.state, "pw"), binDirectory: join(h.state, "pw-bin"), platform: "linux", processes,
+    graceMs: 50, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) });
+  sessions.configureRun(CLI_RUN, { browser: "chromium" });
+  // The production browser sessions over the real owner-folder check. Its start is replaced by a session whose
+  // browser (Chrome, which leaves the owned group on POSIX) writes its profile into the owner's folder.
+  const managed = createManagedCliBrowserSessions({
+    managedProcesses: {} as ManagedProcessService, executionGrants: {} as ExecutionGrantAuthority, permissionProfile: "full",
+    runs: sessions, skillPath: playwrightCliSkillPath(),
+  });
+  // Every start is a new session with its own browser and profile, as a real one is; a browser started while
+  // `escapes` is set outlives its owner's stop, any other stops with it.
+  let escapes = true;
+  let nextPid = 900;
+  const startedPids: number[] = [];
+  const browser = {
+    ...managed,
+    async start() {
+      const pid = nextPid++;
+      const profile = join(sessions.ownerFolder(CLI_OWNER), "tmp", `playwright_chromiumdev_profile-cw8-${pid}`);
+      await mkdir(profile, { recursive: true });
+      await symlink(`box-${pid}`, join(profile, "SingletonLock"));
+      table.set(pid, { pid, pgid: pid, birth: `b${pid}`, command: `/chrome --user-data-dir=${profile}`, alive: true, escapes });
+      startedPids.push(pid);
+      return { status: "started" as const, note: "A browser is running for this task." };
+    },
+  };
+  const launcher = h.launcher({ cli: "claude-code", stdout: cliClaudeStream(h, cliDone()), actions: [{ write: "value.txt", content: "two\n" }] });
+  const stopOwner = launcher.stopOwner.bind(launcher);
+  const ownerStop: CliProcessLauncher = {
+    start: launcher.start.bind(launcher),
+    async stopOwner() {
+      await stopOwner();
+      for (const entry of table.values()) if (!entry.escapes) entry.alive = false;
+    },
+  };
+  const reruns: boolean[] = [];
+  const rerunChecks: typeof h.rerun = async (input) => { reruns.push(input.browserUnavailable); return await h.rerun(input); };
+  const deps = h.deps(ownerStop, { rerunChecks, browser, platformRefusal: () => undefined, host: { platform: "linux", isRoot: false } });
+
+  // Unreadable at the stop: not known to be stopped.
+  readable = false;
+  const unknown = await runCliWorkerAttempt(deps, h.input());
+  assert.equal(unknown.type, "stop_unproven");
+  assert.match(JSON.stringify(unknown), /not known to be stopped/);
+  assert.deepEqual((unknown as { outcome: unknown }).outcome, { type: "paused", reason: `cli_collect_pending:${CLI_TASK}` });
+  // Readable, and still running: an escape, named by its PID, never signalled.
+  readable = true;
+  const escaped = await runCliWorkerAttempt(deps, h.input());
+  assert.equal(escaped.type, "stop_unproven");
+  assert.match(JSON.stringify(escaped), /still running \(PID 900\)/);
+  assert.equal(table.get(900)!.alive, true);
+  assert.notEqual((await h.sessions.load(CLI_SESSION)).status, "submitted", "nothing is submitted while it runs");
+  assert.deepEqual(startedPids, [900], "the stop is checked again, the session is not started again");
+  assert.deepEqual(reruns, [], "no re-run while the CLI's browser runs");
+  // Gone: the next run collects what the CLI left, without starting it again. Its re-runs get a session of their own
+  // (PID 901), which stops with the owner, and that stop is proven before the result is submitted.
+  table.get(900)!.alive = false;
+  escapes = false;
+  const collected = await runCliWorkerAttempt(deps, h.input());
+  assert.equal(collected.type, "submitted", JSON.stringify(collected));
+  assert.equal(launcher.starts.length, 1);
+  assert.deepEqual(startedPids, [900, 901]);
+  assert.deepEqual(reruns, [false], "the re-runs ran with their session");
+  assert.equal(table.get(901)!.alive, false, "the re-run session's browser stopped with its owner");
+  assert.equal(await sessions.checkOwnerBrowsers(CLI_OWNER), "none");
+  assert.doesNotMatch(JSON.stringify((await h.sessions.load(CLI_SESSION)).changeSet ?? {}), /could not start the Playwright CLI session/);
 });

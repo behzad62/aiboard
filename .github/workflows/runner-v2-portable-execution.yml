@@ -132,10 +132,13 @@ jobs:
           runner-v2/test/control-server-cli-workers.test.ts
           runner-v2/test/cli-worker-processes.test.ts
           runner-v2/test/managed-stdin-slow-reader.test.ts
+          runner-v2/test/managed-stdin-drain.test.ts
           runner-v2/test/user-steering-runtime.test.ts
+          runner-v2/test/certified-fixture-retained-exit.test.ts
           runner-v2/test/cli-worker-runtime-outcomes.test.ts
           runner-v2/test/cli-worker-runtime-stops.test.ts
           runner-v2/test/cli-worker-runtime-runs.test.ts
+          runner-v2/test/cli-worker-browser.test.ts
       # FL2/FL3: the OS-lock core and the Runner's async claims on every host (about 15 s); its own step so the claim p95 it reports is not measured
       # under the parallel contract files above.
       - name: Run owned fence lock contracts

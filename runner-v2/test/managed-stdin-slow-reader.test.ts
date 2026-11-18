@@ -115,7 +115,11 @@ async function readUntil(f: Fixture, processId: string, done: (stdout: string) =
 }
 const reported = (stdout: string, total: number) => stdout.endsWith(`bytes:${total}\n`);
 
-test("a write waits for a reader that starts reading late, past the old 5 s Windows Job limit, and the reader gets every byte", { timeout: 120_000 }, async () => {
+// Windows only: the limit it guards against (5.25 s) was the Windows Job's; the POSIX bound was 15 s, so a 6 s reader
+// proves nothing there, and the other tests below cover the shared bound on every OS.
+test("a write waits for a reader that starts reading late, past the old 5 s Windows Job limit, and the reader gets every byte", {
+  timeout: 120_000, skip: process.platform !== "win32" && "guards the old Windows Job limit (5.25 s); the POSIX bound was 15 s",
+}, async () => {
   await withHost({}, async (f) => {
     const processId = await startReader(f, "gate");
     const writes = sendChunks(f, processId, true);
