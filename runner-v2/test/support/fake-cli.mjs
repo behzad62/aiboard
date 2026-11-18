@@ -16,8 +16,9 @@
 //   "holdMs": 0,                                    // stay up after the output, as Claude Code does for a background task
 //   "grandchildMs": 0,                              // start a child that lives this long
 //   "grandchildDetached": false,                    // see below: true for a "grandchild proven stopped" test
-//   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" }],  // in the cwd, before output
-//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, mcpDepth? } before any output
+//   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" },  // in the cwd, before output
+//               { "run": ["playwright-cli", "--json", "goto", "http://…"] }],  // a command on PATH, as the CLI's shell runs it
+//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, mcpDepth?, runs? } before any output
 //   "recordMcpDepth": false                         // true: the record carries AIBOARD_MCP_DEPTH, the only variable it reads
 // }
 //
@@ -81,10 +82,11 @@ async function run() {
     grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)})`],
       { stdio: "ignore", detached: scenario.grandchildDetached === true });
   }
-  for (const action of scenario.actions ?? []) act(action);
+  const runs = [];
+  for (const action of scenario.actions ?? []) act(action, runs);
   if (scenario.record) {
     writeFileSync(at(scenario.record), JSON.stringify({
-      argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}),
+      argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}), ...(runs.length ? { runs } : {}),
       // Only this one variable of the environment is ever written down.
       ...(scenario.recordMcpDepth === true ? { mcpDepth: process.env.AIBOARD_MCP_DEPTH ?? null } : {}),
     }, null, 2));
@@ -102,8 +104,18 @@ async function run() {
   process.exitCode = scenario.exitCode ?? 0;
 }
 
-// What a CLI may do in its worktree at Full access: write a file (docs/project/** included) or commit.
-function act(action) {
+// What a CLI may do in its worktree at Full access: write a file (docs/project/** included), commit, or run a command
+// found on PATH in its environment (CW8: `playwright-cli`, which reaches the owner's browser session). A run's exit code
+// and output are recorded, never thrown: a failed command is something a CLI sees and reports.
+function act(action, runs) {
+  if (Array.isArray(action.run)) {
+    const [command, ...args] = action.run;
+    // A Windows command shim (.cmd) runs through cmd.exe, as a CLI's shell runs it; the tests' arguments hold no cmd
+    // metacharacters.
+    const result = spawnSync(command, args, { cwd: process.cwd(), encoding: "utf8", shell: process.platform === "win32", windowsHide: true });
+    runs.push({ args: action.run, exitCode: result.status, stdout: (result.stdout ?? "").slice(0, 2_000), stderr: (result.stderr ?? "").slice(0, 2_000) });
+    return;
+  }
   if (typeof action.write === "string") {
     const target = resolve(process.cwd(), action.write);
     mkdirSync(dirname(target), { recursive: true });

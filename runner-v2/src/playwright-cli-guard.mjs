@@ -16,10 +16,25 @@ export const START_INSTRUCTION =
   "In a final check, make playwright-cli-session the start check's program (ready {outputLine: 'Daemon listening on'}) " +
   "and run playwright-cli in its steps.";
 
+/**
+ * CW8: the same instruction for a CLI worker (AIBOARD_CLI_WORKER, set for every process of a CLI worker's owner). A CLI
+ * has no process.start and must not start a session: the Runner starts its session before it, when the run has a
+ * browser.
+ */
+export const CLI_WORKER_START_INSTRUCTION =
+  "AIBoard starts this task's browser session for you before your turn, and playwright-cli commands use it. " +
+  "When it is not running, no browser is available for this run: do not start one yourself, and report your " +
+  "browser checks as not run (notRun) with that reason.";
+
+/** The instruction for the process this guard runs in. */
+export function startInstructionFor(environment) {
+  return environment?.AIBOARD_CLI_WORKER === "1" ? CLI_WORKER_START_INSTRUCTION : START_INSTRUCTION;
+}
+
 /** Commands that start, attach, show, install or kill outside the managed session. */
-const REFUSED_COMMANDS = new Map([
-  ["open", `playwright-cli open starts a browser this Runner does not own, so it is refused. ${START_INSTRUCTION} Use playwright-cli goto <url> to open a page.`],
-  ["attach", `playwright-cli attach connects to a browser this Runner does not own, so it is refused. ${START_INSTRUCTION}`],
+const refusedCommands = (instruction) => new Map([
+  ["open", `playwright-cli open starts a browser this Runner does not own, so it is refused. ${instruction} Use playwright-cli goto <url> to open a page.`],
+  ["attach", `playwright-cli attach connects to a browser this Runner does not own, so it is refused. ${instruction}`],
   ["show", "playwright-cli show starts a detached dashboard, so it is refused. Use snapshot, screenshot or console instead."],
   ["install", "playwright-cli install downloads software, which a Build never does. The owner installs a browser with: aiboard browser install."],
   ["install-browser", "playwright-cli install-browser downloads a browser, which a Build never does. The owner installs one with: aiboard browser install."],
@@ -57,17 +72,18 @@ export function parseCliArguments(argv, roots = playwrightRoots()) {
 }
 
 /** Undefined when the arguments may run; otherwise the refusal text. */
-export function refusalFor(argv, ownSession, parse = parseCliArguments) {
+export function refusalFor(argv, ownSession, parse = parseCliArguments, instruction = START_INSTRUCTION) {
   const args = parse(argv);
   const command = args._?.[0];
-  if (typeof command === "string" && REFUSED_COMMANDS.has(command)) return REFUSED_COMMANDS.get(command);
+  const refused = refusedCommands(instruction);
+  if (typeof command === "string" && refused.has(command)) return refused.get(command);
   for (const [name, text] of REFUSED_OPTIONS) {
     if (args[name] !== undefined && args[name] !== false) return text;
   }
   for (const name of ["s", "session"]) {
     const value = args[name];
     if (value === undefined) continue;
-    if (!ownSession) return `-s/--session is refused here: this command is not running for a Build agent session. ${START_INSTRUCTION}`;
+    if (!ownSession) return `-s/--session is refused here: this command is not running for a Build agent session. ${instruction}`;
     const values = Array.isArray(value) ? value : [value];
     if (values.some((entry) => String(entry) !== ownSession)) {
       return `-s/--session names another browser session, so it is refused: each agent session uses only its own (${ownSession}), and playwright-cli uses it without -s.`;
@@ -77,7 +93,7 @@ export function refusalFor(argv, ownSession, parse = parseCliArguments) {
 }
 
 /** The CLI's "please run open first" becomes the instruction that works here. */
-export function rewriteNotOpen(text) {
+export function rewriteNotOpen(text, instruction = START_INSTRUCTION) {
   if (!text.includes("is not open") && !OPEN_HINT_LINE.test(text) && !text.includes("browser session.")) return text;
   const lines = text.split(/(\r?\n)/);
   const out = [];
@@ -85,16 +101,16 @@ export function rewriteNotOpen(text) {
     const line = lines[index] ?? "";
     const newline = lines[index + 1] ?? "";
     if (OPEN_HINT_LINE.test(line) || TRAILER_LINE.test(line.trim())) continue;
-    out.push(line.replace(NOT_OPEN, (_match, session) => `Browser session '${session}' is not running. ${START_INSTRUCTION}`), newline);
+    out.push(line.replace(NOT_OPEN, (_match, session) => `Browser session '${session}' is not running. ${instruction}`), newline);
   }
   return out.join("");
 }
 
-function interceptNotOpen(stream) {
+function interceptNotOpen(stream, instruction) {
   const write = stream.write.bind(stream);
   stream.write = (chunk, encoding, callback) => {
-    if (typeof chunk === "string") return write(rewriteNotOpen(chunk), encoding, callback);
-    if (chunk instanceof Uint8Array) return write(rewriteNotOpen(Buffer.from(chunk).toString("utf8")), typeof encoding === "function" ? encoding : callback);
+    if (typeof chunk === "string") return write(rewriteNotOpen(chunk, instruction), encoding, callback);
+    if (chunk instanceof Uint8Array) return write(rewriteNotOpen(Buffer.from(chunk).toString("utf8"), instruction), typeof encoding === "function" ? encoding : callback);
     return write(chunk, encoding, callback);
   };
 }
@@ -157,7 +173,8 @@ export function sanitizeCliEnvironment(environment, platform = process.platform)
 
 export function main(argv = process.argv.slice(2), environment = process.env) {
   const ownSession = environment.PLAYWRIGHT_CLI_SESSION || undefined;
-  const refusal = refusalFor(argv, ownSession);
+  const instruction = startInstructionFor(environment);
+  const refusal = refusalFor(argv, ownSession, parseCliArguments, instruction);
   if (refusal) {
     process.stderr.write(`Refused by AIBoard: ${refusal}\n`);
     process.exitCode = 2;
@@ -165,8 +182,8 @@ export function main(argv = process.argv.slice(2), environment = process.env) {
   }
   sanitizeCliEnvironment(environment);
   const roots = playwrightRoots();
-  interceptNotOpen(process.stdout);
-  interceptNotOpen(process.stderr);
+  interceptNotOpen(process.stdout, instruction);
+  interceptNotOpen(process.stderr, instruction);
   failOnErrorResult(process.stdout, cliOutputMode(argv, roots));
   const cli = join(roots.playwright, "cli.js");
   process.argv = [process.argv[0], cli, "cli", ...argv];

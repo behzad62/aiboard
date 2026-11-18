@@ -1,7 +1,11 @@
 export declare const START_INSTRUCTION: string;
+/** CW8: the instruction a CLI worker gets instead (it has no process.start; the Runner starts its session). */
+export declare const CLI_WORKER_START_INSTRUCTION: string;
+/** CLI_WORKER_START_INSTRUCTION when the environment marks a CLI worker's process (AIBOARD_CLI_WORKER=1), else START_INSTRUCTION. */
+export declare function startInstructionFor(environment: NodeJS.ProcessEnv | Readonly<Record<string, string | undefined>> | undefined): string;
 export declare function parseCliArguments(argv: readonly string[], roots?: { playwright: string; core: string }): Record<string, unknown> & { _?: unknown[] };
-export declare function refusalFor(argv: readonly string[], ownSession: string | undefined, parse?: (argv: readonly string[]) => Record<string, unknown> & { _?: unknown[] }): string | undefined;
-export declare function rewriteNotOpen(text: string): string;
+export declare function refusalFor(argv: readonly string[], ownSession: string | undefined, parse?: (argv: readonly string[]) => Record<string, unknown> & { _?: unknown[] }, instruction?: string): string | undefined;
+export declare function rewriteNotOpen(text: string, instruction?: string): string;
 /** How the CLI prints these arguments' result: with --json, raw (no headings: --raw or a raw-by-default command), or as text. */
 export declare function cliOutputMode(argv: readonly string[], roots?: { playwright: string; core: string }, parse?: (argv: readonly string[]) => Record<string, unknown> & { _?: unknown[] }): "json" | "raw" | "text";
 /** True when the CLI printed a failed command result: "isError": true first with --json, "### Error" first as text; raw output never. */

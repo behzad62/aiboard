@@ -187,3 +187,40 @@ test("VF7b startup removes the Playwright CLI state a crashed Runner left, keeps
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("CW8: the run's removal checks a CLI worker's session folder like any owner's: the escape its attempt found blocks it until the browser is gone", { skip: process.platform === "win32" ? "profiles are read through Chrome's SingletonLock symlink (POSIX)" : false }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-pw-cli-removal-"));
+  try {
+    const alive = new Set([900]);
+    // The CLI worker's owner: the worker session the CLI and the session the Runner started for it share.
+    const owner = { runId: "run_1", sessionId: "worker:run_1:task_a:1" };
+    let profile = "";
+    const sessions = new PlaywrightCliSessions({
+      stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "linux", graceMs: 20, sleep: async () => undefined,
+      processes: {
+        inspect: (pids) => new Map(pids.map((pid) => [pid, alive.has(pid)
+          ? { state: "present" as const, value: { pid, groupId: pid, birth: `b${pid}` } } : { state: "absent" as const }])),
+        commandLine: (pid) => (alive.has(pid) ? `/chrome --user-data-dir=${profile}` : undefined),
+        groupAlive: (groupId) => alive.has(groupId),
+        hostname: () => "box",
+      },
+    });
+    sessions.configureRun(owner.runId, { browser: "chromium" });
+    profile = join(sessions.ownerFolder(owner), "tmp", "playwright_chromiumdev_profile-cli");
+    mkdirSync(profile, { recursive: true });
+    symlinkSync("box-900", join(profile, "SingletonLock"));
+    // The attempt's own check after its owner's stop: an escape, recorded and never signalled.
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "escaped");
+    rmSync(join(profile, "SingletonLock"));
+    // The run's removal finds it through the owner folder's known escape, and keeps the folder.
+    await assert.rejects(sessions.removeRun(owner.runId), (error: unknown) =>
+      (error as { code?: string }).code === "process_cleanup_unverified" && /PIDs 900/.test(String((error as Error).message)));
+    assert.equal(existsSync(sessions.ownerFolder(owner)), true);
+    assert.equal(alive.has(900), true, "never signalled");
+    alive.delete(900);
+    await sessions.removeRun(owner.runId);
+    assert.equal(existsSync(sessions.runFolder(owner.runId)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

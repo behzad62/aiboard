@@ -19,6 +19,7 @@ import { assertWindowsBatchLaunchAvailable } from "./windows-process-backend.js"
 import type { OperationAuthorizationAssertion, SessionInteractionAuthorization, SessionOperationAuthorization } from "./session-authority.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { StreamingSessionRecord } from "./streaming-session-store.js";
+import { InteractiveInputRefusedError } from "./interactive-process-channel.js";
 
 type Facade = Awaited<ReturnType<ExecutionHostRunBinding["openStreaming"]>>;
 type Observation = Awaited<ReturnType<ExecutionHostRunBinding["streamingRuntime"]["observeOutput"]>>;
@@ -307,13 +308,18 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           if (interaction.inputUsed) throw refused("An interaction delivers its input once.");
           interaction.inputUsed = true; authorization = interaction.authorization.input;
         } else { facade.retainOwnership(); authorization = facade.authorizeOperation({ ...assertion, grant: context.executionGrant! }); }
+        // A write may wait up to its bound for the reader: the lease covers it, as a read's wait does.
+        facade.retainOwnership(request.timeoutMs);
       }
       catch (error) { throw new ManagedProcessError("process_input_rejected", `Process input was refused before delivery: ${error instanceof Error ? error.message : String(error)}`); }
       // From here a failure cannot prove the bytes were not delivered.
       try {
-        if (request.bytes.byteLength) await facade.write(authorization, assertion, request.bytes, request.timeoutMs);
+        // The call's cancellation ends the drain wait (unknown outcome), never the admission.
+        if (request.bytes.byteLength) await facade.write(authorization, assertion, request.bytes, request.timeoutMs, context.signal);
         if (request.closeInput) await facade.closeInput(authorization, assertion, request.timeoutMs);
       } catch (error) {
+        // A write refused before admission sent nothing: a certain refusal, never an unknown outcome.
+        if (error instanceof InteractiveInputRefusedError) throw new ManagedProcessError("process_input_rejected", `Process input was refused before delivery: ${error.message}`);
         throw new ManagedProcessError("process_input_outcome_unknown", `Process input delivery was not acknowledged: ${error instanceof Error ? error.message : String(error)}`);
       }
       return Object.freeze({ inputClosed: request.closeInput });

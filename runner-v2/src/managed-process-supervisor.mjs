@@ -31,6 +31,8 @@ let spareUnclaimed = false;
 let spareIdleTimer;
 let backend;
 let backendInput;
+// The last stdin write admitted over /write: { sequence, state: pending|acknowledged|failed, error, waiters }.
+let pendingInput;
 let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
@@ -131,6 +133,27 @@ function parseWaitStatusTimeout(url) {
   if (!Number.isSafeInteger(timeoutMs)) return 1_000;
   return Math.min(5_000, Math.max(1, timeoutMs));
 }
+/** A bounded park for one input settlement: 0-5000 ms, like /wait-status. A fractional wait is rounded down. */
+function parseInputWait(raw) {
+  const timeoutMs = Number(raw);
+  if (raw === null || raw === undefined || raw === "" || !Number.isFinite(timeoutMs)) return 0;
+  return Math.min(5_000, Math.max(0, Math.floor(timeoutMs)));
+}
+function settleInput(entry, error) {
+  if (entry.state !== "pending") return;
+  entry.state = error ? "failed" : "acknowledged";
+  if (error) entry.error = error instanceof Error ? error.message : String(error);
+  for (const wake of entry.waiters) wake();
+  entry.waiters.clear();
+}
+function waitForInput(entry, timeoutMs) {
+  if (entry.state !== "pending" || timeoutMs <= 0) return Promise.resolve(entry.state);
+  return new Promise((resolve) => {
+    const wake = () => { clearTimeout(timer); entry.waiters.delete(wake); resolve(entry.state); };
+    const timer = setTimeout(wake, timeoutMs);
+    entry.waiters.add(wake);
+  });
+}
 function parseWaitStatusSince(url) {
   const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
   const since = new URLSearchParams(query).get("since");
@@ -222,6 +245,20 @@ const server = createServer(async (request, response) => {
     json(response, 200, next);
     return;
   }
+  if (request.method === "GET" && request.url.startsWith("/input-status?")) {
+    // Observation only: the outcome of the one write this supervisor admitted under the writer
+    // fence. It parks until that write settles or the bounded wait passes, and changes nothing.
+    const query = new URLSearchParams(request.url.slice(request.url.indexOf("?") + 1));
+    const sequence = Number(query.get("sequence"));
+    const entry = pendingInput;
+    if (!entry || entry.sequence !== sequence) {
+      json(response, 409, { error: "input_sequence_unknown" });
+      return;
+    }
+    const state = await waitForInput(entry, parseInputWait(query.get("timeoutMs")));
+    json(response, 200, { sequence, state, ...(state === "failed" ? { error: entry.error } : {}) });
+    return;
+  }
   // PX-2c: an unclaimed spare has no call: only status waits may observe it.
   // Anything that would mutate or signal fails closed until the IPC claim.
   if (spareUnclaimed && request.method === "POST") {
@@ -236,14 +273,45 @@ const server = createServer(async (request, response) => {
         json(response, 409, { error: "input_unavailable" });
         return;
       }
+      if (!Number.isSafeInteger(body.sequence) || body.sequence < 1) {
+        json(response, 400, { error: "input_sequence_invalid" });
+        return;
+      }
+      // One write at a time: a later write is never queued behind one still draining.
+      if (pendingInput?.state === "pending") {
+        json(response, 409, { error: "input_pending" });
+        return;
+      }
+      // Sequences only grow: a sequence already admitted is never admitted again.
+      if (pendingInput && body.sequence <= pendingInput.sequence) {
+        json(response, 409, { error: "input_sequence_stale" });
+        return;
+      }
       assertCurrentRequestFence(body.fence);
       const payload = Buffer.from(body.payload, "base64");
       if (payload.byteLength > maxInputBytes) {
         json(response, 413, { error: "input_too_large" });
         return;
       }
-      await new Promise((resolve, reject) => backendInput.write(payload, (error) => error ? reject(error) : resolve()));
-      json(response, 200, { acknowledged: true, sequence: body.sequence });
+      // Admission is fenced (the Runner holds its writer fence for this request); draining is not.
+      // A reader that is slow to start holds the bytes in the pipe, and waiting for it under the
+      // fence would also hold stop, output reads and output acknowledgements. So the reply comes
+      // when the write settles or after a short admission wait, whichever is first; a write still
+      // draining replies `pending`, and the Runner waits for it through /input-status, outside
+      // its fence. The bytes are handed to the pipe exactly once either way.
+      const entry = { sequence: body.sequence, state: "pending", error: undefined, waiters: new Set() };
+      pendingInput = entry;
+      try { backendInput.write(payload, (error) => settleInput(entry, error)); }
+      catch (error) { settleInput(entry, error ?? new Error("Input write threw.")); }
+      // A Runner that sends no ackWaitMs waits for the settlement here, within the clamp, as before this protocol.
+      const state = await waitForInput(entry, parseInputWait(body.ackWaitMs ?? 5_000));
+      // A write that failed after admission (the reader closed its stdin or exited) was handed to the pipe: the
+      // sequence is spent, so the reply says it was admitted, never a plain error the Runner could read as a refusal.
+      if (state === "failed") {
+        json(response, 200, { acknowledged: false, failed: true, sequence: entry.sequence, error: entry.error });
+        return;
+      }
+      json(response, 200, state === "acknowledged" ? { acknowledged: true, sequence: entry.sequence } : { acknowledged: false, pending: true, sequence: entry.sequence });
     } catch (error) {
       json(response, 500, { error: error instanceof Error ? error.message : String(error) });
     }

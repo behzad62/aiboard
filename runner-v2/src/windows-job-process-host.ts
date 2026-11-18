@@ -83,7 +83,11 @@ export interface WindowsJobProcessHost {
   /** T1 read-only CPU evidence for an owned live Job. Never a lifecycle, release or fence fact. */
   usageOwned?(processId: string, owner: WindowsJobOwnershipKey): Promise<{ readonly cpuTimeMs: number; readonly sampledAt: string } | undefined>;
   attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
-  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
+  /**
+   * `timeoutMs` bounds the whole write, admission and drain; without it the control deadline applies. `signal` ends
+   * the drain wait early (a stopping session); admission under the fence is never cancelled.
+   */
+  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array, timeoutMs?: number, signal?: AbortSignal): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
   closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
   acknowledgeOwnedOutput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void>;
   claimOwnedFence?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
@@ -266,6 +270,24 @@ export class WindowsJobStartFailedError extends WindowsJobHostError {
     super(code, message);
     this.name = "WindowsJobStartFailedError";
   }
+}
+/**
+ * A stdin write the supervisor admitted (its bytes went to the pipe once and its sequence is spent and persisted)
+ * whose drain was not acknowledged. Its outcome is unknown; the caller's next write uses the next sequence.
+ */
+export class WindowsJobInputUnacknowledgedError extends WindowsJobHostError {
+  constructor(message: string) { super("process_control_unavailable", message); this.name = "WindowsJobInputUnacknowledgedError"; }
+}
+/**
+ * A stdin write the supervisor refused before admission (HTTP 409: a previous write still drains, a stale sequence,
+ * input unavailable, an unclaimed spare). No byte went to the pipe and the sequence was not spent.
+ */
+export class WindowsJobInputRefusedError extends WindowsJobHostError {
+  constructor(message: string) { super("process_control_unavailable", message); this.name = "WindowsJobInputRefusedError"; }
+}
+/** A supervisor reply other than 200; the status says whether the supervisor refused before any effect (409). */
+class SupervisorHttpError extends Error {
+  constructor(readonly statusCode: number | undefined, message: string) { super(message); this.name = "SupervisorHttpError"; }
 }
 
 /** Digest-pin record for one compiled Job-host helper assembly. The digest lives
@@ -1760,19 +1782,42 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }, { allowFenceUpgrade: true });
   }
 
-  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
+  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array, timeoutMs = this.controlDeadlineMs, signal?: AbortSignal): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
     if (payload.byteLength > this.maxInputBytes) throw new WindowsJobHostError("process_control_unavailable", `Windows Job input exceeds the ${this.maxInputBytes}-byte limit.`);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input timeout is invalid.");
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    const acknowledged = await this.withFenceEffect(record, fence, "write", async (current) => {
+    const elapsed = elapsedClock(INPUT_DRAIN_POLL_MS + this.controlDeadlineMs + 500);
+    // Admission under the writer fence: the supervisor hands the bytes to the pipe exactly once and replies when the
+    // write settles or after a short wait. The sequence is spent from here on, whatever the drain's outcome.
+    const admitted = await this.withFenceEffect(record, fence, "write", async (current) => {
       this.assertActive(current);
       await this.authenticatedStatus(current);
       if (!current.interactive || current.inputClosed) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input is unavailable.");
       if (sequence !== (current.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
-      const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.controlDeadlineMs + 250);
-      if (result.acknowledged !== true || result.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
+      let result: { acknowledged: boolean; pending?: boolean; failed?: boolean; error?: string; sequence: number };
+      try {
+        result = await supervisorRequest<{ acknowledged: boolean; pending?: boolean; failed?: boolean; error?: string; sequence: number }>(current.supervisor, "/write", "POST",
+          { sequence, payload: Buffer.from(payload).toString("base64"), fence, ackWaitMs: Math.min(INPUT_ADMISSION_ACK_WAIT_MS, timeoutMs) }, this.controlDeadlineMs + 250);
+      } catch (error) {
+        // Every 409 the supervisor sends for /write comes before it touches the pipe: a certain refusal.
+        if (error instanceof SupervisorHttpError && error.statusCode === 409) throw new WindowsJobInputRefusedError(`Windows Job input was refused before admission: ${error.message}`);
+        throw error;
+      }
+      if (result.sequence !== sequence || !(result.acknowledged === true || (result.acknowledged === false && (result.pending === true || result.failed === true))))
+        throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
       current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current); return result;
     });
-    return acknowledged;
+    if (admitted.acknowledged === true) return { acknowledged: true, sequence };
+    // Admitted, then failed within the admission wait: the sequence is spent, as for a drain that fails later.
+    if (admitted.failed === true) throw new WindowsJobInputUnacknowledgedError(`Windows Job input failed: ${admitted.error ?? "unknown"}`);
+    // The drain is waited for outside the fence, so a reader still starting never holds stop, output reads or
+    // output acknowledgements; each poll re-reads the owned record first.
+    await waitForAdmittedInput({ sequence, timeoutMs, elapsed, ...(signal ? { signal } : {}), observe: async (sliceMs) => {
+      const current = this.ownedRecord(processId, owner); this.assertActive(current);
+      return await supervisorRequest<{ sequence: number; state: string; error?: string }>(current.supervisor,
+        `/input-status?sequence=${sequence}&timeoutMs=${sliceMs}`, "GET", undefined, sliceMs + this.controlDeadlineMs + 250, signal);
+    } });
+    return { acknowledged: true, sequence };
   }
 
   async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
@@ -2277,7 +2322,7 @@ export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord
   return await supervisorRequest<SupervisorStatus>(supervisor, query, "GET", undefined, bounded + 250);
 }
 
-async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = SUPERVISOR_REQUEST_TIMEOUT_MS + 250): Promise<T> {
+async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = SUPERVISOR_REQUEST_TIMEOUT_MS + 250, signal?: AbortSignal): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {
     let settled = false;
@@ -2297,12 +2342,17 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
       response.once("end", () => {
         if (settled) return;
         const text = Buffer.concat(chunks).toString("utf8");
-        if (response.statusCode !== 200) { fail(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; }
+        if (response.statusCode !== 200) { fail(new SupervisorHttpError(response.statusCode, `Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; }
         try { const parsed = JSON.parse(text) as T; settled = true; resolvePromise(parsed); } catch (error) { fail(error); }
       });
     });
     const cancelDeadline = runnerTimeDeadline(timeoutMs, () => { if (!settled) call.destroy(new Error("Supervisor request timed out.")); });
     call.once("close", cancelDeadline);
+    // Only observation requests take a signal; a fenced effect's request is never cancelled mid-flight.
+    if (signal) {
+      const abort = () => { if (!settled) call.destroy(new Error("Supervisor request was abandoned: the session is stopping.")); };
+      if (signal.aborted) abort(); else { signal.addEventListener("abort", abort, { once: true }); call.once("close", () => signal.removeEventListener("abort", abort)); }
+    }
     call.once("error", fail);
     if (payload) call.write(payload);
     call.end();
@@ -2319,6 +2369,58 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
  * expiry waits one I/O turn so an already-received reply settles first.
  */
 const SUPERVISOR_DEADLINE_TICK_MS = 100;
+/**
+ * Stdin admission waits this long for the write to settle before replying `pending`. A write the pipe has room for
+ * settles at once (a whole managed write, with every round trip, measured 31-260 ms on a Windows PC), so the common
+ * case stays one fenced round trip. A poll setting, not a limit: a pending write is then waited for outside the fence.
+ */
+const INPUT_ADMISSION_ACK_WAIT_MS = 250;
+/** One /input-status park: it returns the moment the write settles; between parks the record's ownership is re-read. */
+const INPUT_DRAIN_POLL_MS = 1_000;
+/**
+ * Elapsed Runner time for a wait loop, like runnerTimeDeadline: each step credits at most `maxStepMs` (the longest
+ * one step's request can legitimately take), so a suspended Runner's resume never spends a write's whole bound at once.
+ */
+/**
+ * The drain wait for one admitted write. It observes only that write's outcome, in whole-millisecond slices of at most
+ * INPUT_DRAIN_POLL_MS (the supervisor parks only for an integer wait), and ends at the first of: acknowledged; failed
+ * (the reader closed its stdin or exited, or the tree was stopped); an invalid reply; `observe` throwing (the record
+ * released or not owned, the supervisor gone); `timeoutMs` spent; or `signal` (the session is stopping, or the caller
+ * cancelled). Every ending other than acknowledged throws WindowsJobInputUnacknowledgedError, never a guess.
+ */
+export async function waitForAdmittedInput(options: {
+  readonly sequence: number;
+  readonly timeoutMs: number;
+  readonly elapsed: () => number;
+  readonly signal?: AbortSignal;
+  readonly observe: (sliceMs: number) => Promise<{ sequence: number; state: string; error?: string }>;
+}): Promise<void> {
+  const { sequence, timeoutMs, elapsed, signal, observe } = options;
+  try {
+    for (;;) {
+      const remaining = timeoutMs - elapsed();
+      if (remaining <= 0) throw new Error(`Windows Job input was not drained by the reader within ${timeoutMs} ms.`);
+      if (signal?.aborted) throw new Error("Windows Job input was not drained before its wait was abandoned (stop or cancellation).");
+      // A fractional remainder (the clock is performance.now()) is rounded up: the supervisor would answer it at once.
+      const observed = await observe(Math.max(1, Math.ceil(Math.min(INPUT_DRAIN_POLL_MS, remaining))));
+      if (observed.sequence !== sequence) throw new Error("Windows Job input acknowledgement is invalid.");
+      if (observed.state === "acknowledged") return;
+      if (observed.state === "failed") throw new Error(`Windows Job input failed: ${observed.error ?? "unknown"}`);
+      if (observed.state !== "pending") throw new Error("Windows Job input acknowledgement is invalid.");
+    }
+  } catch (error) {
+    throw new WindowsJobInputUnacknowledgedError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function elapsedClock(maxStepMs: number): () => number {
+  let elapsed = 0, last = performance.now();
+  return () => {
+    const now = performance.now();
+    elapsed += Math.min(now - last, maxStepMs); last = now;
+    return elapsed;
+  };
+}
 function runnerTimeDeadline(timeoutMs: number, expire: () => void): () => void {
   let elapsed = 0, last = performance.now(), cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined, turn: ReturnType<typeof setImmediate> | undefined;
