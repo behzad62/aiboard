@@ -151,6 +151,8 @@ export interface WindowsJobProcessHostOptions {
   readonly helperFallbackWarningKey?: string;
   /** Record files one maintenance scan (the startup scan, each run-end spare sweep) reads at most. Default 512. */
   readonly maxRecordScan?: number;
+  /** Retention: how long a pass waits for a released record's supervisor to exit before it deletes the record's folder. Test seam; default 15 s. */
+  readonly retentionSupervisorExitMs?: number;
 }
 
 /**
@@ -159,6 +161,16 @@ export interface WindowsJobProcessHostOptions {
  * where the last stopped, so no startup or run end reads it whole. Reading one record costs well under a millisecond.
  */
 const DEFAULT_RECORD_SCAN_LIMIT = 512;
+/**
+ * Retention: how long a pass waits for a released record's supervisor to exit before deleting its folder. A released
+ * process's supervisor reports the stop, then exits, holding its output logs until it does (the Job host opens them
+ * without delete sharing). This is the measured basis of CW3's transient supervisor wait (execution-host.ts,
+ * TRANSIENT_SUPERVISOR_EXIT_CEILING_MS): on an idle Windows PC every supervisor had already exited when the wait began,
+ * and GitHub's Windows image was about 3 times slower. The wait polls every 25 ms and ends as soon as it is gone; at
+ * the ceiling the record stays marked, and a later sweep finishes it once the supervisor is gone.
+ */
+const DEFAULT_RETENTION_SUPERVISOR_EXIT_MS = 15_000;
+const RETENTION_SUPERVISOR_POLL_MS = 25;
 
 export interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
 /** PX-2c: options for the pre-started spare pair. */
@@ -692,6 +704,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private recordScanCursor: string | undefined;
   /** Startup crash recovery still running in the background for records past the constructor's bounded slice. */
   private startupRecovery: Promise<void> | undefined;
+  private readonly retentionSupervisorExitMs: number;
+  /** Retention: process ids a pass is working on now; a second pass on the same id keeps it instead of racing. */
+  private readonly retentionInFlight = new Set<string>();
+  /** Spare process ids this host started, by run: a run-end sweep always reaches its own, whatever its window. */
+  private readonly startedSpares = new Map<string, Set<string>>();
 
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
@@ -714,6 +731,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.spareOptions = options.spare ?? {};
     this.recordScanLimit = options.maxRecordScan ?? DEFAULT_RECORD_SCAN_LIMIT;
     if (!Number.isSafeInteger(this.recordScanLimit) || this.recordScanLimit < 1) throw new Error("Windows Job record scan limit must be positive.");
+    this.retentionSupervisorExitMs = options.retentionSupervisorExitMs ?? DEFAULT_RETENTION_SUPERVISOR_EXIT_MS;
+    if (!Number.isSafeInteger(this.retentionSupervisorExitMs) || this.retentionSupervisorExitMs < 0) throw new Error("Windows Job retention supervisor wait must not be negative.");
     mkdirSync(this.stateDirectory, { recursive: true });
     // Bounded startup: the constructor reads at most recordScanLimit records, as before every record of a smaller
     // directory. The rest of a larger one gets the same crash recovery in bounded background batches, so no previous
@@ -734,8 +753,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // (spareClaimInFlight) through retireVerifiedClaimWindowTree, which accepts
     // the expected claimed proof, retires the whole tree, and keeps the record.
     for (const value of [...this.records.values()]) this.recoverPreviousSpare(value);
+    // Records a retention pass marked and could not finish (its process may have been the previous Runner) are
+    // finished in the background, once the supervisor has gone, with the records past the slice.
+    const marked = [...this.records.values()].filter((value) => value.retentionRemovingAt !== undefined);
     const rest = names.slice(this.recordScanLimit);
-    if (rest.length > 0) this.startupRecovery = this.recoverRemainingStartupRecords(rest);
+    if (rest.length > 0 || marked.length > 0) this.startupRecovery = this.recoverRemainingStartupRecords(rest, marked);
   }
 
   /** One record file as the startup scan reads it; an invalid name or unreadable JSON throws, as it always has. */
@@ -776,21 +798,32 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
 
   /**
    * The startup crash recovery for the records past the constructor's bounded slice, recordScanLimit at a time with
-   * the event loop free between batches. These records are only recovered, not cached: call records are read from
-   * disk when used. A record file that cannot be read is skipped, as a run-end sweep skips it: only the
-   * constructor's own slice still refuses startup on one, since a background batch has no caller to refuse.
-   * Never throws.
+   * the event loop free between batches, and the finishing of records a retention pass marked. Records past the slice
+   * are only recovered, not cached: call records are read from disk when used. A record file that cannot be read is
+   * skipped, as a run-end sweep skips it (only the constructor's own slice still refuses startup on one, since a
+   * background batch has no caller to refuse); the skipped ones are named once in a warning. Never throws.
    */
-  private async recoverRemainingStartupRecords(names: readonly string[]): Promise<void> {
+  private async recoverRemainingStartupRecords(names: readonly string[], marked: readonly HostRecord[]): Promise<void> {
+    const skipped: string[] = [];
+    for (const value of marked) await this.finishMarkedRecord(value).catch(() => undefined);
     for (let index = 0; index < names.length; index += this.recordScanLimit) {
       await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
       for (const name of names.slice(index, index + this.recordScanLimit)) {
-        try {
-          const value = this.readStartupRecord(name);
-          if (value) this.recoverPreviousSpare(value);
-        } catch {}
+        let value: HostRecord | null;
+        try { value = this.readStartupRecord(name); }
+        catch { skipped.push(name); continue; }
+        if (!value) continue;
+        try { this.recoverPreviousSpare(value); } catch {}
+        if (value.retentionRemovingAt !== undefined) await this.finishMarkedRecord(value).catch(() => undefined);
       }
     }
+    if (skipped.length > 0)
+      console.warn(`[runner-windows-job-v1] ${skipped.length} unreadable Job record file(s) in ${this.stateDirectory} were skipped at startup: ${skipped.slice(0, 8).join(", ")}${skipped.length > 8 ? ", ..." : ""}`);
+  }
+
+  /** Finishes a record a retention pass marked, only once its supervisor is gone; never waits for it. */
+  private async finishMarkedRecord(value: HostRecord): Promise<void> {
+    await this.retireReleasedRecord({ processId: value.processId, sessionId: value.sessionId, startedAt: value.startedAt }, value.runId, 0);
   }
 
   async launchOwned(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot> {
@@ -1028,6 +1061,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // No disconnect/unref: the IPC channel stays open for the single claim,
     // and its break retires the spare when the owning runner dies.
     this.spareEntries.set(owner.runId, { launcher, token, processId, owner: { runId: owner.runId, sessionId: owner.sessionId } });
+    const started = this.startedSpares.get(owner.runId) ?? new Set<string>();
+    started.add(processId); this.startedSpares.set(owner.runId, started);
     this.spareCounts.prestarts += 1;
     return { processId, supervisorPid };
   }
@@ -1265,16 +1300,25 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     } catch {
       return;
     }
+    // The bounded window may miss a spare this host started; the closing run's own (or, with no run, every one this
+    // host started) are always swept, whatever the window.
+    const ownRuns = closingRun ? [closingRun.runId] : [...this.startedSpares.keys()];
+    const own = ownRuns.flatMap((runId) => [...(this.startedSpares.get(runId) ?? [])].map((processId) => `${processId}.json`));
+    names = [...new Set([...names, ...own])];
     for (const name of names) {
       try {
         const processId = name.slice(0, -".json".length);
         this.assertProcessId(processId);
-        const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
+        let text: string;
+        try { text = readFileSync(join(this.stateDirectory, name), "utf8"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") this.forgetStartedSpare(processId); throw error; }
+        const value = JSON.parse(text) as Partial<HostRecord>;
         // Retention: a released record whose deletion an earlier pass began (it carries the mark) and could not
-        // finish, a folder held open for a moment say, is finished here. The mark is written only after the stop
-        // proof, and the pass re-checks identity, tombstone and stopped status before it deletes anything.
+        // finish, a supervisor still holding its folder say, is finished here once that supervisor is gone. The mark
+        // is written only after the stop proof, and the pass re-checks identity, tombstone and stopped status.
         if (isHostRecord(value) && value.retentionRemovingAt !== undefined) {
-          await this.retireReleasedRecord({ processId: value.processId, sessionId: value.sessionId, startedAt: value.startedAt }, value.runId);
+          this.assertEmbeddedProcessId(processId, value);
+          await this.finishMarkedRecord(value);
           continue;
         }
         if (!isHostRecord(value) || value.spare !== true || value.spareClaimed === true) continue;
@@ -1289,7 +1333,16 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         await killVerifiedSpareSupervisor(value, readSupervisorStatus(value.supervisor.statusPath), SPARE_REAP_VERIFY_TIMEOUT_MS).catch(() => undefined);
         this.removeSpareFiles(processId);
         this.records.delete(processId);
+        if (!existsSync(this.containedProcessPath(processId, ".json"))) this.forgetStartedSpare(processId);
       } catch {}
+    }
+  }
+
+  /** Drops a spare id this host started once its record is gone. */
+  private forgetStartedSpare(processId: string): void {
+    for (const [runId, ids] of this.startedSpares) {
+      if (!ids.delete(processId)) continue;
+      if (ids.size === 0) this.startedSpares.delete(runId);
     }
   }
 
@@ -1339,8 +1392,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
    * durably, and the folder goes before the record, so a pass that stops part way leaves a marked record that the next
    * run-end sweep reaching it finishes. Every deleted path derives from the validated process id, never from a path the record holds.
    */
-  private async retireReleasedRecord(named: WindowsJobReleasedRecord, runId: string): Promise<"deleted" | "absent" | "kept"> {
+  private async retireReleasedRecord(named: WindowsJobReleasedRecord, runId: string, supervisorExitMs = this.retentionSupervisorExitMs): Promise<"deleted" | "absent" | "kept"> {
     const processId = named.processId;
+    // One pass per record at a time: a second pass (a re-bound run closing while the first still runs) keeps it.
+    if (this.retentionInFlight.has(processId)) return "kept";
+    this.retentionInFlight.add(processId);
     try {
       const candidate = this.readRecord(processId);
       if (!candidate) {
@@ -1356,12 +1412,17 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         const marked: HostRecord = { ...candidate, retentionRemovingAt: this.clock() };
         await this.persist(marked, { afterRename: () => { this.records.set(processId, marked); } });
       }
+      // The supervisor holds the output logs until it exits. Still alive at the ceiling (or a reused PID): the record
+      // stays marked, and a later sweep finishes it. No process is ever signalled here; the PID only gates deletion.
+      if (!(await supervisorExited(candidate.supervisor.supervisorPid, supervisorExitMs))) return "kept";
       removeRetiredProcessFolder(this.containedProcessPath(processId, ""));
       rmSync(this.containedProcessPath(processId, ".json"), { force: true });
       this.records.delete(processId);
       return "deleted";
     } catch {
       return "kept";
+    } finally {
+      this.retentionInFlight.delete(processId);
     }
   }
 
@@ -1379,7 +1440,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (!current.backendOwnershipReleasedAt || current.status !== "stopped")
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is not released.`);
     if (!proveStop) {
-      if (!current.retentionRemovingAt) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} lost its retention mark.`);
+      if (current.retentionRemovingAt === undefined) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} lost its retention mark.`);
       return;
     }
     const status = readSupervisorStatus(current.supervisor.statusPath);
@@ -2337,6 +2398,16 @@ async function retireVerifiedClaimWindowTree(record: HostRecord, durable: Superv
 }
 
 /** CW3: whether `pid` names a live process (EPERM: alive, not ours to signal). */
+/** Retention: whether a supervisor PID is gone, polling until it is or the wait ends. A PID never set (0) is gone. */
+async function supervisorExited(pid: number, waitMs: number): Promise<boolean> {
+  if (!(pid > 0)) return true;
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (!processIsAlive(pid)) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolveWait) => setTimeout(resolveWait, RETENTION_SUPERVISOR_POLL_MS));
+  }
+}
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,8 +12,9 @@ import { windowsJobRecordOfBinding } from "../src/windows-process-backend.js";
 import type { DurableProcessStore } from "../src/durable-process-store.js";
 import type { StreamingSessionStore } from "../src/streaming-session-store.js";
 
-// Synthetic Job-host records only: no supervisor, Job or workload is ever launched. A record's supervisor is the
-// test process's own PID with no port, so nothing here can signal or contact a process.
+// Synthetic Job-host records only: no supervisor, Job or workload is ever launched. A record's supervisor is, by
+// default, the PID of a child that already exited, with no port, so nothing here can signal or contact a process.
+const exitedPid = spawnSync(process.execPath, ["-e", ""]).pid;
 const PROTOCOL = "aiboard-managed-process/v1";
 const runId = "retention-run";
 const sessionId = "retention-session";
@@ -26,6 +28,7 @@ interface SyntheticRecord {
   readonly spare?: "unclaimed" | "claimed" | "claim-window";
   readonly retentionRemovingAt?: string;
   readonly output?: string;
+  readonly supervisorPid?: number;
 }
 
 function fixture() {
@@ -41,9 +44,10 @@ function fixture() {
     writeFileSync(join(folder, "job-events.jsonl"), "{}\n");
     const supervisorStatus = input.supervisorStatus ?? (input.released === false ? "running" : "stopped");
     const stopped = supervisorStatus.startsWith("stopped");
+    const supervisorPid = input.supervisorPid ?? exitedPid;
     if (supervisorStatus !== "missing") {
       writeFileSync(statusPath, `${JSON.stringify({
-        protocol: PROTOCOL, processId, supervisorPid: process.pid, childPid: 42, port: 0,
+        protocol: PROTOCOL, processId, supervisorPid, childPid: 42, port: 0,
         status: stopped ? "stopped" : "running", exitCode: stopped ? 0 : null, signal: null, error: null,
         ownershipReleased: supervisorStatus === "stopped" || supervisorStatus === "stopped-unsettled",
         updatedAt: startedAt, retainedOutputChunks: supervisorStatus === "stopped-unsettled" ? 1 : 0,
@@ -55,7 +59,7 @@ function fixture() {
       processId, runId: input.runId ?? runId, sessionId, pid: 42, command: "synthetic-no-launch", args: [], cwd: root,
       environmentKeys: [], startedAt, updatedAt: startedAt, status: released ? "stopped" : "running",
       exitCode: released ? 0 : null, signal: null, stdoutPath, stderrPath,
-      supervisor: { protocol: PROTOCOL, token: randomBytes(32).toString("hex"), statusPath, supervisorPid: process.pid, port: 0 },
+      supervisor: { protocol: PROTOCOL, token: randomBytes(32).toString("hex"), statusPath, supervisorPid, port: 0 },
       interactive: true, nextInputSequence: 1, inputClosed: false,
       outputOffsets: { stdout: Buffer.byteLength(output), stderr: 0 }, outputSequences: { stdout: 1, stderr: 0 },
       ...(released ? { backendOwnershipReleasedAt: startedAt } : {}),
@@ -68,7 +72,7 @@ function fixture() {
   };
   const named = (processId: string) => ({ processId, sessionId, startedAt });
   const present = (processId: string) => ({ record: existsSync(join(root, `${processId}.json`)), folder: existsSync(join(root, processId)) });
-  const host = (options: { maxRecordScan?: number } = {}): WindowsJobProcessHost =>
+  const host = (options: { maxRecordScan?: number; retentionSupervisorExitMs?: number } = {}): WindowsJobProcessHost =>
     createWindowsJobProcessHost({ stateDirectory: root, platform: "win32", ...options });
   return { root, write, named, present, host, close: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -130,9 +134,11 @@ test("retention deletes only records the run's owner named, with the identity it
 test("retention finishes a marked record whose earlier pass stopped after removing its status", async () => {
   const f = fixture();
   try {
+    // Built first: a record already marked at startup is finished by the startup recovery itself.
+    const host = f.host();
     f.write({ processId: "process_marked", retentionRemovingAt: startedAt });
     rmSync(join(f.root, "process_marked", "supervisor.jsonl"));
-    const result = await f.host().retireReleasedRecords!({ runId, released: [f.named("process_marked")] });
+    const result = await host.retireReleasedRecords!({ runId, released: [f.named("process_marked")] });
     assert.deepEqual(result, { deleted: 1, kept: 0 });
     assert.deepEqual(f.present("process_marked"), { record: false, folder: false });
   } finally { f.close(); }
@@ -161,15 +167,71 @@ test("retention keeps a named record file that is not a valid record", async () 
   } finally { f.close(); }
 });
 
+test("retention waits for a live supervisor, keeps the record marked, and a sweep finishes it once it is gone", async () => {
+  const f = fixture();
+  const lingering = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  try {
+    f.write({ processId: "process_lingering", supervisorPid: lingering.pid! });
+    const host = f.host({ retentionSupervisorExitMs: 100 });
+    assert.deepEqual(await host.retireReleasedRecords!({ runId, released: [f.named("process_lingering")] }), { deleted: 0, kept: 1 });
+    assert.deepEqual(f.present("process_lingering"), { record: true, folder: true }, "nothing is deleted under a live supervisor");
+    const marked = JSON.parse(readFileSync(join(f.root, "process_lingering.json"), "utf8")) as { retentionRemovingAt?: unknown };
+    assert.equal(typeof marked.retentionRemovingAt, "string", "the proven record is marked for a later pass");
+    await host.retireSpare!({ runId: "another-run" });
+    assert.deepEqual(f.present("process_lingering"), { record: true, folder: true }, "a sweep never waits for, nor deletes under, a live supervisor");
+    const exited = new Promise((resolveExit) => lingering.once("exit", resolveExit));
+    lingering.kill();
+    await exited;
+    await host.retireSpare!({ runId: "another-run" });
+    assert.deepEqual(f.present("process_lingering"), { record: false, folder: false });
+  } finally { lingering.kill(); f.close(); }
+});
+
+test("startup finishes a record a previous Runner's retention pass had marked", async () => {
+  const f = fixture();
+  try {
+    f.write({ processId: "process_marked_before_restart", retentionRemovingAt: startedAt });
+    const host = f.host();
+    await (host as unknown as { startupRecovery?: Promise<void> }).startupRecovery;
+    assert.deepEqual(f.present("process_marked_before_restart"), { record: false, folder: false });
+  } finally { f.close(); }
+});
+
+test("retention deletes a released claimed spare like any released call", async () => {
+  const f = fixture();
+  try {
+    f.write({ processId: "process_claimed_spare", spare: "claimed" });
+    assert.deepEqual(await f.host().retireReleasedRecords!({ runId, released: [f.named("process_claimed_spare")] }), { deleted: 1, kept: 0 });
+    assert.deepEqual(f.present("process_claimed_spare"), { record: false, folder: false });
+  } finally { f.close(); }
+});
+
+test("a run-end sweep always reaches the closing run's own spares, whatever its bounded window", async () => {
+  const f = fixture();
+  try {
+    const host = f.host({ maxRecordScan: 1 });
+    for (const processId of ["process_a_other", "process_b_other", "process_z_own"])
+      f.write({ processId, spare: "unclaimed", supervisorStatus: "missing", runId: processId.endsWith("own") ? runId : "other-run" });
+    // As startSpare records it: this host started process_z_own for the run.
+    (host as unknown as { startedSpares: Map<string, Set<string>> }).startedSpares.set(runId, new Set(["process_z_own"]));
+    await host.retireSpare!({ runId });
+    assert.equal(f.present("process_z_own").record, false, "the run's own spare is swept though its name is outside the window");
+    assert.equal(f.present("process_a_other").record, true);
+    assert.equal(f.present("process_b_other").record, true);
+    assert.equal((host as unknown as { startedSpares: Map<string, Set<string>> }).startedSpares.has(runId), false, "a swept spare is forgotten");
+  } finally { f.close(); }
+});
+
 test("retention keeps a record whose folder is a link, and never follows it", async () => {
   const f = fixture();
   const outside = mkdtempSync(join(tmpdir(), "job-record-retention-outside-"));
   try {
+    const host = f.host();
     f.write({ processId: "process_linked", retentionRemovingAt: startedAt });
     rmSync(join(f.root, "process_linked"), { recursive: true });
     writeFileSync(join(outside, "keep.txt"), "outside");
     symlinkSync(outside, join(f.root, "process_linked"), "junction");
-    const result = await f.host().retireReleasedRecords!({ runId, released: [f.named("process_linked")] });
+    const result = await host.retireReleasedRecords!({ runId, released: [f.named("process_linked")] });
     assert.deepEqual(result, { deleted: 0, kept: 1 });
     assert.equal(readFileSync(join(outside, "keep.txt"), "utf8"), "outside");
     assert.equal(existsSync(join(f.root, "process_linked.json")), true);

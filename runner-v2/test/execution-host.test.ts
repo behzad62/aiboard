@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
-import type { WindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { AuthenticatedWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { ExecutionGrantError } from "../src/execution-grants.js";
@@ -446,10 +446,20 @@ test("run binding close hands Job-host record retention its released processes o
       { method: "retireReleasedRecords", runId: "run-job-record-retention", released: 0 },
     ]);
     // A transient run has its own private Job host, removed whole after its proven stop: the shared host's
-    // retention is never asked about it, and none runs on the private host either.
-    const transient = await host.bindRun({ ...runBinding("run-job-record-retention-transient", "a"), transient: true });
-    await transient.close();
+    // retention is never asked about it, and none runs on the private host either (every real host is watched).
+    const privateCalls: string[] = [];
+    const prototype = AuthenticatedWindowsJobProcessHost.prototype;
+    const original = prototype.retireReleasedRecords;
+    prototype.retireReleasedRecords = async function (this: AuthenticatedWindowsJobProcessHost, closedRun) {
+      privateCalls.push(closedRun.runId);
+      return await original.call(this, closedRun);
+    };
+    try {
+      const transient = await host.bindRun({ ...runBinding("run-job-record-retention-transient", "a"), transient: true });
+      await transient.close();
+    } finally { prototype.retireReleasedRecords = original; }
     assert.equal(calls.some((call) => call.runId === "run-job-record-retention-transient"), false);
+    assert.deepEqual(privateCalls, [], "no retention runs on a transient run's private Job host");
     await host.close();
   } finally {
     await host.close().catch(() => undefined);

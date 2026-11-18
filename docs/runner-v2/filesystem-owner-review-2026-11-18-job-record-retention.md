@@ -17,3 +17,10 @@ The constructor's bounded slice still refuses startup on a record file it cannot
 Records written before this change: only a later settled close of the same run names them, so on an existing install they stay until then (a run that never closes again keeps them). Every startup still recovers them, now past the first slice in the background. A one-time cleanup of them would need its own proof that nothing owns them and is out of scope here.
 
 Private Job hosts (CW3): a transient run (`<state>/transient-runs/<runId>/job-host`) and a historical Git inspection each get their own Job host, whose whole folder is removed after the binding's proven close. Retention never runs for those bindings (`jobRecordRetention` is passed only for the shared host): their removal already covers the records, and the transient release's `awaitSupervisorsExited` finds supervisors through that host's in-memory records, which retention would otherwise drop. Their scans are trivially bounded: each private host starts on a new, empty folder and has no spares.
+
+Second review round (after merging main with CW3):
+- Before deleting a folder, a pass waits for that record's supervisor PID to exit: it polls every 25 ms, up to 15 s, the measured basis of CW3's transient supervisor wait. The PID only gates deletion; nothing is ever signalled. A supervisor still alive at the ceiling (or a reused PID) leaves the record marked. A sweep or startup recovery finishes marked records only once the supervisor is gone, and never waits for it.
+- Startup recovery also finishes records a previous Runner's retention pass marked.
+- A run-end sweep always includes the spares this host started for the closing run, whatever its window.
+- Only one retention pass works on a process id at a time; a second keeps it.
+- Unreadable record files skipped by the background startup batches are named once in a warning.
