@@ -1129,6 +1129,24 @@ test("CW5 §3.7: the same attempt run again finds the worktree its CLI left deta
   }
 });
 
+test("CW8: a CLI attempt that throws after its browser session started has that browser checked at its stop", async (t) => {
+  const fixture = await cliDriverFixture(t, "browser-throw");
+  // An uncoded launch failure: the CLI branch throws, and only the driver's own stop runs after it.
+  fixture.launcher.startError = new Error("The CLI could not be launched.");
+  let browser: "escaped" | "exited" = "escaped";
+  const driver = fixture.driver({ browser: {
+    start: async () => ({ status: "started", note: "A browser is running for this task." }),
+    checkAfterStop: async () => browser,
+  } });
+  const outcome = await driver.run(fixture.assignment);
+  assert.equal(outcome.type, "stop_unproven", JSON.stringify(outcome));
+  assert.match((outcome as { reason: string }).reason, /The CLI worker's stop is not proven: the browser the CLI's session ran is still running/);
+  assert.deepEqual((outcome as { outcome: unknown }).outcome, { type: "failed", reason: "The CLI could not be launched." });
+  // Its browser gone, the same failure stands as thrown.
+  browser = "exited";
+  await assert.rejects(driver.run(fixture.assignment), /The CLI could not be launched/);
+});
+
 test("CW5: case 1 fails the attempt and leaves the CLI's health untouched", async (t) => {
   const fixture = await cliDriverFixture(t, "case1");
   const before = fixture.health.snapshot();

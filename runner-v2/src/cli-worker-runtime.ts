@@ -77,6 +77,7 @@ import type { SettledWorkerOutcome } from "./task-scheduler.js";
 import type { ValidationScope } from "./validation-scope.js";
 import { requestArchitectGuidance, requestTaskReplan } from "./worker-lifecycle-tools.js";
 import { submitWorkerTask, type WorkerSubmissionContext } from "./worker-runtime.js";
+import { isPlaywrightCliCheck } from "./cli-worker-browser.js";
 import { ForeignHistoryError, type ProjectFolderState, type TaskWorkspace, type WorkspaceManager } from "./workspace-manager.js";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -142,9 +143,12 @@ export interface CliWorkerHostFacts {
   jobContainment?: ProcessHostSemanticFact;
 }
 
-/** CW8: the owner's Playwright CLI session, started before the CLI. CW5 records what it reports. */
+/**
+ * CW8: the owner's Playwright CLI session (§3.10), started before the CLI in the task's worktree, and again for the
+ * Runner's re-runs of the CLI's browser checks; production is cli-worker-browser.ts. It stops with the owner.
+ */
 export interface CliBrowserSessions {
-  start?(owner: CliWorkerOwner, signal?: AbortSignal): Promise<
+  start?(owner: CliWorkerOwner, input: { workspacePath: string; signal?: AbortSignal }): Promise<
     | { status: "started"; note: string }
     | { status: "none"; note?: string }
     | { status: "start_failed"; reason: string }
@@ -401,6 +405,16 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   let resultDigest: string;
   try {
     const browser = await startBrowser(deps.browser, input);
+    // CW8: before the CLI starts, a session start that failed (case 3) leaves nothing running, and a cancel during the
+    // start stops the session; either stop is proven like any other (§3.11 case 2 when it is not).
+    if (browser.record?.status === "start_failed" || (browser.record?.status === "started" && input.signal?.aborted)) {
+      const settled = await settleBeforeLaunch(deps, input, browser.record.status === "start_failed"
+        ? undefined : { type: "paused", reason: "worker_cancelled" });
+      if (settled) {
+        keepOwner = settled.type === "stop_unproven";
+        return settled;
+      }
+    }
     const prompt = buildCliWorkerPrompt({ taskContext: input.contextText, ...(browser.note ? { browserNote: browser.note } : {}) });
     let handle: CliProcessHandle;
     try {
@@ -412,8 +426,13 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
         keepOwner = isProcessStopUnprovenError(error);
         throw error;
       }
-      // The managed start proved its own cleanup: nothing of this launch runs.
-      return launchUnproven(deps.schedulerStore, input.runId, code);
+      // The managed start proved its own cleanup: nothing of this launch runs. The browser session started for it stops
+      // with the owner first (CW8).
+      const refused = launchUnproven(deps.schedulerStore, input.runId, code);
+      if (browser.record?.status !== "started" || refused.type !== "settled") return refused;
+      const settled = (await settleBeforeLaunch(deps, input, refused.outcome))!;
+      keepOwner = settled.type === "stop_unproven";
+      return settled;
     }
     try {
       const run = await waitForRun(deps, input, handle, adapter.createStreamReader(), adapter.resultDelivery,
@@ -671,15 +690,72 @@ async function startBrowser(sessions: CliBrowserSessions | undefined, input: Cli
   // §3.11 case 3: a session that does not start is recorded; the CLI runs without a browser and the run never pauses.
   let started: Awaited<ReturnType<NonNullable<CliBrowserSessions["start"]>>>;
   try {
-    started = await sessions.start(input.owner, input.signal);
+    started = await sessions.start(input.owner, { workspacePath: input.workspace.path, ...(input.signal ? { signal: input.signal } : {}) });
   } catch (error) {
     started = { status: "start_failed", reason: errorMessage(error) };
   }
   if (started.status === "started") return { note: started.note, record: { status: "started" } };
   if (started.status === "none") return { ...(started.note ? { note: started.note } : {}), record: { status: "none" } };
   return {
-    note: "No browser is running for this task: the Runner could not start its Playwright CLI session, so browser checks are not run.",
+    note: "No browser is running for this task: the Runner could not start its Playwright CLI session, so browser checks are not run. Do not browse or start a session yourself; put any browser check in notRun with that reason.",
     record: { status: "start_failed", reason: boundedRecordText(started.reason, 300) },
+  };
+}
+
+/**
+ * CW8: proves the owner's stop before any CLI is launched: after a browser session start that failed (case 3), a
+ * cancel during the start, or a launch the Runner refused after the session started. Undefined when the stop is proven
+ * and there is no outcome to settle; otherwise the outcome, or `stop_unproven` keeping it when the stop is not proven
+ * (§3.11 case 2: no CLI ran, so there is nothing to collect).
+ */
+async function settleBeforeLaunch(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, outcome: SettledWorkerOutcome | undefined):
+  Promise<CliWorkerAttemptResult | undefined> {
+  const stopFailure = await proveCliStop(deps, input.owner);
+  if (stopFailure) {
+    return {
+      type: "stop_unproven",
+      reason: `${CLI_WORKER_DISPLAY_NAMES[input.config.providerId]} was not started; the stop of the Playwright CLI session the Runner started for it is not proven: ${stopFailure}`,
+      outcome: outcome ?? { type: "failed", reason: "process_stop_unproven" },
+    };
+  }
+  return outcome ? { type: "settled", outcome } : undefined;
+}
+
+type CliRerunResult = Awaited<ReturnType<CliCheckRerunner>>;
+
+/**
+ * CW8: the Runner's re-runs of the CLI's checks (CW6's seam). When the CLI ran with a browser and reported a
+ * `playwright-cli` check, the owner's session is started again for the re-runs (the CLI's own session stopped with
+ * the CLI) and stopped, proven, before anything is submitted. A session that does not start makes the re-runs run
+ * without a browser, so its browser checks are not run (case 3).
+ */
+async function rerunReportedChecks(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, file: CliRunResultFile, result: CliWorkerResultV1):
+  Promise<{ reruns: CliRerunResult; concern?: string } | { stopUnproven: string }> {
+  if (!deps.rerunChecks) return { reruns: { criterionEvidenceLinks: [], notRun: [] } };
+  const browsing = file.browser?.status === "started" && result.checks.some(isPlaywrightCliCheck);
+  const session = browsing ? (await startBrowser(deps.browser, input)).record : undefined;
+  let reruns: CliRerunResult | undefined;
+  let failure: { error: unknown } | undefined;
+  try {
+    reruns = await deps.rerunChecks({
+      owner: input.owner, workspace: input.workspace, taskId: input.taskId, attempt: input.attempt, result,
+      browserUnavailable: browsing ? session?.status !== "started" : file.browser?.status !== "started",
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  } catch (error) {
+    failure = { error };
+  }
+  // The session's stop is proven whatever the re-runs did; an unproven stop wins over their result or error.
+  if (session && session.status !== "none") {
+    const stopFailure = await proveCliStop(deps, input.owner);
+    if (stopFailure) return { stopUnproven: stopFailure };
+  }
+  if (failure) throw failure.error;
+  return {
+    reruns: reruns!,
+    ...(session?.status === "start_failed"
+      ? { concern: `The Runner could not start the Playwright CLI session for its re-runs, so the browser checks were not re-run: ${session.reason ?? "no reason recorded"}` }
+      : {}),
   };
 }
 
@@ -970,14 +1046,18 @@ async function submitCliResult(
   clock: () => string,
 ): Promise<CliWorkerAttemptResult> {
   const name = CLI_WORKER_DISPLAY_NAMES[file.providerId];
-  const reruns = deps.rerunChecks
-    ? await deps.rerunChecks({
-      owner: input.owner, workspace: input.workspace, taskId: input.taskId, attempt: input.attempt, result,
-      browserUnavailable: file.browser?.status !== "started", ...(input.signal ? { signal: input.signal } : {}),
-    })
-    : { criterionEvidenceLinks: [], notRun: [] };
+  const rerun = await rerunReportedChecks(deps, input, file, result);
+  if ("stopUnproven" in rerun) {
+    return {
+      type: "stop_unproven",
+      reason: `the Runner re-ran ${name}'s browser checks in a Playwright CLI session; the stop of that session is not proven: ${rerun.stopUnproven}`,
+      outcome: { type: "failed", reason: "process_stop_unproven" },
+    };
+  }
+  const reruns = rerun.reruns;
   const concerns = [
     ...(result.concerns ?? []).map((concern) => `${name} reported: ${concern}`),
+    ...(rerun.concern ? [rerun.concern] : []),
     ...(facts.restoredProjectDocs.length
       ? [`${name} changed docs/project, which belongs to the Architect; the Runner restored it from the baseline: ${facts.restoredProjectDocs.join(", ")}`]
       : []),

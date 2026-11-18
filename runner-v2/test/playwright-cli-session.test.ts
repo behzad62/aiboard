@@ -42,6 +42,7 @@ import {
   resolvePlaywrightCliInstall,
   type PlaywrightCliBrowser,
   type PosixProcessTable,
+  playwrightCliSkillPath,
 } from "../src/playwright-cli.js";
 import { refusalFor, rewriteNotOpen, sanitizeCliEnvironment } from "../src/playwright-cli-guard.mjs";
 import type { PosixProcessIdentityInspection } from "../src/portable-process-posix-control.mjs";
@@ -49,6 +50,18 @@ import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { loadPlaywrightRegistry } from "../src/verification-inventory.js";
+import { createManagedCliBrowserSessions } from "../src/cli-worker-browser.js";
+import { runCliWorkerAttempt } from "../src/cli-worker-runtime.js";
+import type { ExecutionGrantAuthority } from "../src/execution-grants.js";
+import {
+  OWNER as CLI_OWNER,
+  RUN as CLI_RUN,
+  SESSION as CLI_SESSION,
+  TASK as CLI_TASK,
+  claudeStream as cliClaudeStream,
+  done as cliDone,
+  harness as cliHarness,
+} from "./support/cli-worker-runtime-harness.js";
 
 const WINDOWS = process.platform === "win32";
 const execFileAsync = promisify(execFile);
@@ -922,4 +935,60 @@ test("CW5: checkOwnerBrowsers reads the owner folder afresh after a stop: a know
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
+});
+
+test("CW8: a CLI worker's browser that outlives its owner's stop, or cannot be read, is case 2: nothing is submitted until checkOwnerBrowsers proves it gone", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async (t) => {
+  const h = await cliHarness(t, "pw-case2");
+  type Proc = { pid: number; pgid: number; birth: string; command: string; alive: boolean };
+  const table = new Map<number, Proc>();
+  let readable = true;
+  const processes: PosixProcessTable = {
+    inspect: (pids) => new Map<number, PosixProcessIdentityInspection>(pids.map((pid): [number, PosixProcessIdentityInspection] => {
+      if (!readable) return [pid, { state: "unknown" }];
+      const p = table.get(pid);
+      return [pid, p?.alive ? { state: "present", value: { pid, groupId: p.pgid, birth: p.birth } } : { state: "absent" }];
+    })),
+    commandLine: (pid) => (table.get(pid)?.alive ? table.get(pid)!.command : undefined),
+    groupAlive: (groupId) => [...table.values()].some((p) => p.alive && p.pgid === groupId),
+    hostname: () => "box",
+  };
+  const sessions = new PlaywrightCliSessions({ stateRoot: join(h.state, "pw"), binDirectory: join(h.state, "pw-bin"), platform: "linux", processes,
+    graceMs: 50, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) });
+  sessions.configureRun(CLI_RUN, { browser: "chromium" });
+  // The production browser sessions over the real owner-folder check. Its start is replaced by a session whose
+  // browser (Chrome, which leaves the owned group on POSIX) writes its profile into the owner's folder.
+  const managed = createManagedCliBrowserSessions({
+    managedProcesses: {} as ManagedProcessService, executionGrants: {} as ExecutionGrantAuthority, permissionProfile: "full",
+    runs: sessions, skillPath: playwrightCliSkillPath(),
+  });
+  const browser = {
+    ...managed,
+    async start() {
+      const profile = join(sessions.ownerFolder(CLI_OWNER), "tmp", "playwright_chromiumdev_profile-cw8");
+      await mkdir(profile, { recursive: true });
+      await symlink("box-900", join(profile, "SingletonLock"));
+      table.set(900, { pid: 900, pgid: 900, birth: "b900", command: `/chrome --user-data-dir=${profile}`, alive: true });
+      return { status: "started" as const, note: "A browser is running for this task." };
+    },
+  };
+  const launcher = h.launcher({ cli: "claude-code", stdout: cliClaudeStream(h, cliDone()), actions: [{ write: "value.txt", content: "two\n" }] });
+  const deps = h.deps(launcher, { rerunChecks: h.rerun, browser, platformRefusal: () => undefined, host: { platform: "linux", isRoot: false } });
+
+  // Unreadable at the stop: not known to be stopped.
+  readable = false;
+  const unknown = await runCliWorkerAttempt(deps, h.input());
+  assert.equal(unknown.type, "stop_unproven");
+  assert.match(JSON.stringify(unknown), /not known to be stopped/);
+  assert.deepEqual((unknown as { outcome: unknown }).outcome, { type: "paused", reason: `cli_collect_pending:${CLI_TASK}` });
+  // Readable, and still running: an escape, named by its PID, never signalled.
+  readable = true;
+  const escaped = await runCliWorkerAttempt(deps, h.input());
+  assert.equal(escaped.type, "stop_unproven");
+  assert.match(JSON.stringify(escaped), /still running \(PID 900\)/);
+  assert.equal(table.get(900)!.alive, true);
+  assert.notEqual((await h.sessions.load(CLI_SESSION)).status, "submitted", "nothing is submitted while it runs");
+  // Gone: the next run collects what the CLI left, without starting it again.
+  table.get(900)!.alive = false;
+  assert.equal((await runCliWorkerAttempt(deps, h.input())).type, "submitted");
+  assert.equal(launcher.starts.length, 1);
 });

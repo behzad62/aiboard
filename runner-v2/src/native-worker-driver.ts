@@ -253,6 +253,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     } catch (error) {
       stopFailures.push(error);
     }
+    // CW8 (§3.10): a CLI attempt's owner folder holds the browser of the session the Runner started for it; whatever
+    // way the attempt ended (a throw included), that browser is checked afresh after the owner's stop.
+    const cli = this.cliRuntime(this.persistedRuntimeAssignment(assignment)?.runtimeId);
+    if (cli && stopFailures.length === 0) {
+      const unproven = await proveCliStop(cli.deps, this.attemptOwner(assignment));
+      if (unproven) stopFailures.push(new Error(`The CLI worker's stop is not proven: ${unproven}`));
+    }
     const stopFailed = stopFailures.length > 0;
     const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map((failure) => errorMessage(failure)).join(" "));
     const cleanupUnproven = threw && isProcessStopUnprovenError(primary);

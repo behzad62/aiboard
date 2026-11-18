@@ -31,7 +31,7 @@ export interface FakeCliScenario {
   grandchildMs?: number;
   /** Spawn the grandchild detached; on Windows the only form that outlives the fake (fake-cli.mjs says why). */
   grandchildDetached?: boolean;
-  actions?: Array<{ write: string; content?: string } | { commit: string }>;
+  actions?: Array<{ write: string; content?: string } | { commit: string } | { run: string[] }>;
   record?: string;
   /** The record carries `AIBOARD_MCP_DEPTH`, the only environment variable the fake writes down. */
   recordMcpDepth?: boolean;
@@ -44,6 +44,8 @@ export interface FakeCliRecord {
   cwd: string;
   grandchildPid?: number;
   mcpDepth?: string | null;
+  /** The `run` actions' commands, in order, with their exit codes and output. */
+  runs?: Array<{ args: string[]; exitCode: number | null; stdout: string; stderr: string }>;
 }
 
 /** A fixture's path; scenario paths may be absolute, so tests point straight into the fixtures folder. */
