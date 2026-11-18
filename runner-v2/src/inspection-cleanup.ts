@@ -1,5 +1,7 @@
-import type { DurableProcessStore } from "./durable-process-store.js";
+import type { DurableProcessStore, DurableSubprocessRecord } from "./durable-process-store.js";
 import type { StreamingSessionStore } from "./streaming-session-store.js";
+import { windowsJobRecordOfBinding } from "./windows-process-backend.js";
+import type { WindowsJobReleasedRecord } from "./windows-job-process-host.js";
 
 /** A creator retains failed construction duties until transfer or verified cleanup. */
 export class InspectionConstructionOwner {
@@ -69,20 +71,60 @@ export function inheritedSubprocessResidue(store: DurableProcessStore): Readonly
 export function assertSubprocessCleanupSettled(
   store: DurableProcessStore,
   inherited: ReadonlyMap<string, number> = new Map(),
-): void {
+): SettledSubprocessBindings {
+  // Collected on this same pass, so Job-host record retention never reads the store a second time.
+  const cleaned: NonNullable<DurableSubprocessRecord["backendBinding"]>[] = [];
   for (const invocationId of store.listRowIds()) {
     const record = store.readByInvocation(invocationId);
     if (record && inherited.get(invocationId) === record.revision) continue;
     const noLaunch = record && !record.backendBinding &&
       (record.state === "reused" || record.state === "launch_not_proven") &&
       record.cleanup.state === "not_required";
-    const cleaned = record?.state === "cleaned" && record.cleanup.state === "verified_empty";
-    if (!record || record.pendingEffects.length || (!noLaunch && !cleaned)) {
+    const isCleaned = record?.state === "cleaned" && record.cleanup.state === "verified_empty";
+    if (!record || record.pendingEffects.length || (!noLaunch && !isCleaned)) {
       // Diagnostic only: the last transition reason carries the failure detail recorded for this state.
       const reason = record?.history?.at(-1)?.reason;
       throw new Error(`Subprocess ${invocationId} cleanup remains unverified in ${record?.state ?? "missing"}.${reason ? ` Last transition: ${reason}` : ""}`);
     }
+    if (isCleaned && record.backendBinding) cleaned.push(record.backendBinding);
   }
+  return Object.freeze({ cleaned: Object.freeze(cleaned) });
+}
+
+/** The backend bindings of the subprocesses a settled check found cleaned with verified emptiness and no pending effect. */
+export interface SettledSubprocessBindings { readonly cleaned: readonly NonNullable<DurableSubprocessRecord["backendBinding"]>[] }
+
+/**
+ * The Windows Job processes of one run that its own durable stores record as released for good, for Job-host record
+ * retention: a subprocess cleaned with verified emptiness and no pending effect, and a streaming launch or session in
+ * its final released state (a handed-off launch once its session is released). The subprocess side comes from the
+ * settled check's own pass (assertSubprocessCleanupSettled), never inherited residue it exempts. These are final states, so no recovery
+ * of the run asks the Job host about them again. Inherited residue, and anything else unsettled, is left out, so its
+ * record stays. Only bindings that name a Job record of this run count.
+ */
+export function releasedWindowsJobRecords(
+  runId: string,
+  subprocesses: SettledSubprocessBindings,
+  streaming: StreamingSessionStore,
+): WindowsJobReleasedRecord[] {
+  const released = new Map<string, WindowsJobReleasedRecord>();
+  const add = (binding: Parameters<typeof windowsJobRecordOfBinding>[0] | undefined): void => {
+    const record = binding ? windowsJobRecordOfBinding(binding) : undefined;
+    if (!record || record.runId !== runId) return;
+    released.set(record.processId, Object.freeze({ processId: record.processId, sessionId: record.sessionId, startedAt: record.startedAt }));
+  };
+  for (const binding of subprocesses.cleaned) add(binding);
+  for (const sessionId of streaming.listSessionIds()) {
+    const session = streaming.readBySession(sessionId);
+    if (session?.state === "released") add(session.backendBinding);
+  }
+  for (const launchId of streaming.listHostLaunchIds()) {
+    const launch = streaming.readHostLaunch(launchId);
+    if (launch?.state === "released" ||
+        (launch?.state === "handed_off" && streaming.readBySession(launch.sessionId)?.state === "released"))
+      add(launch.backendBinding);
+  }
+  return [...released.values()];
 }
 
 export function assertStreamingCleanupSettled(store: StreamingSessionStore): void {

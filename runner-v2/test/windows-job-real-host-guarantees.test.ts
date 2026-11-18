@@ -1459,6 +1459,47 @@ test(
   },
 );
 
+// Record retention: once a run's close settles, the shared Job host deletes the records (and raw output folders) of
+// the run's released calls. Its own host and binding, so the file's shared harness keeps its records for the gates.
+test(
+  "real-host pin: a settled run close deletes its released Job records and their raw output",
+  { timeout: 55_000 },
+  async (t) => {
+    if (!needsJob(t)) return;
+    const root = mkdtempSync(join(tmpdir(), "aiboard-px2t-retention-"));
+    const project = join(root, "project");
+    mkdirSync(project, { recursive: true });
+    initGitRepo(project);
+    const stateDir = join(root, "state");
+    mkdirSync(stateDir, { recursive: true });
+    const jobHostDir = join(stateDir, "managed-processes-job-host");
+    const host = createExecutionHost({ projectRoot: project, stateDirectory: stateDir,
+      artifacts: new ArtifactStore(join(stateDir, "artifacts")), ambientEnvironment: { ...process.env } });
+    let closed = false;
+    try {
+      const runId = `px2t-retention-${randomUUID()}`;
+      const binding = await host.bindRun({ runId, permissionProfile: "full",
+        capabilityContract: { digest: "c".repeat(64) } as RunnerCapabilityContract, capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
+      for (let call = 0; call < 2; call += 1)
+        await binding.git.lifecycle("integration").run({ cwd: project, args: ["rev-parse", "HEAD"] });
+      const released = readJobRecordDir(jobHostDir);
+      assert.ok(released.length >= 2, "each git call left a Job record while the run is open");
+      for (const record of released) {
+        const raw = JSON.parse(readFileSync(join(jobHostDir, record.file), "utf8")) as { backendOwnershipReleasedAt?: unknown };
+        assert.equal(typeof raw.backendOwnershipReleasedAt, "string", `${record.processId} is released before close`);
+        assert.ok(existsSync(join(jobHostDir, record.processId, "stdout.log")), "its raw output is still kept while the run is open");
+      }
+      await binding.close();
+      await host.close();
+      closed = true;
+      assert.deepEqual(readdirSync(jobHostDir), [], "no record, folder, lock or temporary is left after the settled close");
+    } finally {
+      if (!closed) await host.close().catch(() => undefined);
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 // PX-2e: no supervisor or Job host started by this file (temp roots
 // `aiboard-px2t-*`) may still be alive at file end. The per-test record
 // gates above stay authoritative; this process-level guard additionally
