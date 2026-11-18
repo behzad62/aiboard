@@ -12,8 +12,8 @@ import type { RunnerCapabilityContract } from "../../src/runner-capability-contr
 import { finalizeCertifiedFixture } from "../support/certified-fixture-cleanup.js";
 
 // Run only as a child by certified-fixture-retained-exit.test.ts (AIBOARD_RETAINED_EXIT_CASE picks the case). Each
-// case except fail catches its own unverified cleanup, so its tests pass: the exit keeps their verdict. fail: the
-// unverified cleanup fails its test and keeps a live handle. hold: the failed cleanup keeps a live handle. drain: it
+// case except fail catches its own unverified cleanup, yet an unverified cleanup that keeps the process alive still
+// fails the file. fail: the unverified cleanup fails its test and keeps a live handle. hold: the failed cleanup keeps a live handle. drain: it
 // keeps nothing. host: a real ExecutionHost run whose close fails (injected), so its owners keep what they hold, as
 // the never-started run on main did (run 44299442959).
 const scenario = process.env.AIBOARD_RETAINED_EXIT_CASE;
@@ -25,7 +25,8 @@ after(async () => {
   process.stdout.write("FILE_ROOT_AFTER_DONE\n");
 });
 
-test(`a fixture cleanup that stays unverified (${scenario})`, async () => {
+// Run without a case (a bare node --test over this folder, say), it skips instead of creating a temporary root.
+test(`a fixture cleanup that stays unverified (${scenario})`, { skip: !scenario }, async () => {
   const root = await mkdtemp(join(tmpdir(), `retained-exit-${scenario}-`));
   process.stdout.write(`RETAINED_ROOT=${root}\n`);
   if (scenario === "fail") {
@@ -76,7 +77,7 @@ test(`a fixture cleanup that stays unverified (${scenario})`, async () => {
 });
 
 // The exit waits for every test of the file, not only the one whose cleanup failed.
-test(`a later test still runs (${scenario})`, async () => {
+test(`a later test still runs (${scenario})`, { skip: !scenario }, async () => {
   await delay(200);
   process.stdout.write("LATER_TEST_RAN\n");
 });

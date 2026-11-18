@@ -1205,6 +1205,13 @@ test(
     }
     let victimId = "";
     try {
+      // Positive control: the untouched snapshot reads cleanly, so the failure below comes from the edit alone.
+      const clean = openKernel(copyPath, true);
+      try {
+        for (const id of clean.store.listRowIds()) assert.ok(clean.store.readByInvocation(id), `snapshot row ${id} must read`);
+      } finally {
+        clean.store.close();
+      }
       const copy = new DatabaseSync(copyPath);
       try {
         const victim = copy.prepare("SELECT invocation_id, record_json FROM durable_processes LIMIT 1").get() as {

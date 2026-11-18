@@ -15,6 +15,11 @@ export async function finalizeCertifiedFixture(input: Readonly<{
   cleanup(): Promise<void>;
   certify(): Promise<void>;
   removeRoot(): Promise<void> | void;
+  /**
+   * The test makes this cleanup fail on purpose and asserts the failure; it is then not recorded for the
+   * retained-cleanup exit below. Only for synthetic owners that hold nothing once the test is done.
+   */
+  expectUnverifiedCleanup?: boolean;
 }>): Promise<void> {
   try {
     await input.cleanup();
@@ -24,12 +29,16 @@ export async function finalizeCertifiedFixture(input: Readonly<{
       input.hasPrimaryFailure ? [input.primaryFailure, cleanupFailure] : [cleanupFailure],
       `${input.fixtureName} cleanup remains unverified; exact evidence retained at ${input.root}.`,
     );
-    noteUnverifiedCleanup(retained);
+    if (input.expectUnverifiedCleanup !== true) noteUnverifiedCleanup(retained);
     throw retained;
   }
   if (input.hasPrimaryFailure) throw input.primaryFailure;
   await input.removeRoot();
 }
+
+/** finalizeCertifiedFixture for suites that run fixture cleanup bodies with failures they inject and assert. */
+export const finalizeExpectingUnverifiedCleanup: typeof finalizeCertifiedFixture = (input) =>
+  finalizeCertifiedFixture({ ...input, expectUnverifiedCleanup: true });
 
 /**
  * Bounded end for a test file whose fixture cleanup stayed unverified.
@@ -43,10 +52,11 @@ export async function finalizeCertifiedFixture(input: Readonly<{
  * runs after the file's own (they are added when the file loads, or earlier in its root `after` phase); after it the
  * root only reports. From then on, a process that is still alive once its output has drained is ended: like a Runner
  * crash, which the durable owners are built to survive. Nothing is signalled, stopped or removed here, and the
- * evidence root stays. The exit keeps the process's own exit code: the verdict is the tests' (the test whose fixture
- * cleanup failed has already failed, with that error), never this hook's. The full nested cleanup errors are printed
- * first, because the test reporter shows only their first level. The watch is unref'd, so a process that drains by
- * itself exits as before and prints nothing.
+ * evidence root stays. The exit code is 1: a recorded cleanup is never one a test expected (those pass
+ * expectUnverifiedCleanup), and in a held process node:test never reaches its own summary, so a file run directly
+ * would otherwise exit 0 with a failed test. The full nested cleanup errors are printed first, because the test
+ * reporter shows only their first level. The watch is unref'd, so a process that drains by itself exits as before
+ * and prints nothing.
  */
 const unverifiedCleanups: AggregateError[] = [];
 /** The root reports right after its last `after` hook; this only lets those writes leave the process. */
@@ -83,7 +93,7 @@ function armRetainedCleanupExit(): void {
     }
     if ((reported && drained) || elapsed >= RETAINED_EXIT_CEILING_MS) {
       clearInterval(watch);
-      process.exit();
+      process.exit(1);
     }
   }, RETAINED_EXIT_POLL_MS);
   watch.unref();
