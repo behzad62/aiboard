@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
+import type { WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { ExecutionGrantError } from "../src/execution-grants.js";
@@ -402,6 +403,48 @@ test("run binding retains membership and retries a transient cleanup failure", a
     assert.deepEqual(host.activeRunIds(), ["run-binding-cleanup-retry"]);
     await binding.close();
     assert.deepEqual(host.activeRunIds(), []);
+    await host.close();
+  } finally {
+    await host.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+test("run binding close hands Job-host record retention its released processes only once cleanup settled", async () => {
+  const fixture = await hostFixture();
+  let remainingFaults = 1;
+  const calls: Array<{ readonly method: string; readonly runId: string; readonly released?: number }> = [];
+  // Only the run-end methods are reachable on a POSIX binding; every other Job-host method is unused here.
+  const windowsJobHost = {
+    retireSpare: async (closingRun?: { readonly runId: string }) => { calls.push({ method: "retireSpare", runId: closingRun?.runId ?? "" }); },
+    retireReleasedRecords: async (closedRun: { readonly runId: string; readonly released: readonly unknown[] }) => {
+      calls.push({ method: "retireReleasedRecords", runId: closedRun.runId, released: closedRun.released.length });
+      return { deleted: 0, kept: 0 };
+    },
+  } as unknown as WindowsJobProcessHost;
+  const host = createExecutionHost({
+    projectRoot: fixture.project,
+    stateDirectory: fixture.state,
+    artifacts: new ArtifactStore(join(fixture.state, "artifacts")),
+    platform: "posix",
+    windowsJobHost,
+    cleanupFault: async (event) => {
+      if (event.point === "before_isolation_recovery" && remainingFaults > 0) {
+        remainingFaults -= 1;
+        throw new Error("transient retention cleanup failure");
+      }
+    },
+  });
+  try {
+    const binding = await host.bindRun(runBinding("run-job-record-retention", "9"));
+    await assert.rejects(binding.close(), (error: unknown) => errorContains(error, "transient retention cleanup failure"));
+    assert.deepEqual(calls.map((call) => call.method), ["retireSpare"], "an unsettled close deletes nothing");
+    await binding.close();
+    assert.deepEqual(calls, [
+      { method: "retireSpare", runId: "run-job-record-retention" },
+      { method: "retireSpare", runId: "run-job-record-retention" },
+      { method: "retireReleasedRecords", runId: "run-job-record-retention", released: 0 },
+    ]);
     await host.close();
   } finally {
     await host.close().catch(() => undefined);

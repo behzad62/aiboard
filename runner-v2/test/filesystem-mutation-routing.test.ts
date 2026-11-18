@@ -32,7 +32,12 @@ const privateOwners = new Set([
   "runner-capability-contract.ts", "runner-internal-execution-context.ts", "runner-internal-process-kernel.ts",
   "sqlite-agent-session-store.ts", "sqlite-budget-ledger.ts", "sqlite-build-spec-store.ts", "sqlite-context-manifest-store.ts", "sqlite-event-store.ts",
   "sqlite-evidence-store.ts", "sqlite-project-memory.ts", "sqlite-scheduler-store.ts", "sqlite-tool-ledger.ts",
-  "streaming-session-store.ts", "verification-workspace.ts", "windows-job-process-host.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
+  "streaming-session-store.ts", "verification-workspace.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
+  // Reviewed again 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-job-record-retention.md): besides its
+  // records, folders and fence locks under the Job host's state directory, it now deletes a released record, its
+  // folder and its leftover fence lock once the run's own stores recorded the release and its stop is re-proven.
+  // Every target derives from a validated process id inside that directory; a link in place of a folder is refused.
+  "windows-job-process-host.ts",
   // Reviewed 2026-11-16 (PR #221): renames a caller's own temporary over the caller's destination, retrying on Windows
   // while another process holds the destination open. Its only caller is windows-job-process-host.ts (process records
   // under the Job host's state directory). It creates, opens and removes nothing itself; never a tool target.

@@ -95,6 +95,14 @@ export interface WindowsJobProcessHost {
   retireSpare?(closingRun?: { readonly runId: string }): Promise<void>;
   spareStats?(): WindowsJobSpareStats;
   /**
+   * Record retention, called once a run's close has settled. `released` names the Job processes the run's own durable
+   * stores record as released for good, so no recovery of the run asks this host about them again. Each one's record
+   * and folder (its raw output included) is deleted only when the record is that run's, carries the release tombstone,
+   * and its supervisor's durable status still proves the stop: stopped, ownership released, output settled. Anything
+   * else is kept. Also forgets the run's keepWarm retirement mark. Never throws.
+   */
+  retireReleasedRecords?(closedRun: { readonly runId: string; readonly released: readonly WindowsJobReleasedRecord[] }): Promise<WindowsJobRecordRetention>;
+  /**
    * PX-2b: event-driven settlement wait. Returns after the supervisor
    * durably persists a newer status or after timeoutMs (bounded server
    * side). Read-only: it takes no fence lock and changes no state; every
@@ -104,6 +112,10 @@ export interface WindowsJobProcessHost {
    */
   waitOwnedStatusChange?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number, sinceUpdatedAt?: string): Promise<void>;
 }
+/** A Job process a run's owner recorded as released: the identity its backend binding names. */
+export interface WindowsJobReleasedRecord { readonly processId: string; readonly sessionId: string; readonly startedAt: string }
+/** What one retention pass did: records deleted, and named records kept because something was not proven. */
+export interface WindowsJobRecordRetention { readonly deleted: number; readonly kept: number }
 export interface WindowsJobChannelState {
   readonly nextSequence: number; readonly inputClosed: boolean;
   readonly outputOffsets: { readonly stdout: number; readonly stderr: number };
@@ -125,7 +137,16 @@ export interface WindowsJobProcessHostOptions {
   /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
   readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
+  /** Record files one maintenance scan (the startup scan, each run-end spare sweep) reads at most. Default 512. */
+  readonly maxRecordScan?: number;
 }
+
+/**
+ * Record files a maintenance scan reads at most. With retention, the directory holds live records, records of runs
+ * not yet closed, and records kept because a stop was not proven; a larger directory is read across scans, each from
+ * where the last stopped, so no startup or run end reads it whole. Reading one record costs well under a millisecond.
+ */
+const DEFAULT_RECORD_SCAN_LIMIT = 512;
 
 export interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
 /** PX-2c: options for the pre-started spare pair. */
@@ -164,6 +185,11 @@ interface HostRecord extends WindowsJobOwnershipKey {
   spareClaimed?: boolean;
   spareClaimInFlight?: boolean;
   spareReapedAt?: string;
+  /**
+   * Retention: set once a released record passed every retention check, before anything of it is deleted. A later
+   * pass that finds it finishes the deletion without the stop proof, whose status file may already be gone.
+   */
+  retentionRemovingAt?: string;
 }
 interface SupervisorStatus {
   protocol: typeof PROTOCOL; processId: string; supervisorPid: number; childPid: number; port: number;
@@ -648,6 +674,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly retiredSpareRuns = new Set<string>();
   /** keepWarm: consecutive background prestart failures; at the limit this host stops keeping a spare warm. */
   private keepWarmFailures = 0;
+  private readonly recordScanLimit: number;
+  /** The last record file name a bounded maintenance scan read; the next scan starts after it. */
+  private recordScanCursor: string | undefined;
+  /** Startup crash recovery still running in the background for records past the constructor's bounded slice. */
+  private startupRecovery: Promise<void> | undefined;
 
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
@@ -667,16 +698,16 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.activeJobProbe = options.activeJobProbe;
     this.beforeFenceEffect = options.beforeFenceEffect;
     this.spareOptions = options.spare ?? {};
+    this.recordScanLimit = options.maxRecordScan ?? DEFAULT_RECORD_SCAN_LIMIT;
+    if (!Number.isSafeInteger(this.recordScanLimit) || this.recordScanLimit < 1) throw new Error("Windows Job record scan limit must be positive.");
     mkdirSync(this.stateDirectory, { recursive: true });
-    for (const name of readdirSync(this.stateDirectory)) {
-      if (!name.endsWith(".json")) continue;
-      const requestedProcessId = name.slice(0, -".json".length);
-      this.assertProcessId(requestedProcessId);
-      const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
-      if (isHostRecord(value)) {
-        this.assertEmbeddedProcessId(requestedProcessId, value);
-        this.records.set(requestedProcessId, value);
-      }
+    // Bounded startup: the constructor reads at most recordScanLimit records, as before every record of a smaller
+    // directory. The rest of a larger one gets the same crash recovery in bounded background batches, so no previous
+    // Runner's spare is left unrecovered; nothing in this Runner can use those records' process ids meanwhile.
+    const names = listRecordNames(this.stateDirectory);
+    for (const name of names.slice(0, this.recordScanLimit)) {
+      const value = this.readStartupRecord(name);
+      if (value) this.records.set(value.processId, value);
     }
     // PX-2c repair 1 (B1/L3): crash recovery. An unclaimed spare is owned
     // durably (its record survives a runner crash) but must never be adopted
@@ -688,28 +719,62 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // proof with the record's token — and pairs lost inside their claim window
     // (spareClaimInFlight) through retireVerifiedClaimWindowTree, which accepts
     // the expected claimed proof, retires the whole tree, and keeps the record.
-    for (const [processId, value] of [...this.records]) {
-      if (value.spare === true && value.spareClaimed !== true) {
-        // Snapshot the durable status BEFORE the files below are dropped: the
-        // async identity proof still needs it, and the record must be gone
-        // synchronously (S5/S6 pin the synchronous drop). N3: an unreadable
-        // status path is no proof, never a constructor throw.
-        let durable: SupervisorStatus | null = null;
+    for (const value of [...this.records.values()]) this.recoverPreviousSpare(value);
+    const rest = names.slice(this.recordScanLimit);
+    if (rest.length > 0) this.startupRecovery = this.recoverRemainingStartupRecords(rest);
+  }
+
+  /** One record file as the startup scan reads it; an invalid name or unreadable JSON throws, as it always has. */
+  private readStartupRecord(name: string): HostRecord | null {
+    const requestedProcessId = name.slice(0, -".json".length);
+    this.assertProcessId(requestedProcessId);
+    const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
+    if (!isHostRecord(value)) return null;
+    this.assertEmbeddedProcessId(requestedProcessId, value);
+    return value;
+  }
+
+  /** Startup crash recovery for one previous Runner's record: a no-op unless it is an unclaimed spare (see above). */
+  private recoverPreviousSpare(value: HostRecord): void {
+    if (value.spare !== true || value.spareClaimed === true) return;
+    const processId = value.processId;
+    // Snapshot the durable status BEFORE the files below are dropped: the
+    // async identity proof still needs it, and the record must be gone
+    // synchronously (S5/S6 pin the synchronous drop). N3: an unreadable
+    // status path is no proof, never a constructor throw.
+    let durable: SupervisorStatus | null = null;
+    try {
+      durable = readSupervisorStatus(value.supervisor.statusPath);
+    } catch {
+      durable = null;
+    }
+    this.records.delete(processId);
+    if (value.spareClaimInFlight === true) {
+      try {
+        this.persistOnce({ ...value, spareReapedAt: this.clock() });
+      } catch {}
+    } else {
+      this.removeSpareFiles(processId);
+    }
+    void killVerifiedSpareSupervisor(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS).catch(() => undefined);
+    void retireVerifiedClaimWindowTree(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS, SPARE_RETIRE_TREE_TIMEOUT_MS, this.stopDeadlineMs).catch(() => undefined);
+  }
+
+  /**
+   * The startup crash recovery for the records past the constructor's bounded slice, recordScanLimit at a time with
+   * the event loop free between batches. These records are only recovered, not cached: call records are read from
+   * disk when used. A record file that cannot be read is skipped, as a run-end sweep skips it: only the
+   * constructor's own slice still refuses startup on one, since a background batch has no caller to refuse.
+   * Never throws.
+   */
+  private async recoverRemainingStartupRecords(names: readonly string[]): Promise<void> {
+    for (let index = 0; index < names.length; index += this.recordScanLimit) {
+      await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+      for (const name of names.slice(index, index + this.recordScanLimit)) {
         try {
-          durable = readSupervisorStatus(value.supervisor.statusPath);
-        } catch {
-          durable = null;
-        }
-        this.records.delete(processId);
-        if (value.spareClaimInFlight === true) {
-          try {
-            this.persistOnce({ ...value, spareReapedAt: this.clock() });
-          } catch {}
-        } else {
-          this.removeSpareFiles(processId);
-        }
-        void killVerifiedSpareSupervisor(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS).catch(() => undefined);
-        void retireVerifiedClaimWindowTree(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS, SPARE_RETIRE_TREE_TIMEOUT_MS, this.stopDeadlineMs).catch(() => undefined);
+          const value = this.readStartupRecord(name);
+          if (value) this.recoverPreviousSpare(value);
+        } catch {}
       }
     }
   }
@@ -1165,11 +1230,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     } catch {}
   }
 
-  /** Best-effort sweep of spare records left on disk (retired or crashed). Never launches; never throws. */
+  /** Best-effort, bounded sweep of spare records left on disk (retired or crashed). Never launches; never throws. */
   private async sweepRetiredSpareRecords(closingRun?: { readonly runId: string }): Promise<void> {
     let names: string[] = [];
     try {
-      names = readdirSync(this.stateDirectory).filter((name) => name.endsWith(".json"));
+      names = this.nextRecordNames();
     } catch {
       return;
     }
@@ -1178,6 +1243,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         const processId = name.slice(0, -".json".length);
         this.assertProcessId(processId);
         const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
+        // Retention: a released record whose deletion an earlier pass began (it carries the mark) and could not
+        // finish, a folder held open for a moment say, is finished here. The mark is written only after the stop
+        // proof, and the pass re-checks identity, tombstone and stopped status before it deletes anything.
+        if (isHostRecord(value) && value.retentionRemovingAt !== undefined) {
+          await this.retireReleasedRecord({ processId: value.processId, sessionId: value.sessionId, startedAt: value.startedAt }, value.runId);
+          continue;
+        }
         if (!isHostRecord(value) || value.spare !== true || value.spareClaimed === true) continue;
         this.assertEmbeddedProcessId(processId, value);
         // PX-2c repair 1 (M3): a run end sweeps only its own spare records.
@@ -1192,6 +1264,103 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.records.delete(processId);
       } catch {}
     }
+  }
+
+  /**
+   * The record files the next maintenance scan reads: at most recordScanLimit `.json` names in name order, starting
+   * after the last name the previous scan read and wrapping round, so successive scans cover the whole directory. A
+   * directory within the limit is read whole every time. Listing names stays proportional to the directory; the limit
+   * bounds the record files read and parsed.
+   */
+  private nextRecordNames(): string[] {
+    const names = listRecordNames(this.stateDirectory);
+    if (names.length <= this.recordScanLimit) {
+      this.recordScanCursor = undefined;
+      return names;
+    }
+    const cursor = this.recordScanCursor;
+    const after = cursor === undefined ? -1 : names.findIndex((name) => name > cursor);
+    const start = after < 0 ? 0 : after;
+    const picked = [...names.slice(start), ...names.slice(0, start)].slice(0, this.recordScanLimit);
+    this.recordScanCursor = picked.at(-1);
+    return picked;
+  }
+
+  async retireReleasedRecords(closedRun: { readonly runId: string; readonly released: readonly WindowsJobReleasedRecord[] }): Promise<WindowsJobRecordRetention> {
+    let deleted = 0; let kept = 0;
+    try {
+      // keepWarm's mark keeps a refresh racing the run's retirement from starting a spare for it. The run's close has
+      // settled, so no launch of it is in flight to race; a later launch of the run clears the mark itself anyway.
+      this.retiredSpareRuns.delete(closedRun.runId);
+      const seen = new Set<string>();
+      for (const entry of closedRun.released) {
+        if (seen.has(entry.processId)) continue;
+        seen.add(entry.processId);
+        const outcome = await this.retireReleasedRecord(entry, closedRun.runId);
+        if (outcome === "deleted") deleted += 1;
+        else if (outcome === "kept") kept += 1;
+      }
+    } catch {}
+    return { deleted, kept };
+  }
+
+  /**
+   * Deletes one released record and its folder, fail closed. Before anything is deleted, the record must be the run's
+   * own with the identity its owner named, carry the release tombstone, and pass the checks a release replay makes:
+   * the supervisor's durable status is this supervisor's, stopped with ownership released and settled output. The
+   * fence lock is removed through the revoked-lock recovery, which re-checks under the lock. Then the record is marked,
+   * durably, and the folder goes before the record, so a pass that stops part way leaves a marked record that the next
+   * run-end sweep reaching it finishes. Every deleted path derives from the validated process id, never from a path the record holds.
+   */
+  private async retireReleasedRecord(named: WindowsJobReleasedRecord, runId: string): Promise<"deleted" | "absent" | "kept"> {
+    const processId = named.processId;
+    try {
+      const candidate = this.readRecord(processId);
+      if (!candidate) {
+        // A file that is there but is no valid record is kept, as anything unproven is.
+        if (existsSync(this.containedProcessPath(processId, ".json"))) return "kept";
+        this.records.delete(processId);
+        return "absent";
+      }
+      const lockPath = this.containedProcessPath(processId, ".fence.lock");
+      const proven = candidate.retentionRemovingAt !== undefined;
+      await recoverRevokedOwnedFenceLock(lockPath, { assertRevoked: () => this.assertRetainedRecordRetirable(named, runId, candidate, !proven) });
+      if (!proven) {
+        const marked: HostRecord = { ...candidate, retentionRemovingAt: this.clock() };
+        await this.persist(marked, { afterRename: () => { this.records.set(processId, marked); } });
+      }
+      removeRetiredProcessFolder(this.containedProcessPath(processId, ""));
+      rmSync(this.containedProcessPath(processId, ".json"), { force: true });
+      this.records.delete(processId);
+      return "deleted";
+    } catch {
+      return "kept";
+    }
+  }
+
+  private assertRetainedRecordRetirable(named: WindowsJobReleasedRecord, runId: string, candidate: HostRecord, proveStop: boolean): void {
+    const current = this.readRecord(named.processId);
+    if (!current) throw new WindowsJobHostError("process_not_found", `Windows Job record ${named.processId} is gone.`);
+    this.assertEmbeddedProcessId(named.processId, current);
+    if (current.runId !== runId || current.sessionId !== named.sessionId || current.startedAt !== named.startedAt ||
+        current.startedAt !== candidate.startedAt || current.supervisor.token !== candidate.supervisor.token ||
+        current.supervisor.supervisorPid !== candidate.supervisor.supervisorPid ||
+        resolve(current.supervisor.statusPath) !== resolve(candidate.supervisor.statusPath))
+      throw new WindowsJobHostError("process_identity_mismatch", `Windows Job record ${named.processId} is not the one its owner released.`);
+    if (current.spare === true && current.spareClaimed !== true)
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is an unclaimed spare.`);
+    if (!current.backendOwnershipReleasedAt || current.status !== "stopped")
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is not released.`);
+    if (!proveStop) {
+      if (!current.retentionRemovingAt) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} lost its retention mark.`);
+      return;
+    }
+    const status = readSupervisorStatus(current.supervisor.statusPath);
+    if (!status) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} has no durable supervisor status.`);
+    this.assertStatusIdentity(current, status);
+    if (status.status !== "stopped" || !status.ownershipReleased)
+      throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} stop is not proven.`);
+    this.assertJobOutputSettled(current, status);
   }
 
   async signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot> {
@@ -2167,6 +2336,25 @@ async function abortStartingSupervisor(launcher: ChildProcess, token: string, de
     launcher.on("message", onMessage); launcher.once("exit", onExit); if (!launcher.connected) finish(false); else launcher.send({ type: "abort", token }, (error) => { if (error) finish(false); });
   });
   if (!acknowledged && launcher.exitCode === null && launcher.signalCode === null) launcher.kill("SIGKILL");
+}
+/** The record file names in a Job host state directory, in name order. */
+function listRecordNames(stateDirectory: string): string[] {
+  return readdirSync(stateDirectory).filter((name) => name.endsWith(".json")).sort();
+}
+/**
+ * Retention: removes a released process's own folder (supervisor status, job events, raw stdout and stderr). Only a
+ * plain directory is removed; a link or junction in its place, or anything else, throws and the record is kept. A
+ * missing folder is already removed.
+ */
+function removeRetiredProcessFolder(folder: string): void {
+  let stat;
+  try { stat = lstatSync(folder); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Windows Job process folder is not a plain folder: ${folder}`);
+  rmSync(folder, { recursive: true, force: true });
 }
 function unreadBytes(path: string, offset: number, maximum: number): Uint8Array {
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Windows Job output offset is invalid.");
