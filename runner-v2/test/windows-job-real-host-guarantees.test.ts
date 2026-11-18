@@ -675,7 +675,8 @@ test(
         timeoutMs: 20_000,
         context: call.context,
       });
-      outcome = `${result.process.outcome}/${result.process.cleanup.state}/${result.process.cleanup.detail ?? ""}`;
+      const cleanup = result.process.cleanup;
+      outcome = `${result.process.outcome}/${cleanup.state}/${"detail" in cleanup ? cleanup.detail : ""}`;
     } catch (error) {
       outcome = `threw:${error instanceof Error ? error.message : String(error)}`;
     }
