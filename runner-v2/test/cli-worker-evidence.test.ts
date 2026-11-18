@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { describe, type TestContext } from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
@@ -36,7 +36,8 @@ import { recordValidationEvidenceSegment } from "../src/validation-budget.js";
 import { workerSubmissionContext, type WorkerSubmissionContext } from "../src/worker-runtime.js";
 import type { TaskWorkspace } from "../src/workspace-manager.js";
 import { policyGit } from "./support/cli-worker-fixture.js";
-import { fixtureGitContext, runGit } from "./support/git-fixture.js";
+import { CLI_RUNTIME_TEST_CONCURRENCY } from "./support/cli-worker-runtime-harness.js";
+import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
 
 const OWNER: CliWorkerOwner = Object.freeze({ runId: "run_e", sessionId: "worker:run_e:task_e:1", actor: Object.freeze({ role: "worker" as const, id: "worker_e" }) });
 const CRITERIA = [{ id: "value", text: "value.txt holds two." }, { id: "docs", text: "The README names the value." }];
@@ -105,7 +106,7 @@ async function repo(t: TestContext): Promise<Repo> {
   mkdirSync(path);
   mkdirSync(indexRoot);
   const git = async (...args: string[]) => {
-    const result = await runGit({ cwd: path, args });
+    const result = await runGitAsync({ cwd: path, args });
     assert.equal(result.exitCode, 0, `git ${args.join(" ")}: ${result.stderr}`);
     return result.stdout.trim();
   };
@@ -118,7 +119,7 @@ async function repo(t: TestContext): Promise<Repo> {
   const baselineRevision = await git("rev-parse", "HEAD");
   const workspace: TaskWorkspace = { runId: OWNER.runId, taskId: "task_e", workspaceId: "task_e", path, branch: "refs/heads/master", baselineRevision };
   const artifacts = new ArtifactStore(join(root, "artifacts"));
-  const capture = (cwd: string) => captureWorkingTreeIdentity(cwd, indexRoot, runGit);
+  const capture = (cwd: string) => captureWorkingTreeIdentity(cwd, indexRoot, runGitAsync);
   const r: Repo = {
     root, workspace, indexRoot, evidence, artifacts, budget,
     tree: async () => {
@@ -148,7 +149,7 @@ async function repo(t: TestContext): Promise<Repo> {
 
 /** The fixture's Git with a working-tree capture, so each record carries the tree it ran on. */
 function gitWithTrees(execution: OneShotCommandExecutor, indexRoot: string): RunGitExecutionContext {
-  return { ...fixtureGitContext("full", execution), workingTreeForCall: (_context, cwd) => captureWorkingTreeIdentity(cwd, indexRoot, runGit) };
+  return { ...asyncFixtureGitContext("full", execution), workingTreeForCall: (_context, cwd) => captureWorkingTreeIdentity(cwd, indexRoot, runGitAsync) };
 }
 
 function check(executable: string, args: string[], extra: Partial<CliWorkerCheckV1> = {}): CliWorkerCheckV1 {
@@ -166,172 +167,174 @@ async function rerun(r: Repo, rerunner: CliCheckRerunner, checks: CliWorkerCheck
   });
 }
 
-test("a reported check becomes the worker's evidence: run_evidence_command as that worker and attempt, outputs kept, source marked", async (t) => {
-  const r = await repo(t);
-  const execution = scriptedExecution([{ exitCode: 0, stdout: "ok", effect: (cwd) => writeFileSync(join(cwd, "report.png"), "png") }]);
-  // The report is ignored, so keeping it as an output changes no tracked file.
-  writeFileSync(join(r.workspace.path, ".gitignore"), "report.png\n");
-  const tree = await r.tree();
-  const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [check("node", ["--test"], { outputs: ["report.png"], criterionIds: ["value", "unknown"] })]);
-  assert.equal(execution.requests.length, 1);
-  assert.equal(execution.requests[0]!.executable, "node");
-  assert.deepEqual(execution.requests[0]!.arguments, ["--test"]);
-  assert.equal(execution.requests[0]!.freshExecution, true, "a re-run is a run of its own, never an earlier result");
-  assert.equal(execution.requests[0]!.context.actor.id, OWNER.actor.id);
-  assert.equal(execution.requests[0]!.context.sessionId, OWNER.sessionId);
-  const [record] = r.evidence.list({ runId: OWNER.runId, taskId: "task_e" });
-  assert.ok(record);
-  assert.equal(record.actor.id, OWNER.actor.id);
-  assert.equal(record.attempt, 1);
-  const fact = record.fact as CommandEvidenceFact;
-  assert.equal(fact.source, RUNNER_RERUN_OF_CLI_CLAIM);
-  assert.equal(fact.outputs?.files.length, 1);
-  assert.deepEqual(fact.workingTreeIdentity, { status: "known", treeId: tree });
-  // Only known criteria are linked, each to its passing re-run with the record's artifacts.
-  assert.deepEqual(out.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]), [["value", record.id]]);
-  assert.ok(out.criterionEvidenceLinks[0]!.artifactHashes.includes(fact.outputs!.files[0]!.artifactHash));
-  assert.equal(out.reruns?.[0]?.status, "passed");
-  assert.deepEqual(out.restoredPaths, []);
-  // The other criterion has no re-run: a gap, not a failure.
-  const gaps = cliCheckGaps(CRITERIA, out);
-  assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["docs"]);
-  assert.equal(gaps.failing.length, 0);
-});
-
-test("each re-run's timeout is the task's remaining validation budget, capped at ten minutes; a spent budget runs nothing", async (t) => {
-  const r = await repo(t);
-  const execution = scriptedExecution([]);
-  const rerunner = createCliCheckRerunner(r.options(execution, { budgetLedger: r.budget }));
-  await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 24 * 60 * 60_000 });
-  assert.equal(execution.requests[0]!.timeoutMs, CLI_RERUN_TIMEOUT_CAP_MS);
-  // 30 s of the task's 90 s budget is used: the next re-run gets 60 s, whatever its own run counts afterwards.
-  recordValidationEvidenceSegment(r.budget, {
-    runId: OWNER.runId, taskId: "task_e", sessionId: "earlier", callId: "call_1",
-    startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:30.000Z",
+describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
+  test("a reported check becomes the worker's evidence: run_evidence_command as that worker and attempt, outputs kept, source marked", async (t) => {
+    const r = await repo(t);
+    const execution = scriptedExecution([{ exitCode: 0, stdout: "ok", effect: (cwd) => writeFileSync(join(cwd, "report.png"), "png") }]);
+    // The report is ignored, so keeping it as an output changes no tracked file.
+    writeFileSync(join(r.workspace.path, ".gitignore"), "report.png\n");
+    const tree = await r.tree();
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [check("node", ["--test"], { outputs: ["report.png"], criterionIds: ["value", "unknown"] })]);
+    assert.equal(execution.requests.length, 1);
+    assert.equal(execution.requests[0]!.executable, "node");
+    assert.deepEqual(execution.requests[0]!.arguments, ["--test"]);
+    assert.equal(execution.requests[0]!.freshExecution, true, "a re-run is a run of its own, never an earlier result");
+    assert.equal(execution.requests[0]!.context.actor.id, OWNER.actor.id);
+    assert.equal(execution.requests[0]!.context.sessionId, OWNER.sessionId);
+    const [record] = r.evidence.list({ runId: OWNER.runId, taskId: "task_e" });
+    assert.ok(record);
+    assert.equal(record.actor.id, OWNER.actor.id);
+    assert.equal(record.attempt, 1);
+    const fact = record.fact as CommandEvidenceFact;
+    assert.equal(fact.source, RUNNER_RERUN_OF_CLI_CLAIM);
+    assert.equal(fact.outputs?.files.length, 1);
+    assert.deepEqual(fact.workingTreeIdentity, { status: "known", treeId: tree });
+    // Only known criteria are linked, each to its passing re-run with the record's artifacts.
+    assert.deepEqual(out.criterionEvidenceLinks.map((link) => [link.criterionId, link.evidenceId]), [["value", record.id]]);
+    assert.ok(out.criterionEvidenceLinks[0]!.artifactHashes.includes(fact.outputs!.files[0]!.artifactHash));
+    assert.equal(out.reruns?.[0]?.status, "passed");
+    assert.deepEqual(out.restoredPaths, []);
+    // The other criterion has no re-run: a gap, not a failure.
+    const gaps = cliCheckGaps(CRITERIA, out);
+    assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["docs"]);
+    assert.equal(gaps.failing.length, 0);
   });
-  const before = execution.requests.length;
-  await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 90_000 });
-  const timeout = execution.requests[before]!.timeoutMs;
-  assert.ok(timeout <= 60_000 && timeout > 0, String(timeout));
-  const spent = await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 1_000 });
-  assert.equal(execution.requests.length, before + 1, "nothing runs once the budget is spent");
-  assert.equal(spent.reruns?.[0]?.notRunReason, "validation_budget_spent");
-  assert.equal(cliCheckGaps(CRITERIA, spent).failing.length, 0);
-});
 
-test("a shell line is not run and asks for single commands; a missing tool is not_run, never a failure", async (t) => {
-  const r = await repo(t);
-  const execution = scriptedExecution([{ exitCode: 0 }]);
-  const lookups: string[] = [];
-  const toolLookup: CheckToolLookup = async (executable) => {
-    lookups.push(executable);
-    return executable === "dotnet" ? { status: "missing" } : { status: "found", path: `/bin/${executable}` };
-  };
-  const out = await rerun(r, createCliCheckRerunner(r.options(execution, { toolLookup })), [
-    check("npm", ["test", "&&", "npm", "run", "lint"], { criterionIds: ["value"] }),
-    check("dotnet", ["test"], { criterionIds: ["value"] }),
-    check("node", ["--test"], { criterionIds: ["docs"] }),
-  ]);
-  assert.equal(execution.requests.length, 1, "only the plain command runs");
-  assert.deepEqual(lookups, ["dotnet", "node"], "a shell line is refused before any lookup");
-  assert.deepEqual(out.reruns?.map((entry) => [entry.status, entry.notRunReason ?? ""]), [["not_run", "shell_line"], ["not_run", "tool_missing"], ["passed", ""]]);
-  assert.match(out.notRun[0]!.why, /shell line/);
-  assert.match(out.notRun[1]!.why, /tool_missing.*not a failure/);
-  const gaps = cliCheckGaps(CRITERIA, out);
-  assert.equal(gaps.failing.length, 0, "neither is a failure");
-  assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["value"], "they support nothing");
-  assert.match(cliCheckGapFailure("Claude Code", gaps), new RegExp(`^${CLI_CHECKS_UNSUPPORTED}:`));
-});
+  test("each re-run's timeout is the task's remaining validation budget, capped at ten minutes; a spent budget runs nothing", async (t) => {
+    const r = await repo(t);
+    const execution = scriptedExecution([]);
+    const rerunner = createCliCheckRerunner(r.options(execution, { budgetLedger: r.budget }));
+    await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 24 * 60 * 60_000 });
+    assert.equal(execution.requests[0]!.timeoutMs, CLI_RERUN_TIMEOUT_CAP_MS);
+    // 30 s of the task's 90 s budget is used: the next re-run gets 60 s, whatever its own run counts afterwards.
+    recordValidationEvidenceSegment(r.budget, {
+      runId: OWNER.runId, taskId: "task_e", sessionId: "earlier", callId: "call_1",
+      startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:30.000Z",
+    });
+    const before = execution.requests.length;
+    await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 90_000 });
+    const timeout = execution.requests[before]!.timeoutMs;
+    assert.ok(timeout <= 60_000 && timeout > 0, String(timeout));
+    const spent = await rerun(r, rerunner, [check("node", ["--test"])], { budgetMs: 1_000 });
+    assert.equal(execution.requests.length, before + 1, "nothing runs once the budget is spent");
+    assert.equal(spent.reruns?.[0]?.notRunReason, "validation_budget_spent");
+    assert.equal(cliCheckGaps(CRITERIA, spent).failing.length, 0);
+  });
 
-test("shell lines: an operator argument, a command line in the executable, or a shell given a command string", () => {
-  for (const [executable, args] of [
-    ["npm", ["test", "|", "tee", "log"]], ["npm", ["test", ">", "out.txt"]], ["npm", ["test", "2>&1"]], ["npm", ["test", ";", "ls"]],
-    ["npm test", []], ["npm", [">out.txt"]], ["npm", ["test", "2>/dev/null"]], ["npm", ["test", "|tee"]], ["bash", ["-c", "npm test"]], ["bash", ["-lc", "npm test"]], ["sh", ["-c", "x"]],
-    ["cmd.exe", ["/c", "npm test"]], ["pwsh", ["-Command", "npm test"]], ["C:\\Windows\\System32\\cmd.exe", ["/C", "x"]],
-  ] as Array<[string, string[]]>) {
-    assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
-  }
-  for (const [executable, args] of [
-    ["npm", ["test"]], ["node", ["-e", "process.exit(a && b ? 0 : 1)"]], ["grep", ["-E", "a|b", "file"]], ["grep", ["-e", "<div", "index.html"]],
-    ["bash", ["scripts/check.sh"]],
-    ["npx", ["tsx", "--test", "test/a.test.ts"]], ["git", ["diff", "--stat"]],
-    [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
-  ] as Array<[string, string[]]>) {
-    assert.equal(cliCheckShellLine({ executable, args }), undefined, `${executable} ${JSON.stringify(args)}`);
-  }
-});
+  test("a shell line is not run and asks for single commands; a missing tool is not_run, never a failure", async (t) => {
+    const r = await repo(t);
+    const execution = scriptedExecution([{ exitCode: 0 }]);
+    const lookups: string[] = [];
+    const toolLookup: CheckToolLookup = async (executable) => {
+      lookups.push(executable);
+      return executable === "dotnet" ? { status: "missing" } : { status: "found", path: `/bin/${executable}` };
+    };
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution, { toolLookup })), [
+      check("npm", ["test", "&&", "npm", "run", "lint"], { criterionIds: ["value"] }),
+      check("dotnet", ["test"], { criterionIds: ["value"] }),
+      check("node", ["--test"], { criterionIds: ["docs"] }),
+    ]);
+    assert.equal(execution.requests.length, 1, "only the plain command runs");
+    assert.deepEqual(lookups, ["dotnet", "node"], "a shell line is refused before any lookup");
+    assert.deepEqual(out.reruns?.map((entry) => [entry.status, entry.notRunReason ?? ""]), [["not_run", "shell_line"], ["not_run", "tool_missing"], ["passed", ""]]);
+    assert.match(out.notRun[0]!.why, /shell line/);
+    assert.match(out.notRun[1]!.why, /tool_missing.*not a failure/);
+    const gaps = cliCheckGaps(CRITERIA, out);
+    assert.equal(gaps.failing.length, 0, "neither is a failure");
+    assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["value"], "they support nothing");
+    assert.match(cliCheckGapFailure("Claude Code", gaps), new RegExp(`^${CLI_CHECKS_UNSUPPORTED}:`));
+  });
 
-test("browser checks are not run when the CLI ran without a browser; a refused command is not run, never a pass", async (t) => {
-  const r = await repo(t);
-  const execution = scriptedExecution([{ exitCode: 0 }]);
-  const rerunner = createCliCheckRerunner(r.options(execution));
-  const out = await rerun(r, rerunner, [
-    check("playwright-cli", ["screenshot"], { criterionIds: ["value"] }),
-    check("node", ["--test"], { cwd: "../outside", criterionIds: ["docs"] }),
-  ], { browserUnavailable: true });
-  assert.equal(execution.requests.length, 0);
-  assert.deepEqual(out.reruns?.map((entry) => entry.notRunReason), ["browser_unavailable", "refused"]);
-  assert.match(out.reruns?.[1]?.detail ?? "", /outside workspace/);
-  assert.deepEqual(out.criterionEvidenceLinks, []);
-  // With a browser, the same check runs.
-  await rerun(r, rerunner, [check("playwright-cli", ["screenshot"])]);
-  assert.equal(execution.requests.length, 1);
-});
+  test("shell lines: an operator argument, a command line in the executable, or a shell given a command string", () => {
+    for (const [executable, args] of [
+      ["npm", ["test", "|", "tee", "log"]], ["npm", ["test", ">", "out.txt"]], ["npm", ["test", "2>&1"]], ["npm", ["test", ";", "ls"]],
+      ["npm test", []], ["npm", [">out.txt"]], ["npm", ["test", "2>/dev/null"]], ["npm", ["test", "|tee"]], ["bash", ["-c", "npm test"]], ["bash", ["-lc", "npm test"]], ["sh", ["-c", "x"]],
+      ["cmd.exe", ["/c", "npm test"]], ["pwsh", ["-Command", "npm test"]], ["C:\\Windows\\System32\\cmd.exe", ["/C", "x"]],
+    ] as Array<[string, string[]]>) {
+      assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
+    }
+    for (const [executable, args] of [
+      ["npm", ["test"]], ["node", ["-e", "process.exit(a && b ? 0 : 1)"]], ["grep", ["-E", "a|b", "file"]], ["grep", ["-e", "<div", "index.html"]],
+      ["bash", ["scripts/check.sh"]],
+      ["npx", ["tsx", "--test", "test/a.test.ts"]], ["git", ["diff", "--stat"]],
+      [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
+    ] as Array<[string, string[]]>) {
+      assert.equal(cliCheckShellLine({ executable, args }), undefined, `${executable} ${JSON.stringify(args)}`);
+    }
+  });
 
-test("a failed or timed-out re-run is a failing gap with its output tail; after the fix round it fails the attempt as cli_checks_failing", async (t) => {
-  const r = await repo(t);
-  const execution = scriptedExecution([{ exitCode: 1, stdout: "expected two, got one" }, { timedOut: true }]);
-  const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [
-    check("node", ["--test"], { criterionIds: ["value"] }),
-    check("node", ["slow.js"], { criterionIds: ["docs"] }),
-  ]);
-  assert.deepEqual(out.reruns?.map((entry) => [entry.status, entry.detail]), [["failed", "exit 1"], ["failed", "timed out after 600 s"]]);
-  assert.match(out.reruns?.[0]?.outputTail ?? "", /expected two, got one/);
-  const gaps = cliCheckGaps(CRITERIA, out);
-  assert.equal(gaps.failing.length, 2);
-  assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["value", "docs"], "a failed re-run supports nothing");
-  assert.match(cliCheckGapFailure("Claude Code", gaps), new RegExp(`^${CLI_CHECKS_FAILING}:.*exit 1.*timed out`));
-});
+  test("browser checks are not run when the CLI ran without a browser; a refused command is not run, never a pass", async (t) => {
+    const r = await repo(t);
+    const execution = scriptedExecution([{ exitCode: 0 }]);
+    const rerunner = createCliCheckRerunner(r.options(execution));
+    const out = await rerun(r, rerunner, [
+      check("playwright-cli", ["screenshot"], { criterionIds: ["value"] }),
+      check("node", ["--test"], { cwd: "../outside", criterionIds: ["docs"] }),
+    ], { browserUnavailable: true });
+    assert.equal(execution.requests.length, 0);
+    assert.deepEqual(out.reruns?.map((entry) => entry.notRunReason), ["browser_unavailable", "refused"]);
+    assert.match(out.reruns?.[1]?.detail ?? "", /outside workspace/);
+    assert.deepEqual(out.criterionEvidenceLinks, []);
+    // With a browser, the same check runs.
+    await rerun(r, rerunner, [check("playwright-cli", ["screenshot"])]);
+    assert.equal(execution.requests.length, 1);
+  });
 
-test("files a re-run changed are restored, so the tree submitted is the one the CLI left", async (t) => {
-  const r = await repo(t);
-  mkdirSync(join(r.workspace.path, "src"));
-  writeFileSync(join(r.workspace.path, "src", "kept.txt"), "the CLI's new file\n");
-  const tree = await r.tree();
-  const execution = scriptedExecution([{
-    exitCode: 0,
-    effect: (cwd) => {
-      writeFileSync(join(cwd, "value.txt"), "rewritten by a formatter\n");
-      writeFileSync(join(cwd, "README.md"), "# Changed\n");
-      rmSync(join(cwd, "src", "kept.txt"));
-      mkdirSync(join(cwd, "out"), { recursive: true });
-      writeFileSync(join(cwd, "out", "report.txt"), "a report\n");
-    },
-  }]);
-  const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [check("npm", ["run", "format"], { criterionIds: ["value"] })]);
-  assert.deepEqual(out.restoredPaths, ["README.md", "out/report.txt", "src/kept.txt", "value.txt"]);
-  assert.equal(await r.tree(), tree);
-  assert.equal(readFileSync(join(r.workspace.path, "value.txt"), "utf8"), "two\n");
-  assert.equal(readFileSync(join(r.workspace.path, "src", "kept.txt"), "utf8"), "the CLI's new file\n");
-  assert.equal(existsSync(join(r.workspace.path, "out", "report.txt")), false);
-  // The record says what the re-run saw: it began on the tree the CLI left.
-  const fact = r.evidence.list({ runId: OWNER.runId, taskId: "task_e" })[0]!.fact as CommandEvidenceFact;
-  assert.equal(fact.workingTreeIdentity?.status, "unknown");
-  assert.equal(fact.workingTreeIdentity?.status === "unknown" ? fact.workingTreeIdentity.capturedTreeId : undefined, tree);
-  // The owner's own index is never touched by the restore.
-  assert.equal((await runGit({ cwd: r.workspace.path, args: ["diff", "--cached", "--name-only"] })).stdout.trim(), "");
-});
+  test("a failed or timed-out re-run is a failing gap with its output tail; after the fix round it fails the attempt as cli_checks_failing", async (t) => {
+    const r = await repo(t);
+    const execution = scriptedExecution([{ exitCode: 1, stdout: "expected two, got one" }, { timedOut: true }]);
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [
+      check("node", ["--test"], { criterionIds: ["value"] }),
+      check("node", ["slow.js"], { criterionIds: ["docs"] }),
+    ]);
+    assert.deepEqual(out.reruns?.map((entry) => [entry.status, entry.detail]), [["failed", "exit 1"], ["failed", "timed out after 600 s"]]);
+    assert.match(out.reruns?.[0]?.outputTail ?? "", /expected two, got one/);
+    const gaps = cliCheckGaps(CRITERIA, out);
+    assert.equal(gaps.failing.length, 2);
+    assert.deepEqual(gaps.unsupported.map((criterion) => criterion.id), ["value", "docs"], "a failed re-run supports nothing");
+    assert.match(cliCheckGapFailure("Claude Code", gaps), new RegExp(`^${CLI_CHECKS_FAILING}:.*exit 1.*timed out`));
+  });
 
-test("a worktree whose files cannot be read is a coded re-run failure, never a submission", async (t) => {
-  const r = await repo(t);
-  const rerunner = createCliCheckRerunner(r.options(scriptedExecution([]), { captureTree: async () => ({ status: "unknown", reason: "capture_failed" }) }));
-  await assert.rejects(rerun(r, rerunner, [check("node", ["--test"])]), (error: unknown) => error instanceof CliCheckRerunError && error.code === CLI_CHECKS_RERUN_FAILED);
-});
+  test("files a re-run changed are restored, so the tree submitted is the one the CLI left", async (t) => {
+    const r = await repo(t);
+    mkdirSync(join(r.workspace.path, "src"));
+    writeFileSync(join(r.workspace.path, "src", "kept.txt"), "the CLI's new file\n");
+    const tree = await r.tree();
+    const execution = scriptedExecution([{
+      exitCode: 0,
+      effect: (cwd) => {
+        writeFileSync(join(cwd, "value.txt"), "rewritten by a formatter\n");
+        writeFileSync(join(cwd, "README.md"), "# Changed\n");
+        rmSync(join(cwd, "src", "kept.txt"));
+        mkdirSync(join(cwd, "out"), { recursive: true });
+        writeFileSync(join(cwd, "out", "report.txt"), "a report\n");
+      },
+    }]);
+    const out = await rerun(r, createCliCheckRerunner(r.options(execution)), [check("npm", ["run", "format"], { criterionIds: ["value"] })]);
+    assert.deepEqual(out.restoredPaths, ["README.md", "out/report.txt", "src/kept.txt", "value.txt"]);
+    assert.equal(await r.tree(), tree);
+    assert.equal(readFileSync(join(r.workspace.path, "value.txt"), "utf8"), "two\n");
+    assert.equal(readFileSync(join(r.workspace.path, "src", "kept.txt"), "utf8"), "the CLI's new file\n");
+    assert.equal(existsSync(join(r.workspace.path, "out", "report.txt")), false);
+    // The record says what the re-run saw: it began on the tree the CLI left.
+    const fact = r.evidence.list({ runId: OWNER.runId, taskId: "task_e" })[0]!.fact as CommandEvidenceFact;
+    assert.equal(fact.workingTreeIdentity?.status, "unknown");
+    assert.equal(fact.workingTreeIdentity?.status === "unknown" ? fact.workingTreeIdentity.capturedTreeId : undefined, tree);
+    // The owner's own index is never touched by the restore.
+    assert.equal((await runGitAsync({ cwd: r.workspace.path, args: ["diff", "--cached", "--name-only"] })).stdout.trim(), "");
+  });
 
-test("with no criteria, one passing re-run is enough; none, or only failing ones, is a gap", () => {
-  const passed = { label: "a", command: "a", criterionIds: [], status: "passed" as const, detail: "exit 0" };
-  const failed = { ...passed, status: "failed" as const, detail: "exit 1" };
-  assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [passed] }).unsupported.length, 0);
-  assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [failed] }).unsupported.length, 1);
-  assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [] }).unsupported.length, 1);
+  test("a worktree whose files cannot be read is a coded re-run failure, never a submission", async (t) => {
+    const r = await repo(t);
+    const rerunner = createCliCheckRerunner(r.options(scriptedExecution([]), { captureTree: async () => ({ status: "unknown", reason: "capture_failed" }) }));
+    await assert.rejects(rerun(r, rerunner, [check("node", ["--test"])]), (error: unknown) => error instanceof CliCheckRerunError && error.code === CLI_CHECKS_RERUN_FAILED);
+  });
+
+  test("with no criteria, one passing re-run is enough; none, or only failing ones, is a gap", () => {
+    const passed = { label: "a", command: "a", criterionIds: [], status: "passed" as const, detail: "exit 0" };
+    const failed = { ...passed, status: "failed" as const, detail: "exit 1" };
+    assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [passed] }).unsupported.length, 0);
+    assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [failed] }).unsupported.length, 1);
+    assert.equal(cliCheckGaps(undefined, { criterionEvidenceLinks: [], reruns: [] }).unsupported.length, 1);
+  });
 });

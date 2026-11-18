@@ -69,6 +69,11 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
+  // CW6: the re-runner of a CLI's reported checks alone, on a temporary Git worktree with a scripted one-shot executor
+  // (no CLI, no command process): the record, the timeout rule, shell lines, missing tools and the restore. Its tests run
+  // four at a time with async fixture Git: about 12 s run alone on a busy Windows PC. The CLI-loop half,
+  // cli-worker-evidence-loop.test.ts (the fake CLI and the production executor, about 18 s), is left to the full suite.
+  "runner-v2/test/cli-worker-evidence.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

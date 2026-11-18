@@ -1063,6 +1063,14 @@ async function submitCliResult(
       return { type: "fix_round" };
     }
   }
+  // The attempt's earlier collected runs (before a fix round or a question) count too: the Architect sees every commit
+  // the Runner undid and every docs/project change it restored in this attempt, not only the last run's.
+  const earlier = cliAttemptRecords(deps.schedulerStore, input).filter((record) => record.collected).slice(0, -1);
+  facts = {
+    replacedCliCommits: facts.replacedCliCommits + earlier.reduce((sum, record) => sum + (record.replacedCliCommits ?? 0), 0),
+    restoredProjectDocs: [...new Set([...earlier.flatMap((record) => record.restoredProjectDocs ?? []), ...facts.restoredProjectDocs])].sort(),
+    projectChangedDuringAttempt: [...new Set([...earlier.flatMap((record) => record.projectChangedDuringAttempt ?? []), ...facts.projectChangedDuringAttempt])],
+  };
   const concerns = [
     ...(result.concerns ?? []).map((concern) => `${name} reported: ${concern}`),
     ...(reruns.restoredPaths?.length
