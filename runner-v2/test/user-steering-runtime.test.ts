@@ -128,7 +128,8 @@ test("answered Architect questions resume their exact action across restarts and
   });
   try {
     let runtime = makeRuntime();
-    assert.equal((await runtime.step()).action, "plan_required");
+    // A turn that ends with an open Architect question is an intentional blocked stop (516c7b6e).
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
     assert.equal(runtime.projection().blockingArchitectQuestionId, "question-one");
 
     store.close();
@@ -147,7 +148,8 @@ test("answered Architect questions resume their exact action across restarts and
     store.close();
     store = new SqliteSchedulerStore(database, { evidenceStore });
     runtime = makeRuntime();
-    assert.equal((await runtime.step()).action, "architect_question_resumed");
+    // The resumed plan action asks a follow-up question, so the step blocks on it.
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
     assert.equal(runtime.projection().blockingArchitectQuestionId, "question-two");
     assert.equal(runtime.projection().architectQuestions["question-one"].resumeStatus, "consumed");
     appendQuestionAnswer(store, "question-two", 2, "Yes, preserve the documented alias.");
@@ -249,7 +251,8 @@ test("a question asked while acknowledging guidance resumes that exact guidance 
     }]);
     let runtime = makeRuntime();
     runtime.submitUserGuidance({ guidanceId: "guidance-one", text: "Preserve compatibility.", version: 1, idempotencyKey: "guidance:one" });
-    assert.equal((await runtime.step()).action, "user_guidance_required");
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
+    assert.equal(runtime.projection().blockingArchitectQuestionId, "guidance-question");
     runtime.submitUserGuidance({ guidanceId: "guidance-two", text: "Retain the alias too.", version: 2, idempotencyKey: "guidance:two" });
     appendQuestionAnswer(store, "guidance-question", 1, "The existing public contract is authoritative.");
 
@@ -418,7 +421,8 @@ test("plan-changing guidance supersedes a resolved failed-task checkpoint after 
       },
     });
 
-    assert.equal((await runtime.step()).action, "task_failure_resolution_required");
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
+    assert.equal(runtime.projection().blockingArchitectQuestionId, "question-failure");
     appendQuestionAnswer(store, "question-failure", 1, "Use the compatible fallback.");
     runtime.submitUserGuidance({
       guidanceId: "guidance-revise-failure",
@@ -519,7 +523,8 @@ test("plan-changing guidance preserves an answered exhausted-planned checkpoint 
     store.close();
     store = new SqliteSchedulerStore(database, { evidenceStore: FIXTURE_EVIDENCE_STORE });
     runtime = makeRuntime();
-    assert.equal((await runtime.step()).action, "architect_question_resumed");
+    // The resumed failure-resolution action asks a follow-up question, so the step blocks on it.
+    assert.deepEqual(await runtime.step(), { status: "blocked", action: "architect_question_pending" });
     assert.equal(runtime.projection().architectQuestions["question-exhausted-planned"].resumeStatus, "consumed");
     assert.equal(runtime.projection().blockingArchitectQuestionId, "question-exhausted-follow-up");
   } finally {

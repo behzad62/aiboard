@@ -47,6 +47,10 @@ const deterministicPrTests = [
   // CW4: the CLI crew rules, the .cmd rules and the cli_workers.checked event, in memory with a temporary scheduler
   // store (no process, about 1 s).
   "runner-v2/test/cli-worker-crew.test.ts",
+  // User steering and Architect questions in the Build runtime: guidance, question resume and supersession across
+  // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
+  // and went stale unseen after 516c7b6e.
+  "runner-v2/test/user-steering-runtime.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
