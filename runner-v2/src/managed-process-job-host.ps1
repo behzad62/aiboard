@@ -52,6 +52,9 @@ public static class ManagedProcessJobHost
     public const string DesktopPolicyRefusalCode = "windows_job_desktop_policy_unavailable";
     /// <summary>R2: the coded refusal when the Job's membership messages cannot be watched.</summary>
     public const string MembershipWatchRefusalCode = "windows_job_membership_watch_unavailable";
+    // Not a launch refusal: the host's error after its workload started when a member event could not be written. The
+    // supervisor keeps it as member evidence, so the stop is never proven (R2).
+    public const string MembershipEvidenceLostCode = "windows_job_membership_evidence_lost";
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SECURITY_ATTRIBUTES
@@ -545,7 +548,8 @@ public static class ManagedProcessJobHost
         private long explained;
         private int quietMismatches;
         private int reports;
-        private bool lost;
+        private readonly List<string> pending = new List<string>();
+        private string failEmits;
         // Set once the watch is settled or stopped: from then on it never touches the Job (whose handle the host closes
         // next, so a later query would fail and read as false evidence). Read and written only under gate.
         private bool finished;
@@ -599,7 +603,11 @@ public static class ManagedProcessJobHost
             lock (gate)
             {
                 rootPid = pid;
-                rootPackage = injectedFault == "membership_ignore_root_package" ? null : package;
+                // Test faults, stricter only: each treats the root as unpackaged, so its members are reported; the
+                // member_emit_* ones also fail member writes (see Flush).
+                bool emitFault = injectedFault == "member_emit_retry" || injectedFault == "member_emit_lost";
+                rootPackage = injectedFault == "membership_ignore_root_package" || emitFault ? null : package;
+                failEmits = emitFault ? injectedFault : null;
                 rootPolicy = desktopPolicy;
             }
         }
@@ -625,8 +633,10 @@ public static class ManagedProcessJobHost
             lock (gate)
             {
                 finished = true;
+                Flush(false);
                 // A member event that could not be written must not end as a clean stop: the host reports an error.
-                if (lost) throw new InvalidOperationException("The Windows Job host could not record its membership evidence.");
+                if (pending.Count > 0) throw new LaunchRefusedException(MembershipEvidenceLostCode,
+                    "The Windows Job host could not record its membership evidence, so the stop is not proven.");
             }
         }
 
@@ -655,6 +665,7 @@ public static class ManagedProcessJobHost
                         lock (gate)
                         {
                             if (finished) return;
+                            Flush(false);
                             if (failure == WAIT_TIMEOUT) { CheckAccounting(false); continue; }
                             Report(0, "unidentified", null, "The Job's membership messages stopped (Win32 " + failure + ").");
                         }
@@ -663,6 +674,7 @@ public static class ManagedProcessJobHost
                     lock (gate)
                     {
                         if (finished) return;
+                        Flush(false);
                         if (key == SettleKey)
                         {
                             CheckAccounting(true);
@@ -745,14 +757,29 @@ public static class ManagedProcessJobHost
         {
             if (reports >= MaxReports) return;
             reports++;
-            // Never throws: an exception here would end the host on a background thread, losing the evidence while the
-            // host's exit still read as the Job's empty proof. A lost report makes Settle fail the stop instead.
-            try
+            string line = "{\"type\":\"member\",\"pid\":" + pid + ",\"evidence\":\"" + evidence + "\",\"package\":" +
+                (package == null ? "null" : JsonQuote(package)) + ",\"detail\":" + JsonQuote(detail) + "}";
+            pending.Add(line);
+            Flush(failEmits != null);
+        }
+
+        // Writes the pending member lines in order. Never throws: an exception would end the host on a background thread,
+        // losing the evidence while the host's exit still read as the Job's empty proof. A line that cannot be written
+        // stays pending and is retried at the watch's next wake (at most 100 ms later); one still pending when the watch
+        // settles fails the stop (MembershipEvidenceLostCode). injectFailure fails this attempt (stricter-only test
+        // faults: member_emit_retry fails each line's first attempt, member_emit_lost every attempt).
+        private void Flush(bool injectFailure)
+        {
+            while (pending.Count > 0)
             {
-                emit("{\"type\":\"member\",\"pid\":" + pid + ",\"evidence\":\"" + evidence + "\",\"package\":" +
-                    (package == null ? "null" : JsonQuote(package)) + ",\"detail\":" + JsonQuote(detail) + "}");
+                try
+                {
+                    if (injectFailure || failEmits == "member_emit_lost") throw new IOException("injected " + failEmits);
+                    emit(pending[0]);
+                    pending.RemoveAt(0);
+                }
+                catch (Exception) { return; }
             }
-            catch (Exception) { lost = true; }
         }
     }
 

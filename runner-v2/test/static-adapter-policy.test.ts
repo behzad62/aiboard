@@ -250,8 +250,12 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   assert.equal([...jobHost.matchAll(/lock \(gate\)\s+\{\s+if \(finished\) return;/g)].length, 3);
   assert.match(jobHost, /CheckAccounting\(true\);[^}]*finished = true;\s+if \(settled != null\) settled\.Set\(\);\s+return;/);
   // A member event that could not be written never ends as a clean stop, and never ends the host on the watch thread.
-  assert.match(jobHost, /catch \(Exception\) \{ lost = true; \}/);
-  assert.match(jobHost, /if \(lost\) throw new InvalidOperationException\(/);
+  // A line that cannot be written stays pending and is retried at every wake; one still pending at settle fails the stop.
+  assert.match(jobHost, /emit\(pending\[0\]\);\s+pending\.RemoveAt\(0\);\s+\}\s+catch \(Exception\) \{ return; \}/);
+  assert.equal([...jobHost.matchAll(/if \(finished\) return;\s+Flush\(false\);/g)].length, 2);
+  assert.match(jobHost, /Flush\(false\);[^}]*if \(pending\.Count > 0\) throw new LaunchRefusedException\(MembershipEvidenceLostCode,/);
+  const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
+  assert.match(supervisor, /if \(event\.code === "windows_job_membership_evidence_lost"\)\s+recordMemberEvidence\(/);
   // The only members that are not evidence besides the root's own package: one that already exited before it could be
   // opened (ERROR_INVALID_PARAMETER), or whose PID now names a process outside this Job. Every other failure is evidence.
   assert.match(jobHost, /if \(failure == ERROR_INVALID_PARAMETER\) return;/);

@@ -689,6 +689,10 @@ function handleJobEvent(line) {
     backendFailure = new Error(event.error ?? "Windows Job host failed.");
     // A coded launch refusal from the Job host (raised before CreateProcess) keeps its Runner code.
     if (typeof event.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(event.code)) backendFailure.code = event.code;
+    // R2: a member event the Job host could not write is itself evidence. The host then fails instead of reporting a
+    // clean stop, and the Job is never verified empty or released.
+    if (event.code === "windows_job_membership_evidence_lost")
+      recordMemberEvidence({ pid: 0, evidence: "unidentified", package: null, detail: event.error ?? "The Job host could not record its membership evidence." });
   }
 }
 

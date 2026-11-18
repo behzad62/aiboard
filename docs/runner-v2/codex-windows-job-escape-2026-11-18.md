@@ -319,8 +319,10 @@ descendants that inherited a packaged root's own identity under the desktop app 
   package identity. Evidence (kept durably by the supervisor, never cleared) is: a packaged member that does not carry
   the root's own package under the root's policy; a member that could not be identified (it could not be opened for a
   reason other than having exited, or its membership or package could not be read); the Job's `TotalProcesses` ahead
-  of the messages received; a watch that fails or does not settle; or a member event that could not be written (the
-  host then reports an error, never a clean stop). A member that **already exited** before it could be opened
+  of the messages received; a watch that fails or does not settle; or a member event that could not be written. A
+  failed member write stays pending and is retried at every wake of the watch (at most 100 ms apart); one still
+  pending when the workload ends naturally fails the host with `windows_job_membership_evidence_lost`, which the
+  supervisor keeps as evidence. A write lost for good before an interactive stop is the S1 gap below. A member that **already exited** before it could be opened
   (`ERROR_INVALID_PARAMETER`), or whose PID now names a process outside the Job, is not evidence: short-lived members
   whose parent drops its handle at once (`start /b`, a sequential `cmd /c`) did that routinely here (the plain-burst
   test failed intermittently on Win32 87 before this rule), and no measured shape put a packaged program in the Job as

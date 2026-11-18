@@ -237,6 +237,31 @@ test("R2: a packaged non-root member leaves the Job unverified and unreleased, w
   await assert.rejects(restarted.release(binding, fence));
 });
 
+// Member writes that fail (stricter-only faults; both treat the root as unpackaged so its members are reported):
+// - member_emit_retry fails each line's first write: the watch retries it at its next wake, so the evidence still
+//   reaches the supervisor before the stop and the Job is unverified and unreleased.
+// - member_emit_lost fails every write: on the workload's natural end the watch settles with the line still pending,
+//   the host fails with windows_job_membership_evidence_lost, and the supervisor keeps that as evidence.
+// (An interactive stop ends the host without settling, so a write lost for good before such a stop is not seen: §6.)
+test("R2: a member write that fails once is retried and still blocks verify-empty and release", { skip: STORE_SKIP, timeout: 90_000 }, async () => {
+  const { backend, binding, empty } = await storePwshRootRun("store-retry", "member_emit_retry");
+  assert.equal(empty.empty, false, "the retried member evidence must reach the supervisor");
+  assert.match(empty.empty ? "" : empty.detail, /packaged \(MSIX or Microsoft Store\) program \(Microsoft\.PowerShell_[^)]+\) ran in the Windows Job/);
+  await assert.rejects(backend.release(binding, fence),
+    (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
+});
+
+test("R2: a member write lost for good fails the natural stop and blocks verify-empty and release", { skip: STORE_SKIP, timeout: 90_000 }, async () => {
+  const { backend, launch } = setup("store-lost", "member_emit_lost");
+  const binding = bind(await launch(storePwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `& '${process.execPath}' -e "setTimeout(() => {}, 300)"`]));
+  await observeExit(backend, binding);
+  const empty = parseProcessEmptyVerification(await backend.verifyEmpty(binding, fence));
+  assert.equal(empty.empty, false, "a Job whose member evidence was lost is never verified empty");
+  assert.match(empty.empty ? "" : empty.detail, /could not record its membership evidence/);
+  await assert.rejects(backend.release(binding, fence),
+    (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
+});
+
 /** An app execution alias cannot be followed by stat, so existsSync reports false; lstat sees the link itself. */
 function aliasPresent(path: string): boolean {
   if (!path) return false;
