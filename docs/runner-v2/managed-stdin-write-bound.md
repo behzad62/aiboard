@@ -39,7 +39,7 @@ Two couplings made a longer limit unsafe:
 - **Sequence after an unacknowledged write (Windows Job).**
   - A write that was admitted but not acknowledged throws `WindowsJobInputUnacknowledgedError`, and the channel moves to the next sequence, as the host and the runtime already have. When the reader has drained it, the next write works again.
   - While it still drains, the supervisor refuses a later write (409 `input_pending`). It also refuses any sequence that is not above the last one it admitted (`input_sequence_stale`). So bytes are never queued, reordered or sent twice.
-  - A write refused before admission (any 409 from the supervisor, a stopping session, or a caller that already gave up) sent nothing. It is typed as `InteractiveInputRefusedError`, the runtime hands its sequence back, and the tool reports it `rejected` (`process_input_rejected`), never `outcome_unknown`. Input stays usable: the next write takes the same sequence. This is the Windows Job backend only; the portable channel has no refusal before admission.
+  - A write refused before admission (any 409 from the supervisor, a stopping session, or a caller that already gave up) sent nothing. It is typed as `InteractiveInputRefusedError`, the runtime hands its sequence back, and the tool reports it `rejected` (`process_input_rejected`), never `outcome_unknown`. Input stays usable: the next write takes the same sequence. The portable channel refuses the same way (see "Portable: unconsumed input acknowledgements", below).
   - Not covered (follow-up): if the reply to an admitted write is lost and the session is reattached, the host's next sequence is the one the supervisor already admitted. Every later write is then refused `input_sequence_stale`: reported `rejected` and never sent twice, but input stays unusable. Before this change that write would have been sent again. The host's own refusals (input unavailable, a stale fence) are still untyped and report `outcome_unknown`, as before.
 - **Lease:** the write path renews the session's ownership lease through the write's bound, as a read's wait does.
 - **Every ending other than acknowledged** is `process_input_outcome_unknown` (or a refusal before delivery), never a guess.
@@ -99,19 +99,29 @@ Not measured: real-CLI start-to-first-read on a busy host, and on a cold start. 
 - Time the drain.
 - Kill the CLI before EOF, so no turn starts.
 
-## Known separate issue (POSIX)
+## Portable: unconsumed input acknowledgements (fixed 2026-11-18)
 
-Some portable input acknowledgements are never consumed by the channel:
-- a `failed` one: `settleAcknowledgement` throws without removing it;
+**The bug.** Some portable input acknowledgements were never consumed by the channel:
+- a `failed` one: `settleAcknowledgement` threw without removing it;
 - one that lands after the channel stopped waiting, at its deadline or when abandoned.
 
-When one is left, the session's later cleanup ends `cleanup_blocked` ("Streaming operation exceeded its recovery bound") after the 60 s stop-cleanup bound. The likely cause is that the file stays in `channel/ack/`, which output acknowledgements share. That cause is a hypothesis, not proven.
+When one was left, the session's later cleanup ended `cleanup_blocked` ("Streaming operation exceeded its recovery bound") after the 60 s stop-cleanup bound. This affected POSIX, and the portable backend on Windows too. Measured in Linux Docker before the fix:
 
-Measured in Linux Docker:
-
-| Case | Unchanged main | This branch |
+| Case | Unchanged main | #238's branch |
 | --- | --- | --- |
-| a write the reader's exit failed (EPIPE) | 4 of 10 runs | 2 of 5 runs |
-| a write that drained after its deadline (main: 15 s; this branch: a 2 s test ceiling) | 2 of 2 | 1 of 1 |
+| a write the reader's exit failed (EPIPE) | 4 of 10 runs | 2 of 5 runs, then 4 of 4 |
+| a write that drained after its deadline (main: 15 s; #238: a 2 s test ceiling) | 2 of 2 | 1 of 1 |
 
-It is a separate portable-channel bug, not caused by this bound. A longer ceiling makes the deadline case rarer. Two tests in `managed-stdin-slow-reader.test.ts` end that way: "the reader that exits" and "a write past its ceiling ... works again". They run on Windows only until it is fixed. The CLI worker path is exposed the same way as before: a prompt write that timed out, read later by the CLI, can leave the stop proof `stop_unproven` on POSIX.
+**The cause (confirmed).** The supervisor publishes every input proof as `channel/ack/input-<sequence>.json`, next to the output ACKs. Only the channel's wait removes one. Output settlement (`observeOutputSettlement`, which the stop's cleanup awaits) settled only when that whole directory was empty. With a stopped process, no output left and only `input-000000000003.json` in `channel/ack/`, it waited out its deadline. Settlement then reported `blocked`, and cleanup ended `cleanup_blocked`.
+
+**The fix** (`portable-process-channel.ts`):
+- **Settlement.** Output settlement and the idle output poll count only output ACKs (`stdout-*`, `stderr-*`), as the terminal observation already did. An input proof is not output evidence. Each fenced snapshot still validates every proof in `channel/ack/`, input proofs included, and fails closed on a malformed one. A proof no wait consumed stays until the record is released.
+- **Failed proofs.** The wait that reads a `failed` proof now consumes it, under the same `ack_consume` effect as an acknowledged one, before it reports the failure.
+- **Refusal before admission.** A write is refused while an earlier command of the same exact fence is still unsettled, for example a write still waiting for its reader. "Unsettled" means its file is still in `channel/input/`: the supervisor retires a command's file only when it settles it, in order. The refusal is checked inside the write's fenced effect, before anything is published, and throws `InteractiveInputRefusedError`. No sequence is spent, so the tool reports `rejected`. This matches the Windows Job's `input_pending`. Before the fix, the retry was queued behind the pending write and later delivered, although the caller had been told its outcome was unknown.
+- **A prior owner's command** (after a takeover) does not cause a refusal. It queues as before, because the supervisor retires it as stale unless it was admitted before the takeover.
+- **No supervisor change.** The supervisor and the fence protocol are unchanged.
+
+**Measured after the fix (Linux Docker).**
+- "the reader that exits" and "a write past its ceiling ... works again" each passed 8 of 8 runs.
+- Each run took 1.1–2.3 s and 3.4–6.4 s, not the 60 s bound.
+- Both tests now run on every platform.
