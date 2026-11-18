@@ -6,7 +6,7 @@ import { delimiter, dirname, extname, isAbsolute, resolve } from "node:path";
 
 import type { ProcessBackend, ProcessBackendBinding, ProcessEffectFence, ProcessLaunchRequest } from "./process-backend.js";
 import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
-import { memberEvidenceDetail, type WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { memberEvidenceDetail, WindowsJobStartBlockedError, type WindowsJobProcessHost } from "./windows-job-process-host.js";
 import { createWindowsJobProcessChannelProvider } from "./windows-job-process-channel.js";
 import type { ProcessHostSemanticFact, ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 
@@ -79,6 +79,17 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
     : new WindowsProcessBackend(options);
 }
 
+/**
+ * R2: the launch blocker shape (`native_process_launch_cleanup_blocked` with a `launchResult`) for a Windows Job start
+ * that failed with evidence. The record has no root pid: its workload never reported started.
+ */
+class WindowsJobLaunchCleanupBlockedError extends Error {
+  readonly code = "native_process_launch_cleanup_blocked";
+  constructor(message: string, readonly launchResult: { readonly opaqueIdentity: string; readonly birthFingerprint: { readonly observedAt: string; readonly discriminator: string }; readonly startedAt: string }, cause: unknown) {
+    super(message, { cause });
+    this.name = "WindowsJobLaunchCleanupBlockedError";
+  }
+}
 /** The backend id every Windows Job backend binding carries. */
 const WINDOWS_JOB_BACKEND_ID = "runner-windows-job-v1";
 /** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
@@ -112,30 +123,37 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
   async launch(request: ProcessLaunchRequest): Promise<unknown> {
     request = assertWindowsBatchSemantics(request, this.windowsBatchArgv);
     const sessionId = request.intent.sessionId ?? request.intent.invocationId;
-    const snapshot = await this.service.launchOwned({
-      runId: request.intent.runId,
-      sessionId,
-      command: request.intent.executable,
-      args: [...request.intent.arguments],
-      workingDirectory: request.intent.workingDirectory,
-      environment: { ...request.environment },
-      interactive: true,
-      fence: { ...request.fence },
-    });
-    const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt, fence: { ...request.fence } };
-    const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
-    const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
-    this.writerFences.set(identity.processId, { ...request.fence });
-    this.registerLane(identity);
-    return {
-      opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
-      birthFingerprint: {
-        observedAt: snapshot.startedAt,
-        discriminator: birthDiscriminator,
-      },
-      rootPid: snapshot.pid,
-      startedAt: snapshot.startedAt,
+    const bind = (record: { readonly processId: string; readonly startedAt: string }) => {
+      const opaqueIdentity: JobOpaqueIdentity = { processId: record.processId, runId: request.intent.runId, sessionId, startedAt: record.startedAt, fence: { ...request.fence } };
+      const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
+      const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
+      this.writerFences.set(identity.processId, { ...request.fence });
+      this.registerLane(identity);
+      return {
+        opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
+        birthFingerprint: { observedAt: record.startedAt, discriminator: birthDiscriminator },
+        startedAt: record.startedAt,
+      };
     };
+    let snapshot;
+    try {
+      snapshot = await this.service.launchOwned({
+        runId: request.intent.runId,
+        sessionId,
+        command: request.intent.executable,
+        args: [...request.intent.arguments],
+        workingDirectory: request.intent.workingDirectory,
+        environment: { ...request.environment },
+        interactive: true,
+        fence: { ...request.fence },
+      });
+    } catch (error) {
+      // R2: a failed start that holds evidence keeps its exact record cleanup-blocked (the launch blocker shape the
+      // durable runtimes persist), so the run never closes it as "nothing was launched".
+      if (error instanceof WindowsJobStartBlockedError) throw new WindowsJobLaunchCleanupBlockedError(error.message, bind(error.startRecord), error);
+      throw error;
+    }
+    return { ...bind(snapshot), rootPid: snapshot.pid };
   }
   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
     const identity = jobIdentity(binding);

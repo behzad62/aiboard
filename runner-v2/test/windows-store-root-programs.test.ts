@@ -60,7 +60,12 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-const LONG_LIVED = { pwsh: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep 60"], python3: ["-c", "import time; time.sleep(60)"] } as const;
+// Each long-lived workload writes its own interpreter's pid first: the Job root may be a launcher that starts the real
+// interpreter as its child (the Python install manager's python3), so the stop must end that pid, not only the root.
+const LONG_LIVED = {
+  pwsh: (pidFile: string) => ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `Set-Content -LiteralPath '${pidFile}' -Value $PID; Start-Sleep 60`],
+  python3: (pidFile: string) => ["-c", `import os, time; open(${JSON.stringify(pidFile)}, "w").write(str(os.getpid())); time.sleep(60)`],
+} as const;
 
 for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \d/u]] as const) {
   const first = WINDOWS ? firstOnPath(name) : undefined;
@@ -120,20 +125,28 @@ for (const [name, version] of [["pwsh", /PowerShell \d/u], ["python3", /Python \
       assert.match(output, version);
 
       // A long-lived workload started by its bare name runs as the package's own program and dies with the stop.
-      const sleeper = await invoke("process.start", { command: name, args: [...LONG_LIVED[name]] });
+      const pidFile = join(root, `${name}-interpreter.pid`);
+      const sleeperArgs = LONG_LIVED[name](pidFile);
+      const sleeper = await invoke("process.start", { command: name, args: sleeperArgs });
       assert.equal(sleeper.isError, false, text(sleeper));
       const sleeperId = (sleeper.content[0] as { value: Record<string, unknown> }).value.processId as string;
-      const sleeperRecord = () => jobRecords(jobHost).find((record) => record.args.join(" ") === LONG_LIVED[name].join(" "));
+      const sleeperRecord = () => jobRecords(jobHost).find((record) => record.args.join(" ") === sleeperArgs.join(" "));
       for (let attempt = 0; attempt < 100 && !(sleeperRecord()?.pid ?? 0); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
       const running = sleeperRecord();
       assert.ok(running && same(running.command, packaged), `the started Job root is the package's own program: ${JSON.stringify(jobRecords(jobHost))}`);
       assert.ok(running.pid > 0 && alive(running.pid), `the workload runs: ${JSON.stringify(running)}`);
+      const readPid = () => { try { return Number(readFileSync(pidFile, "utf8").trim()); } catch { return 0; } };
+      for (let attempt = 0; attempt < 100 && !(readPid() > 0); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      const interpreterPid = readPid();
+      assert.ok(interpreterPid > 0 && alive(interpreterPid), `the interpreter wrote its pid and runs: ${interpreterPid}`);
       for (const record of jobRecords(jobHost)) assert.ok(!same(record.command, first!), `the alias is never launched: ${record.command}`);
       const stopped = await invoke("process.signal", { processId: sleeperId, signal: "SIGTERM" });
       assert.equal(stopped.isError, false, text(stopped));
       assert.ok(text(stopped).includes(JSON.stringify(CONTAINED_STOP_CONFIRMATION.slice(0, 40)).slice(1, -1)), `the contained stop: ${text(stopped)}`);
       for (let attempt = 0; attempt < 100 && alive(running.pid); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(alive(running.pid), false, "the workload died with the stop");
+      for (let attempt = 0; attempt < 100 && alive(interpreterPid); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(alive(interpreterPid), false, `the interpreter itself (pid ${interpreterPid}) died with the stop`);
 
       // The child's own PATH still holds no WindowsApps folder: a shell's lookup of the same name finds nothing there.
       const where = await invoke("process.run", { shell: "cmd", script: `where ${name}` });

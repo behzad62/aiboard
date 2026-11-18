@@ -296,14 +296,19 @@ test("R2: a host that ends without settling its watch leaves the Job unverified 
 // The started line cannot be written either (started_emit_unwritable, stricter only): the host resumes the workload,
 // fails to write started for the write's retry window, and ends with no line at all. It ended before reporting that its
 // workload started, with no stop request and no report that it created no process, so the launch fails and the
-// supervisor keeps the unsettled watch as evidence; never a clean, releasable stop.
+// supervisor keeps the unsettled watch as evidence; never a clean, releasable stop. The failure is the launch blocker
+// shape with the exact record (no root pid), so the durable runtimes keep it cleanup-blocked.
+const blockedStart = (message: RegExp) => (error: unknown) => {
+  const blocked = error as { code?: unknown; launchResult?: { opaqueIdentity?: unknown; rootPid?: unknown } };
+  return blocked.code === "native_process_launch_cleanup_blocked" && typeof blocked.launchResult?.opaqueIdentity === "string" &&
+    blocked.launchResult.rootPid === undefined && message.test((error as Error).message);
+};
 test("R2: a host that ends before its started line fails the launch and keeps evidence", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
   const { root, launch } = setup("started-unwritable", "started_emit_unwritable");
   const marker = join(root, "ran.txt");
   await assert.rejects(
     launch(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setTimeout(() => {}, 60000)`]),
-    (error: unknown) => (error as { code?: unknown }).code === "process_start_failed" &&
-      /ended before it reported that its workload started/.test((error as Error).message),
+    blockedStart(/ended before it reported that its workload started/),
   );
   assert.equal(existsSync(marker), true, "the workload ran before the host ended");
   assert.doesNotMatch(readJobEvents(join(root, "job-host")), /"type":"(started|error|natural_stopped)"/, "the host wrote no lifecycle line");
@@ -311,6 +316,28 @@ test("R2: a host that ends before its started line fails the launch and keeps ev
   assert.equal(last.status, "stopped", JSON.stringify(last));
   assert.equal((last.memberEvidence as { count?: number } | undefined)?.count, 1, `the unsettled watch is evidence: ${JSON.stringify(last)}`);
   assert.match(JSON.stringify(last.memberEvidence), /ended without settling its membership watch/);
+});
+
+// The same host failure after the workload wrote output that nobody has read: the retained output keeps the stop
+// unsettled (exited_unknown, no pid), and that is still a failed start with the unsettled watch as evidence.
+test("R2: a workload that wrote output before its host ended before the started line is a blocked failed start", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const { root, launch } = setup("started-unwritable-output", "started_emit_unwritable");
+  await assert.rejects(launch(process.execPath, ["-e", `process.stdout.write("x".repeat(4096)); setTimeout(() => {}, 60000)`]),
+    blockedStart(/output remains unsettled/));
+  const last = supervisorStatusLines(join(root, "job-host")).at(-1)!;
+  assert.equal(last.childPid, 0, JSON.stringify(last));
+  assert.equal((last.memberEvidence as { count?: number } | undefined)?.count, 1, `the unsettled watch is evidence: ${JSON.stringify(last)}`);
+});
+
+// Through the tool a worker calls: the blocked failed start is never closed as "nothing was launched"; the run's
+// close refuses while the evidence stands.
+test("R2: process.run whose Job host ends before its started line is cleanup-blocked and its run close refuses", { skip: !WINDOWS && "Windows Job host", timeout: 90_000 }, async () => {
+  // Its own folder, removed best effort: the refused run keeps its stores open by design.
+  const folder = mkdtempSync(join(tmpdir(), `${OWN_MARKER}run-blocked-`));
+  const refused = await processRunRefused(folder, "started_emit_unwritable").finally(() => { try { rmSync(folder, { recursive: true, force: true }); } catch { /* see above */ } });
+  assert.equal(refused.isError, true, refused.text);
+  assert.notEqual(refused.closeError, null, "the run's close refuses a failed start that keeps evidence");
+  assert.match(refused.closeError!, /cleanup|unverified|blocked/iu, refused.closeError!);
 });
 
 /** Each Job record's supervisor status lines (supervisor.jsonl), oldest first, for this test's single record. */

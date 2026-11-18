@@ -255,6 +255,17 @@ interface SupervisorStatus {
 export class WindowsJobHostError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = "WindowsJobHostError"; }
 }
+/**
+ * R2: a failed start whose status still holds evidence: a member event (packaged, unidentified, or the host's
+ * unsettled membership watch) or output that never settled. Its Job is not proven empty, so the start fails with the
+ * exact record and the caller keeps it cleanup-blocked; it is never closed as "nothing was launched".
+ */
+export class WindowsJobStartBlockedError extends WindowsJobHostError {
+  constructor(message: string, readonly startRecord: { readonly processId: string; readonly startedAt: string }) {
+    super("process_start_cleanup_blocked", message);
+    this.name = "WindowsJobStartBlockedError";
+  }
+}
 
 /** Digest-pin record for one compiled Job-host helper assembly. The digest lives
  * in the runner process's memory only and travels to each Job host over the
@@ -923,8 +934,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
       await this.applyStatus(record, status);
-      if (status.status === "stopped" && status.error) throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed", status.error);
-      if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
+      throwIfStartFailed(status, record);
     } catch (error) {
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
       throw error;
@@ -1208,8 +1218,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       try {
         const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
         await this.applyStatus(claimed, live);
-        if (live.status === "stopped" && live.error) throw new WindowsJobHostError(launchRefusalCode(live) ?? "process_start_failed", live.error);
-        if (live.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
+        throwIfStartFailed(live, claimed);
       } catch (error) {
         // PX-2c repair 1 (M2) + N7: the claim was acked, so the Job host holds
         // the call and may still start its child after any status read (a
@@ -1218,6 +1227,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         // fails exactly like the normal path, keeping the record. A coded
         // launch refusal (R4/R2) keeps its code, as on the normal path.
         await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+        if (error instanceof WindowsJobStartBlockedError) throw error;
         throw new WindowsJobHostError(refusalCodeOf(error) ?? "process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
       }
       this.spareCounts.claims += 1;
@@ -2103,6 +2113,22 @@ export function createWindowsJobProcessHost(options: WindowsJobProcessHostOption
 
 /** R4/R2: the Runner code of a launch the Job host refused before CreateProcess, when its status carries one. */
 const JOB_HOST_LAUNCH_REFUSAL_CODES = WINDOWS_JOB_LAUNCH_REFUSAL_CODES;
+/**
+ * A start status that did not start its workload fails the launch. A terminal status (stopped or exited_unknown)
+ * without the workload's pid is a failed start even with no error: the host ended before its started line. When that
+ * status holds evidence (a member event, or output that never settled), the Job is not proven empty and the start is
+ * cleanup-blocked with its exact record, never a plain "not launched".
+ */
+function throwIfStartFailed(status: SupervisorStatus, record: Pick<HostRecord, "processId" | "startedAt">): void {
+  if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
+  const terminal = status.status === "stopped" || status.status === "exited_unknown";
+  if (!terminal || (!status.error && status.childPid > 0)) return;
+  if (status.status === "exited_unknown" && status.childPid > 0) return;
+  const message = status.error ?? "The Windows Job host ended before it reported that its workload started.";
+  if (status.memberEvidence || status.status === "exited_unknown")
+    throw new WindowsJobStartBlockedError(message, { processId: record.processId, startedAt: record.startedAt });
+  throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed", message);
+}
 function launchRefusalCode(status: SupervisorStatus): string | undefined {
   return typeof status.errorCode === "string" && JOB_HOST_LAUNCH_REFUSAL_CODES.has(status.errorCode) ? status.errorCode : undefined;
 }

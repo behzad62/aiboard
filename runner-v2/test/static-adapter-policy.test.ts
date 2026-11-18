@@ -227,7 +227,10 @@ test("R4: the Job host refuses a launch it cannot give the desktop app policy, b
   assert.match(supervisor, /status\.errorCode = error\.code;/);
   assert.match(supervisor, /if \(backendFailure && status\.status === "starting"\) \{\s+startupFailed\(backendFailure\);/);
   const tsHost = readFileSync(join(sourceRoot, "windows-job-process-host.ts"), "utf8");
-  assert.match(tsHost, /throw new WindowsJobHostError\(launchRefusalCode\(status\) \?\? "process_start_failed", status\.error\)/);
+  assert.match(tsHost, /throw new WindowsJobHostError\(launchRefusalCode\(status\) \?\? "process_start_failed", message\)/);
+  // A failed start that holds evidence (a member event, or output that never settled) is cleanup-blocked with its exact
+  // record instead (fourth review, item 1).
+  assert.match(tsHost, /if \(status\.memberEvidence \|\| status\.status === "exited_unknown"\)\s+throw new WindowsJobStartBlockedError\(/);
 });
 
 // R2: the Job's own membership messages, never a host census (DECISION 2026-09-19 §8.1, §14.1).
@@ -261,12 +264,13 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   // An interactive host that ended with neither a natural stop (the only settle) nor a stop the Runner requested never
   // settled its watch: evidence, on both ways the supervisor records the end. Before its started line too, unless it was
   // never sent its workload or reported that no process was created ("launched": false, written only then).
-  assert.match(supervisor, /if \(!config\?\.interactive \|\| naturalStopSeen \|\| interactiveTerminationRequested\) return;\s+if \(!workloadStarted && \(!workloadDelivered \|\| launchNotCreated\)\) return;\s+recordMemberEvidence\(/);
+  assert.match(supervisor, /if \(!config\?\.interactive \|\| naturalStopSeen \|\| interactiveTerminationRequested \|\| unsettledWatchRecorded\) return;\s+if \(!workloadStarted && \(!workloadDelivered \|\| launchNotCreated\)\) return;\s+unsettledWatchRecorded = true;\s+recordMemberEvidence\(/);
   assert.match(supervisor, /if \(config\?\.interactive && status\.status === "starting" && workloadDelivered && !interactiveTerminationRequested\) \{\s+startupFailed\(/);
   assert.equal([...supervisor.matchAll(/^\s+workloadDelivered = true;$/gm)].length, 2);
   assert.match(jobHost, /if \(processInfo\.hProcess == IntPtr\.Zero\) line = line\.Substring\(0, line\.Length - 1\) \+ ",\\"launched\\":false\}";/);
   assert.match(jobHost, /\$launchedField = if \(\$runInteractiveEntered\) \{ '' \} else \{ ',"launched":false' \}/);
-  assert.equal([...supervisor.matchAll(/^\s+recordUnsettledInteractiveWatch\(\);$/gm)].length, 2);
+  // The stop, the failed start, and the retained-output branch (a host that ended while its output waits for a reader).
+  assert.equal([...supervisor.matchAll(/^\s+recordUnsettledInteractiveWatch\(\);$/gm)].length, 3);
   // The only members that are not evidence besides the root's own package: one that already exited before it could be
   // opened (ERROR_INVALID_PARAMETER), or whose PID now names a process outside this Job. Every other failure is evidence.
   assert.match(jobHost, /if \(failure == ERROR_INVALID_PARAMETER\) return;/);

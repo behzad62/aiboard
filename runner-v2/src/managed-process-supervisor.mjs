@@ -37,8 +37,12 @@ let interactiveTerminationRequested = false;
 // R2: whether the Job host reported its workload started, and whether it settled its membership watch itself.
 let workloadStarted = false;
 let naturalStopSeen = false;
-// R2: the Job host has been sent its workload (its bootstrap line). Before that it cannot have created a process.
+// R2: the Job host has been sent its workload (its bootstrap line). Before that it cannot have created a process. It is
+// set just before the line is written, so a write that fails still counts as delivered: that can only record evidence
+// for a host that created nothing (stricter), never skip it.
 let workloadDelivered = false;
+// R2: the unsettled watch is recorded once, whichever of the retained-output branch and the stop reaches it first.
+let unsettledWatchRecorded = false;
 // R2: the Job host reported, before its started line, that it failed before any process was created ("launched": false).
 let launchNotCreated = false;
 let settled = false;
@@ -606,6 +610,8 @@ function tryMarkStopped() {
   if (config.interactive && (!interactiveStdoutEnded || !interactiveStderrEnded)) return;
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
+      // R2: a host that ended without settling its watch is evidence here too, even while its output waits for a reader.
+      recordUnsettledInteractiveWatch();
       status.status = "exited_unknown";
       status.error = "Windows Job output remains unsettled after the job became empty.";
       status.ownershipReleased = false;
@@ -734,8 +740,9 @@ function recordMemberEvidence(event) {
 // workload is resumed. The only exceptions are a host that never received its workload and a host that reported a
 // failure before any process was created (a coded refusal or a CreateProcess failure, "launched": false).
 function recordUnsettledInteractiveWatch() {
-  if (!config?.interactive || naturalStopSeen || interactiveTerminationRequested) return;
+  if (!config?.interactive || naturalStopSeen || interactiveTerminationRequested || unsettledWatchRecorded) return;
   if (!workloadStarted && (!workloadDelivered || launchNotCreated)) return;
+  unsettledWatchRecorded = true;
   recordMemberEvidence({
     pid: 0, evidence: "unidentified", package: null,
     detail: "The Job host ended without settling its membership watch and without a stop request.",
