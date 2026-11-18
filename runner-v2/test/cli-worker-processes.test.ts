@@ -30,6 +30,13 @@ function alive(pid: number): boolean {
   }
 }
 
+// The host's process facts are injected, not probed: the probe alone takes about 9 s on a Windows host. On Windows they
+// name the Job as the only backend (no portable fallback), so a Job that does not work fails this test instead of
+// passing on the fallback; GitHub's Windows image verifies Job containment and refuses .cmd launches, as here.
+const PROCESS_HOST_FACTS = process.platform === "win32"
+  ? { processHostFacts: { portableDuplex: "unavailable", windowsBatchArgv: "unavailable", exactTreeBirth: "verified", jobContainment: "verified" } as const }
+  : {};
+
 test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2, the Test folder goes after the verified stop, and a timed-out Test's tree is stopped", { timeout: 120_000 }, async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-processes-")));
   const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
@@ -57,9 +64,10 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
   }, `${name}.json`);
   let scenario = scenarioFor("passing", { stdout: cliFixture("claude-code/success.windows.stdout.json") });
   const capabilitiesConfig = emptyRunnerCapabilitiesConfig();
-  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment() });
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS });
   try {
-    const detection = new CliWorkerDetection({
+    // The passing Test ends on its result event, so its deadline is only a bound; the hanging one waits it out.
+    const detection = (testTimeoutMs: number) => new CliWorkerDetection({
       stateDirectory: state,
       processes: createExecutionHostCliWorkerProcesses({
         host,
@@ -73,19 +81,17 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
       // On Windows the host's own Job fact decides (§3.11); a POSIX host has none, and the win32 seam needs one.
       windowsJobContainment: async () => (process.platform === "win32" ? (await host.windowsProcessFacts?.())?.jobContainment : "verified"),
       command: (_path, args) => ({ executable: process.execPath, arguments: [wrapper, scenario, ...args] }),
-      testTimeoutMs: 3_000,
+      testTimeoutMs,
     });
 
-    const check = await detection.check("claude-code");
-    assert.equal(check.status, "ready", JSON.stringify(check));
-    assert.equal(check.version, "2.1.326");
-    assert.equal(readFileSync(`${scenario}.depth`, "utf8"), "2", "a probe's CLI gets AIBOARD_MCP_DEPTH=2");
-
-    const passed = await detection.test("claude-code", { model: null });
+    // A Test runs the free checks first (their probes in their own transient binding), then the CLI.
+    const passed = await detection(30_000).test("claude-code", { model: null });
     assert.equal(passed.lastTest.outcome, "passed", JSON.stringify(passed));
+    assert.equal(passed.lastTest.cliVersion, "2.1.326", "the probes' version reached the result");
     assert.equal(passed.stopVerified, true);
     const record = JSON.parse(readFileSync(join(scenarios, "passing-run.json"), "utf8")) as FakeCliRecord;
-    assert.ok(realpathSync(join(record.cwd, "..", "..")) === realpathSync(join(state, "cli-worker-tests")), record.cwd);
+    // Native real paths on both sides: GitHub's Windows image gives the CLI a long cwd and tmpdir() an 8.3 one.
+    assert.equal(realpathSync.native(join(record.cwd, "..", "..")), realpathSync.native(join(state, "cli-worker-tests")), record.cwd);
     assert.match(record.stdin, /connection test from AIBoard/);
     assert.equal(readFileSync(`${scenario}.depth`, "utf8"), "2", "the Test's CLI gets AIBOARD_MCP_DEPTH=2");
     const tests = join(state, "cli-worker-tests");
@@ -94,7 +100,7 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     // A CLI that never answers, with a child of its own: the deadline, then the binding's stop takes the whole tree.
     // On Windows the child is detached, outside libuv's own kill-on-close job, so only the Runner's Job can stop it.
     scenario = scenarioFor("hanging", { holdMs: 60_000, grandchildMs: 60_000, ...(process.platform === "win32" ? { grandchildDetached: true } : {}) });
-    const timedOut = await detection.test("claude-code", { model: null });
+    const timedOut = await detection(1_500).test("claude-code", { model: null });
     assert.equal(timedOut.lastTest.outcome, "timed_out", JSON.stringify(timedOut));
     assert.equal(timedOut.stopVerified, true);
     const hanging = JSON.parse(readFileSync(join(scenarios, "hanging-run.json"), "utf8")) as FakeCliRecord;

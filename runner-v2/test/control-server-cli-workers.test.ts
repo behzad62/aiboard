@@ -709,7 +709,7 @@ test("an unverified stop reports timed_out and keeps the test folder", async () 
   }
 });
 
-test("a start that throws the process host's aggregate: the folder is kept unless the session's stop is then proven", async () => {
+test("a start that throws the process host's aggregate: the folder is kept unless the session's stop is then proven, and then the Test is saved", async () => {
   {
     const f = await fixture({ scenarios: (s) => ({ [CLAUDE]: claudeScenario(s) }) });
     try {
@@ -727,14 +727,24 @@ test("a start that throws the process host's aggregate: the folder is kept unles
     }
   }
   {
-    const f = await fixture({ scenarios: (s) => ({ [CLAUDE]: claudeScenario(s) }) });
+    const f = await fixture({ scenarios: (s) => ({ [CLAUDE]: claudeScenario(s, { stdout: cliFixture("claude-code/success.windows.stdout.json") }) }) });
     try {
       f.processes.fail.start = "test";
-      const { status } = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
-      assert.equal(status, 500, "the start's error answers the request");
+      const { status, body } = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
+      assert.equal(status, 200, JSON.stringify(body));
+      const saved = body.lastTest as { outcome: string; message: string };
+      assert.equal(saved.outcome, "not_installed");
+      assert.match(saved.message, /could not be started for the test; anything it started was stopped/);
+      assert.doesNotMatch(JSON.stringify(body), /cleanup remains owned/, "the process host's own wording is only logged");
+      assert.equal(body.stopVerified, true);
       assert.deepEqual(f.processes.closes.at(-1), { purpose: "test", verified: true });
       assert.deepEqual(testFolders(f), [], "the stop was proven, so the folder is removed");
-      assert.equal(await lastTest(f, "claude-code"), undefined, "no outcome is invented for a start that failed");
+      assert.equal((await lastTest(f, "claude-code"))?.outcome, "not_installed", "saved to the home");
+      // Nothing of the failed start is left to hold up the next Test.
+      delete f.processes.fail.start;
+      const again = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal((again.body.lastTest as { outcome: string }).outcome, "passed");
     } finally {
       await f.close();
     }
@@ -744,7 +754,9 @@ test("a start that throws the process host's aggregate: the folder is kept unles
     try {
       f.processes.fail.open = "test";
       const { status } = await f.call("/v2/cli-workers/claude-code/test", { method: "POST", body: { model: null } });
+      // The Runner could not open a process session: its own failure, never recorded as the CLI's (§3.11).
       assert.equal(status, 500);
+      assert.equal(await lastTest(f, "claude-code"), undefined);
       assert.equal(f.processes.launched("test").length, 0);
       assert.deepEqual(testFolders(f), [], "no process session opened, so nothing ran in the folder");
     } finally {

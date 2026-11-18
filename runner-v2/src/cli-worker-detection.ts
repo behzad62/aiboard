@@ -536,12 +536,12 @@ export class CliWorkerDetection {
       keepFolder = true;
       const run = await this.runTestProcess(session, providerId, check.executable.path, args, outputPath);
       keepFolder = !run.stopVerified;
-      // A start or read that failed, after the stop was proven: the folder goes, and the request is answered with
-      // what happened (the process host's own message may speak of cleanup it has since proven). Nothing is saved:
-      // the CLI was never heard from.
+      // A start or read that failed, after the stop was proven: the folder goes, and the Test is saved as a CLI that
+      // could not be used (the outcomes have no "could not start"; the message says what happened). The process
+      // host's own error may speak of cleanup it has since proven, so it is only logged.
       if (run.failure) {
         console.warn(`[runner] a ${name} test could not run: ${describe(run.failure.error)}`);
-        throw new Error(`${name} could not be started for the test; anything it started was stopped. Check the CLI, then test again.`);
+        return await saved("not_installed", `${name} could not be started for the test; anything it started was stopped. Check its installation, then test again.`, { launched: true });
       }
       if (!run.stopVerified) {
         return await saved("timed_out", `${name}'s test processes could not be proven stopped; the test folder is kept for cleanup.`,
