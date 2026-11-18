@@ -65,6 +65,11 @@ const deterministicPrTests = [
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // A test file whose fixture cleanup stays unverified ends after its last test instead of holding the job until it
+  // is cancelled: a synthetic held handle, and a real ExecutionHost run whose close is made to fail (child test-runner
+  // processes; in PR CI at 0e4673e2 about 20 s on Windows, where the real run holds its birth helper, 16 s on Linux and
+  // 18 s on macOS).
+  "runner-v2/test/certified-fixture-retained-exit.test.ts",
   // CW5: the CLI worker loop against the fake CLI run as a child (no real CLI, no prompt): temporary git checkouts and
   // short fake runs, in three files the parallel step runs side by side. Each file's tests run four at a time on one
   // baseline repository copied per test, with async fixture Git. Run alone on a busy Windows PC: outcomes and case 1
