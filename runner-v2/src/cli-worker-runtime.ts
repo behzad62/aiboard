@@ -709,8 +709,9 @@ async function waitForRun(
     try {
       await handle.write(chunks[index]!, index === chunks.length - 1);
     } catch (error) {
-      // Each write has ManagedProcessService's fixed limit (MANAGED_INPUT_WRITE_TIMEOUT_MS). A CLI that has not started
-      // reading its stdin when the pipe buffer is full (a slow start) can reach it: the Runner's failure, not the CLI's.
+      // Each write waits until the CLI reads it, up to ManagedProcessService's ceiling (MANAGED_INPUT_WRITE_CEILING_MS).
+      // A CLI that has not started reading its stdin by then, with the pipe buffer full, reaches it: the Runner's
+      // failure, not the CLI's.
       throw new CliStdinUndeliveredError(`The prompt's write ${index + 1} of ${chunks.length} to the CLI's stdin was not delivered: ${errorMessage(error)}`);
     }
   }

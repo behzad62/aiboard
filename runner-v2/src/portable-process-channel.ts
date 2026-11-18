@@ -122,7 +122,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       byteLength: owned.byteLength,
       digest: input.digest,
       bytes: Buffer.from(owned).toString("base64"),
-    }, input.timeoutMs, { nextCommand: commandSequence + 1, nextWrite: this.nextWrite + 1, inputClosed: this.inputClosed });
+    }, input.timeoutMs, { nextCommand: commandSequence + 1, nextWrite: this.nextWrite + 1, inputClosed: this.inputClosed }, input.signal);
     return { acknowledged: true, sequence: input.sequence };
   }
 
@@ -487,7 +487,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     throw snapshot.error instanceof Error ? snapshot.error : new Error("Portable output snapshot is unavailable.");
   }
 
-  private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number, nextState: { nextCommand: number; nextWrite: number; inputClosed: boolean }): Promise<void> {
+  private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number, nextState: { nextCommand: number; nextWrite: number; inputClosed: boolean }, signal?: AbortSignal): Promise<void> {
     const name = `input-${String(sequence).padStart(12, "0")}.json`;
     await this.authority.effect(body.type === "write" ? "write" : body.type === "close_input" ? "close" : "signal", () => {
       this.persistInputState(nextState);
@@ -530,7 +530,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       }
       return true;
     };
-    while (Date.now() < deadline) {
+    // A stopping session abandons the wait (signal): the same reconciliation as a passed deadline follows.
+    while (Date.now() < deadline && !signal?.aborted) {
       if (await settleAcknowledgement()) return;
       try { this.reattest(false); }
       catch (error) {
@@ -549,7 +550,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     if (finalAcknowledgement === "failed") throw new Error("Portable channel command failed.");
     let detail = "state unavailable";
     try { detail = JSON.stringify({ state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")), input: readdirSync(this.inputDirectory), ack: readdirSync(this.ackDirectory).map((name) => [name, readFileSync(join(this.ackDirectory, name), "utf8")]) }); } catch {}
-    throw new Error(`Portable channel command acknowledgement timed out. ${detail}`);
+    throw new Error(`Portable channel command acknowledgement ${signal?.aborted ? "was abandoned: the session is stopping" : "timed out"}. ${detail}`);
   }
 
   private async terminal(signal: AbortSignal): Promise<unknown | undefined> {

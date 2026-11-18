@@ -7,9 +7,10 @@ import {
   type BackpressuredOutputSettlement,
   type InteractiveProcessChannel,
   type InteractiveProcessWrite,
+  InteractiveInputRefusedError,
 } from "./interactive-process-channel.js";
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
-import type { WindowsJobChannelState, WindowsJobOwnershipKey, WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { WindowsJobInputRefusedError, WindowsJobInputUnacknowledgedError, type WindowsJobChannelState, type WindowsJobOwnershipKey, type WindowsJobProcessHost } from "./windows-job-process-host.js";
 
 /**
  * Slowest background output poll of an idle channel. Each poll is a fenced, authenticated read, so a
@@ -138,7 +139,18 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     this.assertAttached(); await this.authority.reattest();
     if (this.inputClosed) throw new Error("Windows Job input is closed.");
     if (input.sequence !== this.nextSequence || input.byteLength !== payload.byteLength || createHash("sha256").update(payload).digest("hex") !== input.digest) throw new Error("Windows Job input metadata is invalid.");
-    const result = await this.authority.service.writeOwnedInput(this.authority.processId, this.authority.owner, this.authority.fence, input.sequence, new Uint8Array(payload));
+    // The host bounds the whole write by the caller's timeoutMs; it waits for a slow reader's drain outside its fence.
+    let result: Awaited<ReturnType<typeof this.authority.service.writeOwnedInput>>;
+    try {
+      result = await this.authority.service.writeOwnedInput(this.authority.processId, this.authority.owner, this.authority.fence, input.sequence, new Uint8Array(payload), input.timeoutMs, input.signal);
+    } catch (error) {
+      // Admitted but not acknowledged: the host spent this sequence, so the next write takes the next one. The
+      // supervisor refuses it (409) while this one still drains, so bytes are never queued or reordered.
+      if (error instanceof WindowsJobInputUnacknowledgedError) { this.nextSequence += 1; this.wakePolling(); }
+      // Refused before admission (e.g. the previous write still drains): nothing sent, the sequence stays unspent.
+      if (error instanceof WindowsJobInputRefusedError) throw new InteractiveInputRefusedError(error.message);
+      throw error;
+    }
     this.nextSequence += 1; this.wakePolling(); return result;
   }
   async closeInput(): Promise<unknown> {

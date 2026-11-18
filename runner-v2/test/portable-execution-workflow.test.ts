@@ -57,6 +57,10 @@ const deterministicPrTests = [
   // and 10 s on macOS, and 61 s on Windows inside this parallel step.
   "runner-v2/test/control-server-cli-workers.test.ts",
   "runner-v2/test/cli-worker-processes.test.ts",
+  // The adaptive stdin write bound on this host's real backend (Job or process group): a late reader, a stop during an
+  // undrained write, a reader's exit and the ceiling, with fake readers and injected host facts (about 17 s on a
+  // Windows PC, 27 s in Linux Docker; one 6 s wait is the late reader's).
+  "runner-v2/test/managed-stdin-slow-reader.test.ts",
   // User steering and Architect questions in the Build runtime: guidance, question resume and supersession across
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
