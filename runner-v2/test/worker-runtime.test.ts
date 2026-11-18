@@ -14,11 +14,13 @@ import type {
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
-import { captureGitBaseline } from "./support/git-fixture.js";
+import { captureGitBaseline, fixtureGitContext } from "./support/git-fixture.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { RUNNER_RERUN_OF_CLI_CLAIM } from "../src/evidence-store.js";
+import { submitWorkerTask, workerSubmissionContext } from "../src/worker-runtime.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import { ManagedProcessService } from "../src/managed-process.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
@@ -843,3 +845,49 @@ function fixtureLanguageProvider(): LanguageIntelligenceProvider {
     close: async () => undefined,
   };
 }
+
+test("CW6: the shared submit takes a Runner re-run of a CLI's claim as the assigned worker's evidence, never another worker's or attempt's", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-worker-cli-rerun-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+  const evidenceStore = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  t.after(() => {
+    ledger.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: "run_cli_rerun" });
+  const workspaces = new WorkspaceManager({ repositoryRoot: project, stateDirectory: state, runId: "run_cli_rerun", baselineRevision: baseline.revision });
+  const workspace = await workspaces.createTaskWorkspace("task_cli_rerun");
+  writeFileSync(join(workspace.path, "value.txt"), "two\n");
+  const output = await artifacts.put(Buffer.from("ok"), "text/plain", "re-run stdout");
+  const rerun = (actorId: string, attempt: number, key: string) => evidenceStore.record({
+    runId: "run_cli_rerun", taskId: "task_cli_rerun", actor: { role: "worker", id: actorId }, attempt,
+    createdAt: "2026-11-18T00:00:01.000Z", idempotencyKey: key,
+    fact: {
+      kind: "command", label: "value check", command: "node", args: ["--test"], cwd: workspace.path,
+      startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:01.000Z", exitCode: 0, signal: null,
+      timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: output.hash, stderrArtifactHash: output.hash,
+      source: RUNNER_RERUN_OF_CLI_CLAIM,
+    },
+  });
+  const context = workerSubmissionContext({
+    git: fixtureGitContext(), runId: "run_cli_rerun", sessionId: "session_cli_rerun", taskId: "task_cli_rerun", actorId: "worker_cli", attempt: 2,
+    acceptanceCriteria: [{ id: "value", text: "value.txt holds two." }],
+    workspace, workspaceManager: workspaces, artifacts, ledger, evidenceStore,
+  });
+  const submit = (evidenceId: string) => submitWorkerTask(context, {
+    summary: "Claude Code worker reports: changed the value", readiness: "ready_for_architect_review", unresolvedConcerns: [],
+    criterionEvidenceLinks: [{ criterionId: "value", evidenceId, artifactHashes: [output.hash] }],
+  });
+  await assert.rejects(submit(rerun("worker_other", 2, "other").id), /belongs outside the assigned worker/);
+  await assert.rejects(submit(rerun("worker_cli", 1, "earlier").id), /stale for attempt 2/);
+  const changeSet = await submit(rerun("worker_cli", 2, "current").id);
+  assert.deepEqual([...changeSet.changedPaths], ["value.txt"]);
+  assert.equal(changeSet.criterionEvidenceLinks?.[0]?.attempt, 2);
+});

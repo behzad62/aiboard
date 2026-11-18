@@ -40,7 +40,15 @@ export interface CommandEvidenceFact {
    * and on commands that named no outputs.
    */
   outputs?: import("./command-output-files.js").CommandOutputCapture;
+  /**
+   * CW6: who asked for the run, when it was not the actor's own call. `runner_rerun_of_cli_claim`: the Runner re-ran
+   * a check a CLI worker reported, as that worker (CLI workers plan §3.6). Absent on every other command.
+   */
+  source?: CommandEvidenceSource;
 }
+
+export const RUNNER_RERUN_OF_CLI_CLAIM = "runner_rerun_of_cli_claim";
+export type CommandEvidenceSource = typeof RUNNER_RERUN_OF_CLI_CLAIM;
 
 export interface BrowserSnapshotEvidenceFact {
   kind: "browser_snapshot";
