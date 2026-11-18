@@ -122,7 +122,7 @@ When one was left, the session's later cleanup ended `cleanup_blocked` ("Streami
 - **A prior owner's command** (after a takeover) does not cause a refusal. It queues as before, because the supervisor retires it as stale unless it was admitted before the takeover.
 - **No supervisor change.** The supervisor and the fence protocol are unchanged.
 - **Known gaps** (from the independent review):
-  - The reader's output can reach the Runner a moment before the supervisor commits the drained write's settlement, for example after lock contention. A write in that gap is refused, which is a certain refusal that the caller can resend. The Windows Job's `input_pending` has the same gap.
+  - The reader's output can reach the Runner a moment before the supervisor commits the drained write's settlement, for example after lock contention. A write in that gap is refused, which is a certain refusal that the caller can resend with a new `writeId` (the service returns its stored result for a `writeId` it has already seen, a refusal included). The Windows Job's `input_pending` has the same gap.
   - After a takeover, a new owner's write still queues behind a prior owner's write that was admitted but not drained. It can end `outcome_unknown` and be delivered later.
 
 **Measured after the fix (Linux Docker).**

@@ -1196,7 +1196,7 @@ test("portable output settlement is not held by an input acknowledgement no wait
   } finally { unsubscribe(); await fixture.close(); }
 });
 
-test("portable output settlement still waits for output the supervisor has not retired, its ACK published", async () => {
+test("portable output settlement still waits for an output chunk the supervisor has not retired", async () => {
   const fixture = await settlementFixture();
   fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
   try {
