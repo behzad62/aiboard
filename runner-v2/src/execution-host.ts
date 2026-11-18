@@ -23,7 +23,7 @@ import {
 import { ManagedProcessService } from "./managed-process.js";
 import { createExecutionHostManagedRuntime } from "./execution-host-managed-transport.js";
 import type { ManagedProcessLaunchRequest, ManagedProcessRunRuntime, ManagedProcessTarget } from "./managed-process-transport.js";
-import { createWindowsJobProcessHost, windowsBirthHelperDirectory, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
+import { createWindowsJobProcessHost, windowsBirthHelperDirectory, type WindowsJobProcessHost, type WindowsJobReleasedRecord, type WindowsJobSpareOptions } from "./windows-job-process-host.js";
 import {
   createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
@@ -35,7 +35,7 @@ import {
 } from "./process-backend.js";
 import { createPosixProcessBackend } from "./posix-process-backend.js";
 import { NativeOwnedProcessBackend } from "./native-process-backend.js";
-import { InspectionConstructionOwner, assertSubprocessCleanupSettled, assertStreamingCleanupSettled, awaitInspectionConstruction, inheritedSubprocessResidue } from "./inspection-cleanup.js";
+import { InspectionConstructionOwner, assertSubprocessCleanupSettled, assertStreamingCleanupSettled, awaitInspectionConstruction, inheritedSubprocessResidue, releasedWindowsJobRecords, type SettledSubprocessBindings } from "./inspection-cleanup.js";
 import {
   probeProcessHostSemantics,
   selectWindowsProcessBackendKinds,
@@ -299,6 +299,12 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
   const inspectionOperations = new Set<Promise<unknown>>();
   const inspectionOwners = new Set<() => Promise<void>>();
   const bindingOperations = new Set<Promise<void>>();
+  /** Job-host record retention started by settled run closes; the host's close waits for it after closing its bindings. */
+  const retentionOperations = new Set<Promise<unknown>>();
+  const trackRetention = (retention: Promise<unknown>): void => {
+    retentionOperations.add(retention);
+    void retention.finally(() => retentionOperations.delete(retention));
+  };
   const constructionOwners = new Map<InspectionConstructionOwner, string>();
   const reservation = Symbol("execution-host-binding-reservation");
   let closed = false;
@@ -382,6 +388,9 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           streamingOutput: options.streamingOutput,
           cleanupFault: options.cleanupFault,
           resolveWindowsFacts,
+          // Only the shared Job host keeps records past a run. A transient run's private host is removed whole after
+          // its proven stop, and its supervisor wait reads the host's own records, so retention never runs there.
+          ...(transient ? {} : { jobRecordRetention: { track: trackRetention } }),
           onClosed: () => {
             const current = bindings.get(runId);
             if (current === binding || (exposed !== undefined && current === exposed)) bindings.delete(runId);
@@ -543,6 +552,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         for (const binding of active.reverse()) {
           try { await binding.close(); } catch (error) { failures.push(error); }
         }
+        // Never fails: each retention keeps whatever it could not prove or delete.
+        await Promise.allSettled([...retentionOperations]);
         if (failures.length > 0) {
           throw new AggregateError(failures, "ExecutionHost run-binding cleanup failed.");
         }
@@ -670,6 +681,12 @@ interface CreateRunBindingInput {
   readonly cleanupFault?: ExecutionHostOptions["cleanupFault"];
   readonly resolveWindowsFacts: () => Promise<ProcessHostSemanticFacts>;
   readonly onClosed: () => void;
+  /**
+   * Job-host record retention after a settled close, only for a binding on the shared Job host; `track` takes the
+   * retention it starts. Absent for a private host (a transient run, a historical Git inspection), whose whole folder
+   * is removed after its proven stop: no retention runs there, so nothing races that removal or its supervisor wait.
+   */
+  readonly jobRecordRetention?: { readonly track: (retention: Promise<unknown>) => void };
 }
 
 async function createRunBinding(input: CreateRunBindingInput): Promise<ExecutionHostRunBinding> {
@@ -799,6 +816,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     let closeComplete = false;
     let closePromise: Promise<void> | undefined;
     let cleanupDutiesSettled = false;
+    let settledSubprocesses: SettledSubprocessBindings | undefined;
     let streamingStoreClosed = false;
     let subprocessStoreClosed = false;
     // Set by the first recover(): records only an exceptional recovery could settle.
@@ -921,7 +939,7 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             }
             try {
               await subprocessKernel.runtime.reconcileStartup();
-              assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore, subprocessResidue);
+              settledSubprocesses = assertSubprocessCleanupSettled(subprocessKernel.readOnlyStore, subprocessResidue);
             } catch (error) { failures.push(error); }
             try {
               await input.cleanupFault?.({
@@ -932,7 +950,18 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
               const blockers = recovery.flatMap((entry) => entry.blockers);
               if (blockers.length > 0) throw new Error(blockers.join(" "));
             } catch (error) { failures.push(error); }
-            if (failures.length === 0) cleanupDutiesSettled = true;
+            if (failures.length === 0) {
+              cleanupDutiesSettled = true;
+              // Every process the run's stores record as released is final there, so the shared Job host may delete
+              // those records and their raw output. It re-checks each stop itself and keeps anything unproven. The
+              // list is taken now, while the stores are open; the deletions run off the close path, tracked so the
+              // ExecutionHost's own close waits for them. Best effort: a record that stays is only disk, never authority.
+              if (input.jobRecordRetention && input.windowsJobHost.retireReleasedRecords && settledSubprocesses) {
+                let released: WindowsJobReleasedRecord[] = [];
+                try { released = releasedWindowsJobRecords(input.runId, settledSubprocesses, streamingKernel.store); } catch { released = []; }
+                input.jobRecordRetention.track(input.windowsJobHost.retireReleasedRecords({ runId: input.runId, released }).catch(() => undefined));
+              }
+            }
           }
           if (failures.length > 0) {
             throw new AggregateError(failures, `ExecutionHost run ${input.runId} cleanup failed.`);

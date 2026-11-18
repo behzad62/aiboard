@@ -21,6 +21,9 @@ const deterministicPrTests = [
   "runner-v2/test/planning-ui-fixture.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
   "runner-v2/test/native-build-manager-readers.test.ts",
+  // Job-host record retention: synthetic records, no Job or supervisor launched (one helper child and, on Windows,
+  // one PowerShell handle holder; about 2 s on Windows).
+  "runner-v2/test/windows-job-record-retention.test.ts",
   // VF3: the v1/v2 final-verification contract gate, in memory (about 1 s).
   "runner-v2/test/verification-plan-v2-contract.test.ts",
   // VF4: aiboard-validation.json checks, mandatory and the missing-tool pause, in memory (about 1 s).

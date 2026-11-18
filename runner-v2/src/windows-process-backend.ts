@@ -79,6 +79,8 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
     : new WindowsProcessBackend(options);
 }
 
+/** The backend id every Windows Job backend binding carries. */
+const WINDOWS_JOB_BACKEND_ID = "runner-windows-job-v1";
 /** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
 export class WindowsJobObjectProcessBackend implements ProcessBackend {
   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
@@ -95,7 +97,7 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
       throw new Error("Authenticated Windows Job Object enhancement is unavailable.");
     return {
       attestationVersion: 2,
-      backendId: "runner-windows-job-v1",
+      backendId: WINDOWS_JOB_BACKEND_ID,
       verified: true,
       platformLabel: "windows",
       lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
@@ -431,12 +433,24 @@ interface JobControlLane {
 interface JobOpaqueIdentity { processId: string; runId: string; sessionId: string; startedAt: string; fence?: ProcessEffectFence }
 interface JobIdentity extends JobOpaqueIdentity { birthDiscriminator: string }
 class JobIdentityMismatchError extends Error {}
-function jobIdentity(binding: ProcessBackendBinding): JobIdentity {
+function jobIdentity(binding: Pick<ProcessBackendBinding, "opaqueIdentity" | "birthFingerprint">): JobIdentity {
   const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as JobOpaqueIdentity;
   if (!value.processId || !value.runId || !value.sessionId || !value.startedAt) throw new Error("Windows Job identity is invalid.");
   const discriminator = jobBirthDiscriminator(value);
   if (binding.birthFingerprint.discriminator !== discriminator) throw new JobIdentityMismatchError("Windows Job birth fingerprint is invalid.");
   return { ...value, birthDiscriminator: discriminator };
+}
+/**
+ * The Job-host record a Windows Job backend binding names (its process id, owner and birth), for record retention.
+ * Undefined for any other backend's binding, or one whose identity or birth fingerprint does not verify.
+ */
+export function windowsJobRecordOfBinding(binding: Pick<ProcessBackendBinding, "backendId" | "opaqueIdentity" | "birthFingerprint">): { readonly processId: string; readonly runId: string; readonly sessionId: string; readonly startedAt: string } | undefined {
+  if (binding.backendId !== WINDOWS_JOB_BACKEND_ID) return undefined;
+  try {
+    const identity = jobIdentity(binding);
+    if (typeof identity.processId !== "string" || typeof identity.runId !== "string" || typeof identity.sessionId !== "string" || typeof identity.startedAt !== "string") return undefined;
+    return Object.freeze({ processId: identity.processId, runId: identity.runId, sessionId: identity.sessionId, startedAt: identity.startedAt });
+  } catch { return undefined; }
 }
 function jobBirthDiscriminator(identity: JobOpaqueIdentity): string {
   return createHash("sha256").update(`${identity.processId}\0${identity.startedAt}`).digest("hex");
