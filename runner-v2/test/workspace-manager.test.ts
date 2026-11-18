@@ -7,6 +7,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +16,8 @@ import test from "node:test";
 
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { runGit } from "./support/git-fixture.js";
-import { ForeignHistoryError, NoTaskChangesError } from "../src/workspace-manager.js";
+import { ForeignHistoryError, NoTaskChangesError, PROJECT_STATE_MAX_OUTPUT_BYTES } from "../src/workspace-manager.js";
+import type { GitCommandOptions } from "../src/git-command.js";
 import { inspectSubmissionTree } from "../src/submission-guard-git.js";
 import { policyGit } from "./support/cli-worker-fixture.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
@@ -699,6 +701,25 @@ test("CW5 undoForeignCommits refuses rewritten history, a detached HEAD, another
     rmSync(mergeHead);
     assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), runnerCommit);
     await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, "not-a-commit"), /not a commit id/);
+
+    // A merge after the recorded tip brings in history from outside the task branch: refused, the branch unmoved.
+    await cli.cliGit("checkout", "-q", "-b", "side", runnerCommit);
+    writeFileSync(join(cli.workspace.path, "side.txt"), "side\n");
+    await cli.cliGit("add", "side.txt");
+    await cli.cliGit("commit", "-q", "-m", "side");
+    await cli.cliGit("checkout", "-q", cli.workspace.branch.replace(/^refs\/heads\//, ""));
+    writeFileSync(join(cli.workspace.path, "main.txt"), "main\n");
+    await cli.cliGit("add", "main.txt");
+    await cli.cliGit("commit", "-q", "-m", "on the task branch");
+    await cli.cliGit("merge", "-q", "--no-ff", "--no-edit", "side");
+    const merged = await gitText(cli.workspace.path, ["rev-parse", "HEAD"]);
+    await assert.rejects(cli.manager.undoForeignCommits(cli.workspace, runnerCommit),
+      (error: unknown) => error instanceof ForeignHistoryError && error.code === "cli_history_rewritten" && error.kind === "merge");
+    assert.equal(await gitText(cli.workspace.path, ["rev-parse", "HEAD"]), merged);
+    // The same check runs before a launch: on the task branch it passes; detached it refuses.
+    await cli.manager.assertOnTaskBranch(cli.workspace);
+    await cli.cliGit("checkout", "-q", "--detach");
+    await assert.rejects(cli.manager.assertOnTaskBranch(cli.workspace), (error: unknown) => error instanceof ForeignHistoryError && error.kind === "detached");
   } finally {
     cli.cleanup();
   }
@@ -752,6 +773,31 @@ test("CW5 projectFolderState changes with the project folder's HEAD, index and s
     assert.notEqual(after.status, before.status);
     await gitText(cli.project, ["add", "outside.txt"]);
     assert.notEqual((await cli.manager.projectFolderState()).index, before.index);
+  } finally {
+    cli.cleanup();
+  }
+});
+
+test("CW5 projectFolderState reads past Git's 4 MiB default and takes no optional lock, so it never writes the user's index", async () => {
+  const cli = await cliWorktree("project-state-limit");
+  try {
+    const calls: GitCommandOptions[] = [];
+    const recording = new WorkspaceManager({
+      repositoryRoot: cli.project, stateDirectory: join(cli.root, "state"), runId: "run_cw5",
+      baselineRevision: await gitText(cli.project, ["rev-parse", "HEAD"]),
+      execute: async (options) => { calls.push(options); return await policyGit(options); },
+    });
+    // A tracked file whose stat changed: a status with optional locks would refresh and rewrite the index.
+    const index = join(cli.project, ".git", "index");
+    const indexBefore = readFileSync(index);
+    utimesSync(join(cli.project, "value.txt"), new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
+    const state = await recording.projectFolderState();
+    assert.notEqual(state.status, "unknown");
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((call) => call.maxOutputBytes === PROJECT_STATE_MAX_OUTPUT_BYTES));
+    assert.equal(PROJECT_STATE_MAX_OUTPUT_BYTES, 64 * 1024 * 1024);
+    assert.deepEqual(calls.find((call) => call.args[0] === "status")?.env, { GIT_OPTIONAL_LOCKS: "0" });
+    assert.deepEqual(readFileSync(index), indexBefore, "status left the user's index as it was");
   } finally {
     cli.cleanup();
   }

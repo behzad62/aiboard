@@ -437,6 +437,24 @@ export class PlaywrightCliSessions {
    * recorded (not a session process, or not POSIX, where the session's Job or group takes its browser with it).
    * A final check reads it right after its program's stop returned, which awaits the check (`observeManagedStops`).
    */
+  /**
+   * CW5 (CLI workers plan §3.10): the browser check of an owner whose processes were just proven stopped, as
+   * `removeRun` checks each owner folder: the browsers its profiles name plus its known escapes, gone within the grace
+   * or still there. It reads afresh, so it never depends on which stop recorded what: a known escape stays `escaped`
+   * until a later check proves it gone. Recorded like a stop's check, never signalled. On Windows the owner's Job
+   * holds the browser, so there is nothing to check.
+   */
+  async checkOwnerBrowsers(owner: Readonly<{ runId: string; sessionId: string }>): Promise<BrowserCleanupRecord["status"]> {
+    if (this.platform === "win32") return "none";
+    const folder = this.ownerFolder(owner);
+    const read = existsSync(folder) ? this.leaders(folder) : [];
+    const outcome = await this.clean({ runId: owner.runId, sessionId: owner.sessionId, processId: "owner" }, folder,
+      read && withKnown(this.knownEscapes.get(folder), read), false);
+    if (outcome === "unknown") return "unknown";
+    if (outcome !== "clean") return "escaped";
+    return this.cleanups.at(-1)?.status ?? "none";
+  }
+
   cleanupAfterStop(target: Readonly<{ runId: string; sessionId: string; processId: string }>): BrowserCleanupRecord["status"] | undefined {
     for (let index = this.cleanups.length - 1; index >= 0; index -= 1) {
       const entry = this.cleanups[index]!;

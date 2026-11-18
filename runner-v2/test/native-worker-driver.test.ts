@@ -1013,6 +1013,12 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
   // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
+  // Registered before anything can throw (the worktree, the stores), so a failed setup still removes the folder.
+  const closers: Array<() => void> = [];
+  t.after(() => {
+    for (const close of closers.reverse()) close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
   const project = join(root, "project");
   const state = join(root, "state");
   const fake = join(root, "fake");
@@ -1029,10 +1035,7 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
   const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
-  t.after(() => {
-    sessions.close(); ledger.close(); scheduler.close(); evidence.close(); memory.close();
-    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-  });
+  closers.push(() => { sessions.close(); ledger.close(); scheduler.close(); evidence.close(); memory.close(); });
   seedRunningTask(scheduler);
   const { structured = cliDoneResult(), working, ...rest } = scenario;
   const stdout = writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
@@ -1041,7 +1044,16 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const api: AgentRuntimeCandidate = { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 2 };
   const health = new ProviderHealthRegistry();
   const apiModel = new ScriptedModel([]);
+  // The owner folder's browser as the post-stop check reads it. In production the stop that really ends the owner's
+  // processes is the managed service's closeAgent (retryStop runs it first), and its observer records the browser:
+  // with `escapeOnStop` armed, that stop is where the escape appears.
   let browser: "exited" | "escaped" = "exited";
+  let escapeOnStop = false;
+  const closes: string[] = [];
+  const managedProcesses = {
+    closeAgent: async (owner: { sessionId: string }) => { closes.push(owner.sessionId); if (escapeOnStop) browser = "escaped"; },
+    listRun: async () => [],
+  } as unknown as ManagedProcessService;
   const owners = new CliWorkerOwners();
   const runtime: CliWorkerRuntimeDeps = {
     schedulerStore: scheduler, sessions, workspaceManager: workspaces, launcher,
@@ -1049,7 +1061,7 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
     host: { platform: "win32", isRoot: false, jobContainment: "verified", windowsBatchArgv: "verified" },
     stateDirectory: state, owners, readWaitMs: 50,
     captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
-    browser: { stopRecord: () => browser },
+    browser: { checkAfterStop: async () => browser },
     rerunChecks: async ({ attempt }) => {
       const output = await artifacts.put(new Uint8Array(0), "text/plain", "check output");
       const record = evidence.record({
@@ -1081,10 +1093,11 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
     projectId: "project_1",
     projectRoot: project,
     execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    managedProcesses,
     cliWorkers: { runtimes: new Map([[cli.runtimeId, { runtimeId: cli.runtimeId, providerId: "claude-code", model: "sonnet" }]]), runtime: { ...runtime, ...runtimeOverrides } },
   });
   const assignment = { runId: "run_1", task: rebuildTask(scheduler), attempt: 1, workerId: "worker_task_a_1", workspacePath: workspace.path };
-  return { driver, assignment, launcher, health, apiModel, owners, scheduler, setBrowser: (status: "exited" | "escaped") => { browser = status; } };
+  return { driver, assignment, launcher, health, apiModel, owners, scheduler, setBrowser: (status: "exited" | "escaped") => { browser = status; }, armEscapeOnStop: (armed: boolean) => { escapeOnStop = armed; }, closes };
 }
 
 test("CW5: a mixed crew assigns the task to the CLI worker, whose done result is submitted", async (t) => {
@@ -1117,9 +1130,15 @@ test("CW5: an unproven stop keeps the collect pending, and retryStop proves the 
   assert.deepEqual((outcome as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_collect_pending:task_a" });
   const owner = { runId: "run_1", sessionId: "worker:run_1:task_a:1" };
   assert.equal(fixture.owners.has(owner), true);
-  fixture.setBrowser("escaped");
+  // The browser escapes at the generic stop retryStop runs first: the CLI's check runs after it and must see it.
+  fixture.armEscapeOnStop(true);
+  const before = fixture.closes.length;
   await assert.rejects(driver.retryStop(fixture.assignment), /the browser the CLI's session ran is still running/);
+  assert.ok(fixture.closes.length > before, "the managed stop ran before the browser check");
   assert.equal(fixture.owners.has(owner), true);
+  // A known escape is never cleared by a later stop alone: still running, still unproven.
+  fixture.armEscapeOnStop(false);
+  await assert.rejects(driver.retryStop(fixture.assignment), /still running/);
   fixture.setBrowser("exited");
   await driver.retryStop(fixture.assignment);
   assert.equal(fixture.owners.has(owner), false);

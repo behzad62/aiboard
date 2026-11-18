@@ -1385,7 +1385,7 @@ export class NativeBuildFactory {
                 owners: cliWorkerOwners,
                 ...(budgetLedger ? { budgetLedger } : {}),
                 ...(this.options.playwrightCli
-                  ? { browser: { stopRecord: (owner: { runId: string; sessionId: string }, since: string) => browserCleanupSince(this.options.playwrightCli!, owner, since) } }
+                  ? { browser: { checkAfterStop: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.checkOwnerBrowsers(owner) } }
                   : {}),
               },
             },
@@ -4624,22 +4624,6 @@ function isProviderHealthState(value: unknown): value is ProviderHealthState {
     typeof state.consecutiveFailures === "number" &&
     typeof state.updatedAt === "number"
   );
-}
-
-/**
- * CW5 (§3.10): the browser checks the Playwright CLI sessions recorded for an owner's stop, only those made since that
- * stop began: `escaped` if any is, else `unknown` if any is, else the newest; undefined when the stop recorded none.
- */
-function browserCleanupSince(
-  sessions: import("./playwright-cli.js").PlaywrightCliSessions,
-  owner: { runId: string; sessionId: string },
-  since: string,
-): "none" | "exited" | "escaped" | "unknown" | undefined {
-  const records = sessions.cleanupRecords()
-    .filter((record) => record.runId === owner.runId && record.sessionId === owner.sessionId && record.at >= since);
-  if (records.some((record) => record.status === "escaped")) return "escaped";
-  if (records.some((record) => record.status === "unknown")) return "unknown";
-  return records.at(-1)?.status;
 }
 
 function safeSegment(value: string): string {

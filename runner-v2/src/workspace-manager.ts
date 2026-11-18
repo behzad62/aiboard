@@ -10,6 +10,9 @@ import {
   parseWorktreeAssociations,
 } from "./worktree-state.js";
 
+/** CW5: the capture limit of the project-folder listings (the one inspectSubmissionTree uses), past Git's default 4 MiB. */
+export const PROJECT_STATE_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Worker",
   GIT_AUTHOR_EMAIL: "worker@aiboard.local",
@@ -47,6 +50,11 @@ interface TaskWorkspaceOwner {
   taskId: string;
   workspaceId: string;
   active: boolean;
+  /**
+   * CW5 (CLI workers plan §3.7): the Runner's own last commit on this worktree's branch, for the baseline it was made
+   * on. Kept in the Runner's state, never read from the repository, which a CLI at Full access can rewrite.
+   */
+  runnerTip?: { baselineRevision: string; revision: string };
 }
 
 export interface TaskCommit {
@@ -75,7 +83,7 @@ export interface ProjectFolderState {
 /** `undoForeignCommits` refused: the CLI rewrote or left the task branch's history (§3.7). Nothing was changed. */
 export class ForeignHistoryError extends Error {
   readonly code = "cli_history_rewritten";
-  constructor(readonly kind: "unsettled" | "detached" | "other_branch" | "rewritten", message: string) {
+  constructor(readonly kind: "unsettled" | "detached" | "other_branch" | "rewritten" | "merge", message: string) {
     super(message);
     this.name = "ForeignHistoryError";
   }
@@ -170,6 +178,7 @@ export class WorkspaceManager {
           descriptor.path,
           descriptor.baselineRevision,
         ]);
+        await this.clearRunnerTip(descriptor);
       }
       await this.assertOwnedWorkspace(descriptor, true);
       await this.setWorkspaceTaskOwner(descriptor, taskId);
@@ -214,20 +223,7 @@ export class WorkspaceManager {
     return await this.serialized(async () => {
       if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(recordedTip)) throw new Error("The recorded branch tip is not a commit id.");
-      await this.assertWorkspaceTaskOwner(workspace, workspace.taskId);
-      const root = await this.git(workspace.path, ["rev-parse", "--show-toplevel"]);
-      if (resolve(root.stdout.trim()) !== workspace.path) throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
-      for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
-        const metadata = (await this.git(workspace.path, ["rev-parse", "--git-path", name])).stdout.trim();
-        if (await pathExists(resolve(workspace.path, metadata))) {
-          throw new ForeignHistoryError("unsettled", `The worktree has an unsettled Git operation (${name}).`);
-        }
-      }
-      const branch = await this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true);
-      if (branch.exitCode !== 0) throw new ForeignHistoryError("detached", "HEAD is detached from the task branch.");
-      if (branch.stdout.trim() !== workspace.branch) {
-        throw new ForeignHistoryError("other_branch", `HEAD is on ${branch.stdout.trim()}, not the task branch.`);
-      }
+      await this.assertOnTaskBranchUnlocked(workspace);
       const head = await this.head(workspace.path);
       if (head === recordedTip) return { replacedCommits: 0, head };
       const ancestry = await this.git(workspace.path, ["merge-base", "--is-ancestor", recordedTip, head], true);
@@ -236,9 +232,42 @@ export class WorkspaceManager {
       }
       const count = Number((await this.git(workspace.path, ["rev-list", "--count", `${recordedTip}..${head}`])).stdout.trim());
       if (!Number.isSafeInteger(count) || count < 1) throw new Error("The CLI's commits could not be counted.");
+      // A merge brings in history from outside the task branch: refused, never folded into the guarded commit.
+      const merges = Number((await this.git(workspace.path, ["rev-list", "--merges", "--count", `${recordedTip}..${head}`])).stdout.trim());
+      if (!Number.isSafeInteger(merges)) throw new Error("The CLI's merge commits could not be counted.");
+      if (merges > 0) throw new ForeignHistoryError("merge", `The CLI's commits after the recorded tip include ${merges} merge commit(s).`);
       await this.git(workspace.path, ["update-ref", workspace.branch, recordedTip, head]);
       return { replacedCommits: count, head: recordedTip };
     });
+  }
+
+  /**
+   * CW5 (CLI workers plan §3.7): checked before a CLI is launched in the worktree. A worktree an earlier CLI left
+   * detached, on another branch or in an unsettled operation would be refused at the collect anyway, so no CLI is
+   * started in it; the worktree is left as it is, the CLI's files included.
+   */
+  async assertOnTaskBranch(workspace: TaskWorkspace): Promise<void> {
+    await this.serialized(async () => {
+      if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+      await this.assertOnTaskBranchUnlocked(workspace);
+    });
+  }
+
+  private async assertOnTaskBranchUnlocked(workspace: TaskWorkspace): Promise<void> {
+    await this.assertWorkspaceTaskOwner(workspace, workspace.taskId);
+    const root = await this.git(workspace.path, ["rev-parse", "--show-toplevel"]);
+    if (resolve(root.stdout.trim()) !== workspace.path) throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
+    for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
+      const metadata = (await this.git(workspace.path, ["rev-parse", "--git-path", name])).stdout.trim();
+      if (await pathExists(resolve(workspace.path, metadata))) {
+        throw new ForeignHistoryError("unsettled", `The worktree has an unsettled Git operation (${name}).`);
+      }
+    }
+    const branch = await this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true);
+    if (branch.exitCode !== 0) throw new ForeignHistoryError("detached", "HEAD is detached from the task branch.");
+    if (branch.stdout.trim() !== workspace.branch) {
+      throw new ForeignHistoryError("other_branch", `HEAD is on ${branch.stdout.trim()}, not the task branch.`);
+    }
   }
 
   /**
@@ -284,12 +313,32 @@ export class WorkspaceManager {
     return head;
   }
 
+  /**
+   * CW5 (CLI workers plan §3.7): the tip a CLI run is measured against, from what the Runner knows, never from HEAD:
+   * the Runner's own last commit on this worktree for its baseline, or the baseline. A CLI commit an earlier attempt
+   * left (it never reached Collect) is after this tip, so the next Collect undoes it too.
+   */
+  async runnerTip(workspace: TaskWorkspace): Promise<string> {
+    if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+    return await this.serialized(async () => {
+      await this.loadWorkspaceOwners();
+      const recorded = this.workspaceOwners.get(workspace.path)?.runnerTip;
+      return recorded && recorded.baselineRevision === workspace.baselineRevision && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(recorded.revision)
+        ? recorded.revision
+        : workspace.baselineRevision;
+    });
+  }
+
   /** CW5: the project folder's HEAD, index and status, compared before and after a CLI attempt (§3.5 step 6). */
   async projectFolderState(): Promise<ProjectFolderState> {
+    // Read only: the listings of a large repository go well past Git's default 4 MiB capture (the limit
+    // inspectSubmissionTree uses), and status takes no optional index lock, so it never writes to the user's repository.
+    const read = (args: readonly string[], env?: Readonly<Record<string, string>>) =>
+      this.execute({ cwd: this.repositoryRoot, args, allowFailure: true, maxOutputBytes: PROJECT_STATE_MAX_OUTPUT_BYTES, ...(env ? { env } : {}) });
     const [head, index, status] = await Promise.all([
-      this.git(this.repositoryRoot, ["rev-parse", "HEAD"], true),
-      this.git(this.repositoryRoot, ["ls-files", "--stage", "-z"], true),
-      this.git(this.repositoryRoot, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], true),
+      read(["rev-parse", "HEAD"]),
+      read(["ls-files", "--stage", "-z"]),
+      read(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { GIT_OPTIONAL_LOCKS: "0" }),
     ]);
     const digest = (text: string, exitCode: number) => exitCode === 0 ? createHash("sha256").update(text).digest("hex") : "unknown";
     return {
@@ -503,6 +552,7 @@ export class WorkspaceManager {
         if (committed.exitCode !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(committed.stdout.trim())) throw new Error("Guarded task commit could not be created.");
         const revision = committed.stdout.trim();
         await this.git(workspace.path, ["update-ref", workspace.branch, revision, previousHead]);
+        await this.recordRunnerTip(workspace, revision);
         return await this.taskCommit(workspace, revision);
       }
       await this.execute({
@@ -516,7 +566,9 @@ export class WorkspaceManager {
         ],
         env: RUNNER_IDENTITY,
       });
-      return await this.taskCommit(workspace, await this.head(workspace.path));
+      const revision = await this.head(workspace.path);
+      await this.recordRunnerTip(workspace, revision);
+      return await this.taskCommit(workspace, revision);
   }
 
   private async assertGuardedParent(workspace: TaskWorkspace, previousHead: string): Promise<void> {
@@ -599,7 +651,27 @@ export class WorkspaceManager {
       taskId,
       workspaceId: workspace.workspaceId,
       active: true,
+      ...(existing?.runnerTip ? { runnerTip: existing.runnerTip } : {}),
     });
+    await this.saveWorkspaceOwners();
+  }
+
+  /** CW5: records a commit the Runner itself made as the worktree's branch tip, for the CLI's next recorded tip. */
+  private async recordRunnerTip(workspace: TaskWorkspace, revision: string): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const owner = this.workspaceOwners.get(workspace.path);
+    if (!owner) return;
+    this.workspaceOwners.set(workspace.path, { ...owner, runnerTip: { baselineRevision: workspace.baselineRevision, revision } });
+    await this.saveWorkspaceOwners();
+  }
+
+  /** CW5: forgets the Runner's tip when the worktree starts on a new branch at its baseline. */
+  private async clearRunnerTip(workspace: TaskWorkspace): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const owner = this.workspaceOwners.get(workspace.path);
+    if (!owner?.runnerTip) return;
+    const { runnerTip: _dropped, ...rest } = owner;
+    this.workspaceOwners.set(workspace.path, rest);
     await this.saveWorkspaceOwners();
   }
 

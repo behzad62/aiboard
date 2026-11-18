@@ -17,7 +17,8 @@
 //   "grandchildMs": 0,                              // start a child that lives this long
 //   "grandchildDetached": false,                    // see below: true for a "grandchild proven stopped" test
 //   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" }],  // in the cwd, before output
-//   "record": "run.json"                            // written: { argv, stdin, cwd, grandchildPid? } before any output
+//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, mcpDepth? } before any output
+//   "recordMcpDepth": false                         // true: the record carries AIBOARD_MCP_DEPTH, the only variable it reads
 // }
 //
 // Launching it: tests run [process.execPath, FAKE_CLI_SCRIPT, ...argv] (fake-cli.ts). That is the seam on Windows too:
@@ -82,7 +83,11 @@ async function run() {
   }
   for (const action of scenario.actions ?? []) act(action);
   if (scenario.record) {
-    writeFileSync(at(scenario.record), JSON.stringify({ argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}) }, null, 2));
+    writeFileSync(at(scenario.record), JSON.stringify({
+      argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}),
+      // Only this one variable of the environment is ever written down.
+      ...(scenario.recordMcpDepth === true ? { mcpDepth: process.env.AIBOARD_MCP_DEPTH ?? null } : {}),
+    }, null, 2));
   }
   const stdout = read(scenario.stdout).toString("utf8");
   for (const line of stdout.split(/(?<=\n)/)) {

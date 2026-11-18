@@ -150,11 +150,11 @@ export interface CliBrowserSessions {
     | { status: "start_failed"; reason: string }
   >;
   /**
-   * The browser checks recorded for this owner's stop (§3.10), only those made at or after `since` (the stop's start), so
-   * an earlier stop's record never stands in for this one: `escaped` if any is, else `unknown` if any is, else the
-   * newest. `escaped` or `unknown` leaves the stop unproven.
+   * The browser check after the owner's processes are proven stopped (§3.10), read afresh: the owner folder's browsers
+   * plus its known escapes (`PlaywrightCliSessions.checkOwnerBrowsers`, the check `removeRun` runs). `escaped` or
+   * `unknown` leaves the stop unproven; a known escape stays so until a later check proves it gone.
    */
-  stopRecord?(owner: CliWorkerOwner, since: string): "none" | "exited" | "escaped" | "unknown" | undefined;
+  checkAfterStop?(owner: CliWorkerOwner): Promise<"none" | "exited" | "escaped" | "unknown">;
 }
 
 /** CW6: the Runner's re-runs of the checks the CLI reported, as the assigned worker (§3.6). */
@@ -259,6 +259,16 @@ export const PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX = "process_launch_unproven_
 export const CLI_COLLECT_PENDING_PREFIX = "cli_collect_pending:";
 /** The worktree changed between the unproven stop and the collect: nothing is collected. */
 export const CLI_COLLECT_WORKTREE_CHANGED = "cli_collect_worktree_changed";
+/** The prompt did not reach the CLI's stdin (a write refused or past its limit); the stop was proven. */
+export const CLI_STDIN_UNDELIVERED = "cli_stdin_undelivered";
+
+class CliStdinUndeliveredError extends Error {
+  readonly code = CLI_STDIN_UNDELIVERED;
+  constructor(message: string) {
+    super(message);
+    this.name = "CliStdinUndeliveredError";
+  }
+}
 
 /** A launch the Runner refuses itself, before anything starts (§3.11 case 1). */
 export class CliLaunchRefusedError extends Error {
@@ -369,11 +379,22 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
 
   // The tip and project state before this run, written before the launch: a Runner that stopped during the run (a crash,
   // a restart) runs it again with the tip recorded before the first launch, so the stopped CLI's commits are undone too.
+  // §3.7: a worktree an earlier CLI left off the task branch is refused at every collect, so no CLI is started in it.
+  try {
+    await deps.workspaceManager.assertOnTaskBranch(input.workspace);
+  } catch (error) {
+    if (!(error instanceof ForeignHistoryError)) throw error;
+    return { type: "settled", outcome: { type: "failed", reason: historyRefusal(error) } };
+  }
   const { recordedTip, projectBefore } = await launchBaseline(deps, input, folder, runNumber);
   const usage = beginUsage(deps.budgetLedger, input, clock, runNumber);
   if (usage.exhausted !== undefined) return { type: "settled", outcome: { type: "paused", reason: `budget_exhausted:${usage.exhausted}` } };
 
   deps.owners?.register(input.owner);
+  // The owner's depth registration ends in the finally unless a path below keeps it: a stop not proven yet (the
+  // scheduler's retried stop releases it), or a run that goes on to its stop below. A throw anywhere, even before the
+  // launch (the browser, the prompt), releases it.
+  let keepOwner = false;
   let file: CliRunResultFile;
   let resultDigest: string;
   try {
@@ -386,11 +407,10 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
       const code = runnerLaunchRefusalCode(error);
       // A start failure the stop classifier marks keeps the owner's depth until the scheduler's retried stop proves it.
       if (!code) {
-        if (!isProcessStopUnprovenError(error)) deps.owners?.release(input.owner);
+        keepOwner = isProcessStopUnprovenError(error);
         throw error;
       }
       // The managed start proved its own cleanup: nothing of this launch runs.
-      deps.owners?.release(input.owner);
       return launchUnproven(deps.schedulerStore, input.runId, code);
     }
     try {
@@ -414,22 +434,29 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
       };
       usage.finish(reading.usage);
       resultDigest = await writeResultFile(join(folder, `run-${runNumber}.result.json`), file);
+      keepOwner = true;
     } catch (error) {
       // The wait failed with the CLI started (its stdin, its output): nothing is collected, and the error stands only
       // once the owner's stop is proven.
       const stopFailure = await proveCliStop(deps, input.owner);
       if (stopFailure) {
+        keepOwner = true;
         return {
           type: "stop_unproven",
           reason: `${name}'s run failed after its launch (${boundedRecordText(errorMessage(error), 500)}); the stop of its processes is not proven: ${stopFailure}`,
           outcome: { type: "failed", reason: "process_stop_unproven" },
         };
       }
-      deps.owners?.release(input.owner);
+      // The stop is proven: a prompt that never reached the CLI is the Runner's coded failure. It is not a provider
+      // failure, so the CLI's health and cooldown stay as they are.
+      if (error instanceof CliStdinUndeliveredError) {
+        return { type: "settled", outcome: { type: "failed", reason: `${CLI_STDIN_UNDELIVERED}: ${boundedRecordText(error.message, 500)}` } };
+      }
       throw error;
     }
   } finally {
     usage.finish();
+    if (!keepOwner) deps.owners?.release(input.owner);
   }
 
   // The stop: everything the owner started, proven, and the browser it ran (§3.10). Only a verified stop collects.
@@ -491,7 +518,8 @@ async function launchBaseline(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemp
     await rm(join(folder, `run-${runNumber}.result.json`), { force: true });
     return { recordedTip: earlier.recordedTip, projectBefore: { head: state.head, index: state.index, status: state.status } };
   }
-  const recordedTip = await deps.workspaceManager.workspaceHead(input.workspace);
+  // §3.7: the baseline or the Runner's own last commit, never HEAD, so commits an earlier CLI run left are undone too.
+  const recordedTip = await deps.workspaceManager.runnerTip(input.workspace);
   const projectBefore = await deps.workspaceManager.projectFolderState();
   await writeFile(path, `${JSON.stringify({ version: 1, recordedTip, projectBefore })}
 `, { encoding: "utf8", flag: "wx" });
@@ -507,14 +535,18 @@ export function cliWorkerStateFolder(stateDirectory: string, runId: string, sess
  * Stops the CLI owner's processes and checks the browser record of that stop (§3.10). Returns why the stop is not
  * proven, or undefined when it is. The driver's `retryStop` runs the same check for a CLI attempt.
  */
-export async function proveCliStop(deps: Pick<CliWorkerRuntimeDeps, "launcher" | "browser" | "clock">, owner: CliWorkerOwner): Promise<string | undefined> {
-  const since = (deps.clock ?? (() => new Date().toISOString()))();
+export async function proveCliStop(deps: Pick<CliWorkerRuntimeDeps, "launcher" | "browser">, owner: CliWorkerOwner): Promise<string | undefined> {
   try {
     await deps.launcher.stopOwner(owner);
   } catch (error) {
     return errorMessage(error);
   }
-  const browser = deps.browser?.stopRecord?.(owner, since);
+  let browser: Awaited<ReturnType<NonNullable<CliBrowserSessions["checkAfterStop"]>>> | undefined;
+  try {
+    browser = await deps.browser?.checkAfterStop?.(owner);
+  } catch {
+    browser = "unknown";
+  }
   if (browser === "escaped" || browser === "unknown") return `the browser the CLI's session ran is ${browser === "escaped" ? "still running" : "not known to be stopped"}`;
   return undefined;
 }
@@ -583,7 +615,10 @@ function launchSpec(input: CliWorkerAttemptInput, paths: { schemaPath: string; o
 function beginUsage(ledger: BudgetLedger | undefined, input: CliWorkerAttemptInput, clock: () => string, runNumber: number):
   { exhausted?: string; finish(usage?: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; totalInputTokens: number }): void } {
   if (!ledger) return { finish() {} };
-  const reservationId = `cli:${input.sessionId}:${runNumber}`;
+  // One reservation per launch: a run the Runner stopped during (a crash, a restart, a wait that failed after its proven
+  // stop) is launched again under the same run number and its own usage, so a key of the run number alone would settle
+  // the same reservation twice with different amounts, which the ledger refuses as an idempotency conflict.
+  const reservationId = `cli:${input.sessionId}:${runNumber}:${randomUUID()}`;
   try {
     ledger.reserve({
       scopeId: input.runId, reservationId, kind: "model",
@@ -660,7 +695,15 @@ async function waitForRun(
   const live = liveTail(input, runNumber);
   const deadline = now() + limitMs;
   const chunks = stdinChunks(stdin);
-  for (let index = 0; index < chunks.length; index += 1) await handle.write(chunks[index]!, index === chunks.length - 1);
+  for (let index = 0; index < chunks.length; index += 1) {
+    try {
+      await handle.write(chunks[index]!, index === chunks.length - 1);
+    } catch (error) {
+      // Each write has ManagedProcessService's fixed limit (MANAGED_INPUT_WRITE_TIMEOUT_MS). A CLI that has not started
+      // reading its stdin when the pipe buffer is full (a slow start) can reach it: the Runner's failure, not the CLI's.
+      throw new CliStdinUndeliveredError(`The prompt's write ${index + 1} of ${chunks.length} to the CLI's stdin was not delivered: ${errorMessage(error)}`);
+    }
+  }
   let stderr = "";
   let exited = false;
   let exitCode: number | null = null;
@@ -831,6 +874,19 @@ async function collectPending(
   return await collect(deps, input, { file, resultDigest }, clock);
 }
 
+/**
+ * §3.7: the coded failure the Architect sees (task_failure_resolution_required) when the CLI left the task branch's
+ * history so the Runner cannot take its work. A history the CLI rewrote or merged into fails this run only. A worktree
+ * left off the task branch (detached, another branch, an unsettled operation) is kept as the CLI left it, files
+ * included, and every later CLI run in it is refused before its launch: the work needs a new task (a new worktree).
+ */
+function historyRefusal(error: ForeignHistoryError): string {
+  const offBranch = error.kind === "detached" || error.kind === "other_branch" || error.kind === "unsettled";
+  return `${error.code}:${error.kind}: ${error.message}${offBranch
+    ? " The task's worktree is kept as the CLI left it, and no CLI run is started in it again; replan the work as a new task."
+    : ""}`;
+}
+
 /** §3.5 steps 6 and 7: after a proven stop. */
 async function collect(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, collectable: Collectable, clock: () => string): Promise<CliWorkerAttemptResult> {
   const { file, resultDigest } = collectable;
@@ -841,7 +897,7 @@ async function collect(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput,
     replacedCliCommits = (await deps.workspaceManager.undoForeignCommits(input.workspace, file.recordedTip)).replacedCommits;
   } catch (error) {
     if (!(error instanceof ForeignHistoryError)) throw error;
-    rewritten = error.message;
+    rewritten = historyRefusal(error);
   }
   const restoredProjectDocs = rewritten === undefined ? await deps.workspaceManager.restoreProjectDocs(input.workspace) : [];
   const projectAfter = await deps.workspaceManager.projectFolderState();
@@ -854,7 +910,7 @@ async function collect(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput,
     ...(projectChangedDuringAttempt.length ? { projectChangedDuringAttempt: [...projectChangedDuringAttempt] } : {}),
   });
   // §3.7: the CLI rewrote or left the task branch's history; nothing is submitted and the worktree stays as it is.
-  if (rewritten !== undefined) return { type: "settled", outcome: { type: "failed", reason: `cli_history_rewritten: ${rewritten}` } };
+  if (rewritten !== undefined) return { type: "settled", outcome: { type: "failed", reason: rewritten } };
 
   const outcome = file.reading.outcome;
   if (outcome.type === "failure") return { type: "provider_failure", failure: outcome.failure };
