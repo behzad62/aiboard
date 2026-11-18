@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -1010,7 +1010,9 @@ function emptyArtifactHash(): string {
 // CW5: the driver's CLI branch (docs/plans/2026-11-14-cli-workers.md §3.5, §3.11), with the fake CLI as a child.
 
 async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean } = {}) {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`));
+  // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
+  // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
   const project = join(root, "project");
   const state = join(root, "state");
   const fake = join(root, "fake");

@@ -5,6 +5,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -612,7 +613,9 @@ async function gitText(cwd: string, args: string[]): Promise<string> {
 // CW5 (CLI workers plan §3.5, §3.7): what a CLI at Full access may leave in its worktree.
 
 async function cliWorktree(label: string, withDocs = true) {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-cw5-${label}-`));
+  // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
+  // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-cw5-${label}-`)));
   const project = join(root, "project");
   const state = join(root, "state");
   mkdirSync(project);
