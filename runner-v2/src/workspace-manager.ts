@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 
-import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
+import { GitCommandError, unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   classifyOwnedWorktreeAssociations,
   isEmptyDirectory,
   parseWorktreeAssociations,
 } from "./worktree-state.js";
+
+/** CW5: the capture limit of the project-folder listings (the one inspectSubmissionTree uses), past Git's default 4 MiB. */
+export const PROJECT_STATE_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_NAME: "AIBoard Worker",
@@ -47,6 +50,11 @@ interface TaskWorkspaceOwner {
   taskId: string;
   workspaceId: string;
   active: boolean;
+  /**
+   * CW5 (CLI workers plan §3.7): the Runner's own last commit on this worktree's branch, for the baseline it was made
+   * on. Kept in the Runner's state, never read from the repository, which a CLI at Full access can rewrite.
+   */
+  runnerTip?: { baselineRevision: string; revision: string };
 }
 
 export interface TaskCommit {
@@ -62,6 +70,22 @@ export class NoTaskChangesError extends Error {
   constructor(taskId: string) {
     super(`Task ${taskId} has no changes to commit.`);
     this.name = "NoTaskChangesError";
+  }
+}
+
+/** The project folder as `projectFolderState` read it: HEAD, and digests of the index and the status. */
+export interface ProjectFolderState {
+  head: string;
+  index: string;
+  status: string;
+}
+
+/** `undoForeignCommits` refused: the CLI rewrote or left the task branch's history (§3.7). Nothing was changed. */
+export class ForeignHistoryError extends Error {
+  readonly code = "cli_history_rewritten";
+  constructor(readonly kind: "unsettled" | "detached" | "other_branch" | "rewritten" | "merge", message: string) {
+    super(message);
+    this.name = "ForeignHistoryError";
   }
 }
 
@@ -154,6 +178,7 @@ export class WorkspaceManager {
           descriptor.path,
           descriptor.baselineRevision,
         ]);
+        await this.clearRunnerTip(descriptor);
       }
       await this.assertOwnedWorkspace(descriptor, true);
       await this.setWorkspaceTaskOwner(descriptor, taskId);
@@ -185,6 +210,163 @@ export class WorkspaceManager {
       await this.assertOwnedWorkspace(workspace);
       return await this.commitWorkspaceUnlocked(workspace, summary, inspectCandidate);
     });
+  }
+
+  /**
+   * CLI workers plan §3.7 (CW5): a CLI at Full access can commit on the task branch. This moves the branch back to
+   * `recordedTip` (the tip before the CLI ran: the baseline, or the Runner's own last commit) with a compare-and-set
+   * `update-ref`, leaving the index and working files as they are, so the whole change goes through the guarded
+   * commit and its secret check. It refuses, changing nothing, an unsettled merge, rebase, cherry-pick or revert, a
+   * detached HEAD or another branch, and a `recordedTip` that is not an ancestor of HEAD (rewritten history).
+   */
+  async undoForeignCommits(workspace: TaskWorkspace, recordedTip: string): Promise<{ replacedCommits: number; head: string }> {
+    return await this.serialized(async () => {
+      if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(recordedTip)) throw new Error("The recorded branch tip is not a commit id.");
+      await this.assertOnTaskBranchUnlocked(workspace);
+      const head = await this.head(workspace.path);
+      if (head === recordedTip) return { replacedCommits: 0, head };
+      const ancestry = await this.git(workspace.path, ["merge-base", "--is-ancestor", recordedTip, head], true);
+      if (ancestry.exitCode !== 0) {
+        throw new ForeignHistoryError("rewritten", "The task branch no longer contains the tip recorded before the CLI ran.");
+      }
+      const count = Number((await this.git(workspace.path, ["rev-list", "--count", `${recordedTip}..${head}`])).stdout.trim());
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("The CLI's commits could not be counted.");
+      // A merge brings in history from outside the task branch: refused, never folded into the guarded commit.
+      const merges = Number((await this.git(workspace.path, ["rev-list", "--merges", "--count", `${recordedTip}..${head}`])).stdout.trim());
+      if (!Number.isSafeInteger(merges)) throw new Error("The CLI's merge commits could not be counted.");
+      if (merges > 0) throw new ForeignHistoryError("merge", `The CLI's commits after the recorded tip include ${merges} merge commit(s).`);
+      await this.git(workspace.path, ["update-ref", workspace.branch, recordedTip, head]);
+      return { replacedCommits: count, head: recordedTip };
+    });
+  }
+
+  /**
+   * CW5 (CLI workers plan §3.7): checked before a CLI is launched in the worktree. A worktree an earlier CLI left
+   * detached, on another branch or in an unsettled operation would be refused at the collect anyway, so no CLI is
+   * started in it; the worktree is left as it is, the CLI's files included.
+   */
+  async assertOnTaskBranch(workspace: TaskWorkspace): Promise<void> {
+    await this.serialized(async () => {
+      if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+      await this.assertOnTaskBranchUnlocked(workspace);
+    });
+  }
+
+  private async assertOnTaskBranchUnlocked(workspace: TaskWorkspace): Promise<void> {
+    await this.assertWorkspaceTaskOwner(workspace, workspace.taskId);
+    // One rev-parse for the toplevel and every operation's metadata path (it prints one line each, in order), and one
+    // symbolic-ref: this runs before every CLI launch and again at its collect.
+    const names = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] as const;
+    const [paths, branch] = await Promise.all([
+      this.git(workspace.path, ["rev-parse", "--show-toplevel", ...names.flatMap((name) => ["--git-path", name])]),
+      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true),
+    ]);
+    const lines = paths.stdout.split(/\r?\n/).filter((line) => line.length > 0);
+    if (lines.length !== names.length + 1) throw new Error(`Path ${workspace.path} could not be inspected as a task worktree.`);
+    if (resolve(lines[0]!) !== workspace.path) throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
+    for (const [index, name] of names.entries()) {
+      if (await pathExists(resolve(workspace.path, lines[index + 1]!))) {
+        throw new ForeignHistoryError("unsettled", `The worktree has an unsettled Git operation (${name}).`);
+      }
+    }
+    // Exit 1 is a detached HEAD; anything else is Git's own failure, thrown as Git's.
+    if (branch.exitCode === 1) throw new ForeignHistoryError("detached", "HEAD is detached from the task branch.");
+    if (branch.exitCode !== 0) throw new GitCommandError("command_failed", `git symbolic-ref --quiet HEAD failed: ${branch.stderr.trim()}`, branch);
+    if (branch.stdout.trim() !== workspace.branch) {
+      throw new ForeignHistoryError("other_branch", `HEAD is on ${branch.stdout.trim()}, not the task branch.`);
+    }
+  }
+
+  /**
+   * CWD-7 (CW5): `docs/project/**` is the Architect's. Every change a CLI made there, tracked or not, is put back as
+   * it is at the workspace's baseline, and the paths that changed are returned for the attempt's concern.
+   */
+  async restoreProjectDocs(workspace: TaskWorkspace): Promise<string[]> {
+    return await this.serialized(async () => {
+      if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+      await this.assertOwnedWorkspace(workspace);
+      const spec = ":(literal)docs/project";
+      const [changed, untracked] = await Promise.all([
+        this.git(workspace.path, ["diff", "--name-only", "-z", "--no-renames", workspace.baselineRevision, "--", spec]),
+        this.git(workspace.path, ["ls-files", "--others", "--exclude-standard", "-z", "--", spec]),
+      ]);
+      const staged = await this.git(workspace.path, ["diff", "--cached", "--name-only", "-z", "--no-renames", workspace.baselineRevision, "--", spec]);
+      const paths = [...new Set([...changed.stdout, ...staged.stdout, ...untracked.stdout].join("").split("\0").filter(Boolean))].sort();
+      if (paths.length === 0) return [];
+      // Only commands the Runner Git policy allows (git-execution-policy.ts, git-run-context.ts MECHANICAL): the index
+      // back to the baseline (an added path leaves it), then the baseline's files back into the worktree, then the
+      // paths now untracked removed. A baseline without docs/project has nothing to check out.
+      await this.git(workspace.path, ["reset", "-q", workspace.baselineRevision, "--", spec]);
+      const inBaseline = await this.git(workspace.path, ["ls-tree", "-z", "--name-only", workspace.baselineRevision, "--", spec]);
+      if (inBaseline.stdout.length > 0) await this.git(workspace.path, ["checkout", workspace.baselineRevision, "--", spec]);
+      await this.git(workspace.path, ["clean", "-f", "-d", "-q", "--", spec]);
+      const [worktree, index, extra] = await Promise.all([
+        this.git(workspace.path, ["diff", "--quiet", workspace.baselineRevision, "--", spec], true),
+        this.git(workspace.path, ["diff", "--cached", "--quiet", workspace.baselineRevision, "--", spec], true),
+        this.git(workspace.path, ["ls-files", "--others", "--exclude-standard", "-z", "--", spec]),
+      ]);
+      if (worktree.exitCode !== 0 || index.exitCode !== 0 || extra.stdout.length > 0) {
+        throw new Error("docs/project could not be restored to the baseline.");
+      }
+      return paths;
+    });
+  }
+
+  /** CW5: the task worktree's HEAD commit id: the branch tip recorded before a CLI runs (§3.7). */
+  async workspaceHead(workspace: TaskWorkspace): Promise<string> {
+    if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+    const head = await this.head(workspace.path);
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(head)) throw new Error(`Task workspace ${workspace.workspaceId} has no readable HEAD.`);
+    return head;
+  }
+
+  /**
+   * CW5 (CLI workers plan §3.7): the tip a CLI run is measured against, from what the Runner knows, never from HEAD:
+   * the Runner's own last commit on this worktree for its baseline, or the baseline. A CLI commit an earlier attempt
+   * left (it never reached Collect) is after this tip, so the next Collect undoes it too.
+   */
+  async runnerTip(workspace: TaskWorkspace): Promise<string> {
+    if (workspace.runId !== this.runId) throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
+    return await this.serialized(async () => {
+      await this.loadWorkspaceOwners();
+      const recorded = this.workspaceOwners.get(workspace.path)?.runnerTip;
+      return recorded && recorded.baselineRevision === workspace.baselineRevision && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(recorded.revision)
+        ? recorded.revision
+        : workspace.baselineRevision;
+    });
+  }
+
+  /** CW5: the project folder's HEAD, index and status, compared before and after a CLI attempt (§3.5 step 6). */
+  async projectFolderState(): Promise<ProjectFolderState> {
+    // Read only: the listings of a large repository go well past Git's default 4 MiB capture (the limit
+    // inspectSubmissionTree uses), and status takes no optional index lock, so it never writes to the user's repository.
+    // A listing past even that limit is thrown whatever allowFailure says: read as a failed read, "unknown", which the
+    // before/after comparison skips, so an attempt never fails on the size of the user's repository.
+    const read = async (args: readonly string[], env?: Readonly<Record<string, string>>) => {
+      try {
+        return await this.execute({ cwd: this.repositoryRoot, args, allowFailure: true, maxOutputBytes: PROJECT_STATE_MAX_OUTPUT_BYTES, ...(env ? { env } : {}) });
+      } catch (error) {
+        if (error instanceof GitCommandError && error.code === "output_limit") return { exitCode: -1, stdout: "", stderr: "" };
+        throw error;
+      }
+    };
+    // Every read settles before this returns or throws: no Git call on the user's project outlives it.
+    const settled = await Promise.allSettled([
+      read(["rev-parse", "HEAD"]),
+      read(["ls-files", "--stage", "-z"]),
+      read(["status", "--porcelain=v1", "-z", "--untracked-files=all"], { GIT_OPTIONAL_LOCKS: "0" }),
+    ]);
+    const failed = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+    if (failed) throw failed.reason;
+    const [head, index, status] = settled.map((entry) => (entry as PromiseFulfilledResult<Awaited<ReturnType<typeof read>>>).value) as [
+      Awaited<ReturnType<typeof read>>, Awaited<ReturnType<typeof read>>, Awaited<ReturnType<typeof read>>];
+    const digest = (text: string, exitCode: number) => exitCode === 0 ? createHash("sha256").update(text).digest("hex") : "unknown";
+    return {
+      head: head.exitCode === 0 ? head.stdout.trim() : "unknown",
+      index: digest(index.stdout, index.exitCode),
+      status: digest(status.stdout, status.exitCode),
+    };
   }
 
   async cleanup(): Promise<void> {
@@ -391,6 +573,7 @@ export class WorkspaceManager {
         if (committed.exitCode !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(committed.stdout.trim())) throw new Error("Guarded task commit could not be created.");
         const revision = committed.stdout.trim();
         await this.git(workspace.path, ["update-ref", workspace.branch, revision, previousHead]);
+        await this.recordRunnerTip(workspace, revision);
         return await this.taskCommit(workspace, revision);
       }
       await this.execute({
@@ -404,7 +587,9 @@ export class WorkspaceManager {
         ],
         env: RUNNER_IDENTITY,
       });
-      return await this.taskCommit(workspace, await this.head(workspace.path));
+      const revision = await this.head(workspace.path);
+      await this.recordRunnerTip(workspace, revision);
+      return await this.taskCommit(workspace, revision);
   }
 
   private async assertGuardedParent(workspace: TaskWorkspace, previousHead: string): Promise<void> {
@@ -487,7 +672,27 @@ export class WorkspaceManager {
       taskId,
       workspaceId: workspace.workspaceId,
       active: true,
+      ...(existing?.runnerTip ? { runnerTip: existing.runnerTip } : {}),
     });
+    await this.saveWorkspaceOwners();
+  }
+
+  /** CW5: records a commit the Runner itself made as the worktree's branch tip, for the CLI's next recorded tip. */
+  private async recordRunnerTip(workspace: TaskWorkspace, revision: string): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const owner = this.workspaceOwners.get(workspace.path);
+    if (!owner) return;
+    this.workspaceOwners.set(workspace.path, { ...owner, runnerTip: { baselineRevision: workspace.baselineRevision, revision } });
+    await this.saveWorkspaceOwners();
+  }
+
+  /** CW5: forgets the Runner's tip when the worktree starts on a new branch at its baseline. */
+  private async clearRunnerTip(workspace: TaskWorkspace): Promise<void> {
+    await this.loadWorkspaceOwners();
+    const owner = this.workspaceOwners.get(workspace.path);
+    if (!owner?.runnerTip) return;
+    const { runnerTip: _dropped, ...rest } = owner;
+    this.workspaceOwners.set(workspace.path, rest);
     await this.saveWorkspaceOwners();
   }
 
@@ -511,7 +716,7 @@ export class WorkspaceManager {
   ): Promise<void> {
     const [root, branch, ancestry] = await Promise.all([
       this.git(workspace.path, ["rev-parse", "--show-toplevel"]),
-      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"]),
+      this.git(workspace.path, ["symbolic-ref", "--quiet", "HEAD"], true),
       this.git(
         workspace.path,
         ["merge-base", "--is-ancestor", workspace.baselineRevision, "HEAD"],
@@ -524,8 +729,18 @@ export class WorkspaceManager {
     if (resolve(root.stdout.trim()) !== workspace.path) {
       throw new Error(`Path ${workspace.path} is not the expected task worktree.`);
     }
+    // Refused as before, typed so the CLI worker's driver can give the coded cli_history_rewritten:<kind> (§3.7) when
+    // a CLI left the worktree off its branch; an API worker gets the same throw.
+    // `symbolic-ref --quiet` exits 1 only for a detached HEAD; anything else (128: a broken repository, a missing
+    // worktree) is Git's failure, thrown as it was before the detached case was typed.
+    if (branch.exitCode === 1) {
+      throw new ForeignHistoryError("detached", `Task workspace ${workspace.taskId} has a detached HEAD, not its task branch.`);
+    }
+    if (branch.exitCode !== 0) {
+      throw new GitCommandError("command_failed", `git symbolic-ref --quiet HEAD failed: ${branch.stderr.trim()}`, branch);
+    }
     if (branch.stdout.trim() !== workspace.branch) {
-      throw new Error(`Task workspace ${workspace.taskId} is on an unexpected branch.`);
+      throw new ForeignHistoryError("other_branch", `Task workspace ${workspace.taskId} is on an unexpected branch.`);
     }
     if (ancestry.exitCode !== 0) {
       throw new Error(`Task workspace ${workspace.taskId} escaped its baseline.`);

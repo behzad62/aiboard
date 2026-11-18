@@ -873,3 +873,53 @@ test("the output folder never lands in a task commit: the Runner's git add -A ta
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("CW5: checkOwnerBrowsers reads the owner folder afresh after a stop: a known escape stays escaped until it is gone", { skip: WINDOWS ? "the check is POSIX-only and its fake profiles need symlinks" : false }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pw-owner-check-"));
+  try {
+    type Proc = { pid: number; pgid: number; birth: string; command: string; alive: boolean };
+    const table = new Map<number, Proc>();
+    let readable = true;
+    const processes: PosixProcessTable = {
+      inspect: (pids) => new Map<number, PosixProcessIdentityInspection>(pids.map((pid): [number, PosixProcessIdentityInspection] => {
+        if (!readable) return [pid, { state: "unknown" }];
+        const p = table.get(pid);
+        return [pid, p?.alive ? { state: "present", value: { pid, groupId: p.pgid, birth: p.birth } } : { state: "absent" }];
+      })),
+      commandLine: (pid) => (table.get(pid)?.alive ? table.get(pid)!.command : undefined),
+      groupAlive: (groupId) => [...table.values()].some((p) => p.alive && p.pgid === groupId),
+      hostname: () => "box",
+    };
+    const sessions = new PlaywrightCliSessions({ stateRoot: join(root, "pw"), binDirectory: join(root, "bin"), platform: "linux", processes,
+      graceMs: 50, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 10))) });
+    const owner = { runId: "run-1", sessionId: "worker:run-1:task_a:1" };
+    sessions.configureRun(owner.runId, { browser: "chromium" });
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "none", "an owner that never browsed has nothing to check");
+
+    const folder = sessions.ownerFolder(owner);
+    const dir = join(folder, "tmp", "playwright_chromiumdev_profile-a");
+    await mkdir(dir, { recursive: true });
+    await symlink("box-800", join(dir, "SingletonLock"));
+    table.set(800, { pid: 800, pgid: 800, birth: "b800", command: `/chrome --user-data-dir=${dir}`, alive: true });
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "escaped");
+    assert.deepEqual(sessions.knownEscapePids(owner), [800], "the PIDs the pause reason names");
+    assert.equal(table.get(800)!.alive, true, "never signalled");
+    // The profile no longer names it, but the escape is known: a later check still reports it.
+    await rm(join(dir, "SingletonLock"));
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "escaped");
+    // A process table that cannot be read proves nothing gone: the known escape stays escaped (fail closed).
+    readable = false;
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "escaped");
+    readable = true;
+    table.get(800)!.alive = false;
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "exited", "a later check proves the known escape gone");
+    assert.deepEqual(sessions.knownEscapePids(owner), []);
+    assert.equal(await sessions.checkOwnerBrowsers(owner), "none");
+    assert.ok(sessions.cleanupRecords().every((record) => record.processId === "owner"), "each check is recorded");
+
+    const windows = new PlaywrightCliSessions({ stateRoot: join(root, "pw-w"), binDirectory: join(root, "bin"), platform: "win32", processes });
+    assert.equal(await windows.checkOwnerBrowsers(owner), "none", "on Windows the owner's Job holds the browser");
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

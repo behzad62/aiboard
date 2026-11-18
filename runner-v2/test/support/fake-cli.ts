@@ -33,6 +33,8 @@ export interface FakeCliScenario {
   grandchildDetached?: boolean;
   actions?: Array<{ write: string; content?: string } | { commit: string }>;
   record?: string;
+  /** The record carries `AIBOARD_MCP_DEPTH`, the only environment variable the fake writes down. */
+  recordMcpDepth?: boolean;
 }
 
 /** What the fake wrote to `record`. */
@@ -41,6 +43,7 @@ export interface FakeCliRecord {
   stdin: string;
   cwd: string;
   grandchildPid?: number;
+  mcpDepth?: string | null;
 }
 
 /** A fixture's path; scenario paths may be absolute, so tests point straight into the fixtures folder. */

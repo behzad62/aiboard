@@ -29,7 +29,7 @@ export interface WorkerLifecycleToolsOptions {
   clock?: () => string;
 }
 
-interface AskArchitectInput {
+export interface AskArchitectInput {
   requestId: string;
   question: string;
   blocking: boolean;
@@ -45,7 +45,7 @@ interface ChallengeGuidanceInput {
   reason: string;
 }
 
-interface RequestReplanInput {
+export interface RequestReplanInput {
   requestId: string;
   reason: ReplanReason;
   summary: string;
@@ -320,29 +320,7 @@ function askArchitectTool(
     execute: async (input, context) => {
       const denied = workerOnly(context);
       if (denied) return denied;
-      const requestId = allocateGuidanceRequestId(
-        store,
-        context.runId,
-        input.requestId
-      );
-      const evidenceSequence = input.evidenceSequence ?? currentSchedulerSequence(store, context.runId);
-      const result = append(store, {
-        runId: context.runId,
-        type: "guidance.requested",
-        occurredAt: clock(),
-        actor: { role: "worker", id: context.actor.id },
-        idempotencyKey: `guidance:${requestId}`,
-        payload: { ...input, evidenceSequence, requestId, taskId },
-      });
-      if (result.isError || !input.blocking) return result;
-      return {
-        ...result,
-        lifecycle: {
-          type: "ask_architect",
-          requestId,
-          blocking: true,
-        },
-      };
+      return requestArchitectGuidance(store, { runId: context.runId, workerId: context.actor.id, taskId, clock }, input);
     },
   };
 }
@@ -377,31 +355,84 @@ function requestReplanTool(
     execute: async (input, context) => {
       const denied = workerOnly(context);
       if (denied) return denied;
-      const requestId = allocateGuidanceRequestId(store, context.runId, input.requestId);
-      const result = append(store, {
-        runId: context.runId,
-        type: "guidance.requested",
-        occurredAt: clock(),
-        actor: { role: "worker", id: context.actor.id },
-        idempotencyKey: `guidance:${requestId}`,
-        payload: {
-          requestId,
-          taskId,
-          question: `Replan requested (${input.reason}): ${input.summary}\nProposed change: ${input.proposedChange}`,
-          blocking: true,
-          evidenceSequence: input.evidenceSequence ?? currentSchedulerSequence(store, context.runId),
-          kind: "replan",
-          replan: {
-            reason: input.reason,
-            summary: input.summary,
-            proposedChange: input.proposedChange,
-          },
-        },
-      });
-      if (result.isError) return result;
-      return { ...result, lifecycle: { type: "request_replan", requestId } };
+      return requestTaskReplan(store, { runId: context.runId, workerId: context.actor.id, taskId, clock }, input);
     },
   };
+}
+
+/** Who asks: the worker of `taskId` in `runId`. */
+export interface WorkerGuidanceRequester {
+  runId: string;
+  workerId: string;
+  taskId: string;
+  clock: () => string;
+}
+
+/**
+ * The body of `ask_architect` (CLI workers plan §3.5 step 8): a `guidance.requested` event for the task, with the
+ * run's current sequence when none is given. The API worker's tool and a CLI worker's `needs_decision` both call it.
+ */
+export function requestArchitectGuidance(
+  store: SchedulerStore,
+  requester: WorkerGuidanceRequester,
+  input: AskArchitectInput,
+): ToolExecutionOutput {
+  const { runId, workerId, taskId, clock } = requester;
+  const requestId = allocateGuidanceRequestId(
+    store,
+    runId,
+    input.requestId
+  );
+  const evidenceSequence = input.evidenceSequence ?? currentSchedulerSequence(store, runId);
+  const result = append(store, {
+    runId,
+    type: "guidance.requested",
+    occurredAt: clock(),
+    actor: { role: "worker", id: workerId },
+    idempotencyKey: `guidance:${requestId}`,
+    payload: { ...input, evidenceSequence, requestId, taskId },
+  });
+  if (result.isError || !input.blocking) return result;
+  return {
+    ...result,
+    lifecycle: {
+      type: "ask_architect",
+      requestId,
+      blocking: true,
+    },
+  };
+}
+
+/** The body of `request_replan` (§3.5 step 8): a blocking replan guidance request. A CLI's `cannot_do` calls it too. */
+export function requestTaskReplan(
+  store: SchedulerStore,
+  requester: WorkerGuidanceRequester,
+  input: RequestReplanInput,
+): ToolExecutionOutput {
+  const { runId, workerId, taskId, clock } = requester;
+  const requestId = allocateGuidanceRequestId(store, runId, input.requestId);
+  const result = append(store, {
+    runId,
+    type: "guidance.requested",
+    occurredAt: clock(),
+    actor: { role: "worker", id: workerId },
+    idempotencyKey: `guidance:${requestId}`,
+    payload: {
+      requestId,
+      taskId,
+      question: `Replan requested (${input.reason}): ${input.summary}\nProposed change: ${input.proposedChange}`,
+      blocking: true,
+      evidenceSequence: input.evidenceSequence ?? currentSchedulerSequence(store, runId),
+      kind: "replan",
+      replan: {
+        reason: input.reason,
+        summary: input.summary,
+        proposedChange: input.proposedChange,
+      },
+    },
+  });
+  if (result.isError) return result;
+  return { ...result, lifecycle: { type: "request_replan", requestId } };
 }
 
 function validateReplan(input: unknown): ValidationResult<RequestReplanInput> {

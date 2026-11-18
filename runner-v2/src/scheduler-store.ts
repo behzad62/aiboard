@@ -192,6 +192,7 @@ import {
   type PlanningProjection,
 } from "./planning-projection.js";
 import { parseCliWorkersChecked, type CliWorkersChecked } from "./cli-worker-crew.js";
+import { parseCliAttemptRecord } from "./cli-worker-attempt-record.js";
 import {
   parseEnvironmentInventory,
   VERIFICATION_GATE_PAUSE_REASONS,
@@ -329,6 +330,7 @@ export type SchedulerEventType =
   | "answer.review_unavailable"
   | "environment.inventory_recorded"
   | "cli_workers.checked"
+  | "worker.cli_attempt_recorded"
   | "run.browsing_configured"
   | PlanningEventType;
 
@@ -2433,6 +2435,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
     // CW4: the crew's CLI free checks, recorded with the inventory; health changes follow as their own events.
     (event.type === "cli_workers.checked" && event.actor.role === "runner") ||
+    // CW5: one CLI worker run, recorded by the worker driver; facts only, it never advances the run.
+    (event.type === "worker.cli_attempt_recorded" && event.actor.role === "runner" && event.actor.id === "native-worker-driver") ||
     isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
@@ -2544,6 +2548,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (event.type === "environment.inventory_recorded" && event.actor.role === "runner") ||
     // CW4: the crew's CLI free checks, recorded with the inventory; health changes follow as their own events.
     (event.type === "cli_workers.checked" && event.actor.role === "runner") ||
+    // CW5: one CLI worker run, recorded by the worker driver; facts only, it never advances the run.
+    (event.type === "worker.cli_attempt_recorded" && event.actor.role === "runner" && event.actor.id === "native-worker-driver") ||
     isVerificationGatePause(event) ||
     // VF7b: the run's tool surface, recorded before planning; it never advances the run.
     (event.type === "run.browsing_configured" && event.actor.role === "runner") ||
@@ -5347,6 +5353,22 @@ export function reduceSchedulerEvent(
         throw new Error("A terminal Build cannot record CLI worker checks.");
       }
       next.cliWorkersChecked = { ...parseCliWorkersChecked(event.payload), sequence: event.sequence, recordedAt: event.occurredAt };
+      break;
+    }
+    case "worker.cli_attempt_recorded": {
+      // CW5: facts about one CLI worker run (the CLI workers plan §3.5 step 6, §3.11 case 2). Nothing reads it to
+      // decide but the worker driver of the same attempt.
+      if (event.actor.role !== "runner" || event.actor.id !== "native-worker-driver") {
+        throw new Error("Only the worker driver may record a CLI worker run.");
+      }
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record a CLI worker run.");
+      }
+      const record = parseCliAttemptRecord(event.payload);
+      const task = next.tasks[record.taskId];
+      if (!task || task.attempt !== record.attempt) {
+        throw new Error(`CLI worker run does not match task ${record.taskId} attempt ${record.attempt}.`);
+      }
       break;
     }
     case "cleanup.checked": {

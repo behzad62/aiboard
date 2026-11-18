@@ -428,6 +428,8 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
       ...(playwrightCli ? { playwrightCli } : {}),
       // CW4: the crew's CLI workers are checked before planning and after each resume.
       cliWorkerFreeChecks: cliWorkerDetection.freeChecks,
+      // CW5: a CLI worker's executablePath and attempt limit, read from the home when its attempt starts.
+      ...(homeReader ? { cliWorkerHome: async () => (await homeReader.read()).config.cliWorkers } : {}),
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
