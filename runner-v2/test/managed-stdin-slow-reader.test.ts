@@ -182,7 +182,14 @@ test("a write past its ceiling is outcome_unknown and delivered once; input work
     writeFileSync(join(f.project, "go"), "");
     await readUntil(f, processId, (stdout) => stdout.includes(`seen:${admitted}\n`), false);
     // Drained, the next write is admitted and acknowledged (on the Windows Job too: the spent sequence moved on).
-    const tail = await f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: "tail", data: "tail", closeInput: true }, context));
+    // The reader's output can reach us a moment before the supervisor records the drained write as settled; a write
+    // in that gap is a certain refusal (nothing sent), so a caller may simply send it again. Bounded: a refusal that
+    // outlasts 5 s is a failure.
+    let tail = await f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: "tail", data: "tail", closeInput: true }, context));
+    for (const refusedUntil = performance.now() + 5_000; tail.status === "rejected" && performance.now() < refusedUntil;) {
+      await sleep(100);
+      tail = await f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: "tail", data: "tail", closeInput: true }, context));
+    }
     assert.equal(tail.status, "acknowledged");
     const exit = await readUntil(f, processId, (stdout) => reported(stdout, admitted + 4), true);
     assert.equal(exit.exitCode, 0, "never resent: the reader got exactly the admitted bytes and the tail, and nothing of the refused retry");

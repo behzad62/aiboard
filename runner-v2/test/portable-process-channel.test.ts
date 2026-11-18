@@ -1209,6 +1209,23 @@ test("portable output settlement still waits for output the supervisor has not r
   } finally { await fixture.close(); }
 });
 
+test("portable output settlement still fails closed on a malformed input acknowledgement", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  try {
+    await fixture.atAck;
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata: fixture.metadata });
+    // Its sequence does not match its name: not evidence of anything, so settlement must not pass over it.
+    writeFileSync(join(fixture.root, "channel/ack/input-000000000001.json"),
+      JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, sequence: 2, status: "acknowledged" }));
+    fixture.stop();
+    assert.deepEqual(await fixture.channel.settleBackpressuredOutput(2_000), { status: "blocked", reason: "output_unaccounted" });
+  } finally { await fixture.close(); }
+});
+
 test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
