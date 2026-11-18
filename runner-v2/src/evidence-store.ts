@@ -157,6 +157,11 @@ export interface RecordEvidenceInput {
 export interface ListEvidenceInput {
   runId: string;
   taskId?: string;
+  /**
+   * With `taskId`: only that attempt's records, and the newest `limit` of them (still oldest first), so a long task
+   * never pushes its latest attempt's records past the limit.
+   */
+  attempt?: number;
   limit?: number;
 }
 
