@@ -33,7 +33,7 @@ import {
   defaultReviewerModelId,
   type BuildCrew,
 } from "@/lib/client/build-crew";
-import { isCliRuntimeId } from "@/lib/client/cli-workers";
+import { cliCrewAvailabilityRefusal, isCliRuntimeId } from "@/lib/client/cli-workers";
 import { useCliWorkerCrewOptions } from "@/lib/client/use-cli-worker-checks";
 import type {
   ToolRuntimeRunnerSettings,
@@ -364,9 +364,13 @@ export default function DashboardPage() {
       ? Boolean(crew?.architect.modelId)
       : Boolean(judgeModelId || effectiveSelectedModels[0]);
   const buildReviewerId = mode === "build" ? crew?.reviewer?.modelId ?? null : null;
-  const cliWorkerOptions = useCliWorkerCrewOptions(runner?.access ?? null, { enabled: mode === "build" });
-  // CLI workers: workers only, and only at Full access (§3.12, §3.13); the Runner refuses the same crew.
-  const buildCliRefusal = mode === "build" && crew ? buildCrewCliRefusal(crew, runner?.access ?? null) : null;
+  const cliCrew = useCliWorkerCrewOptions(runner?.access ?? null, { enabled: mode === "build" });
+  // CLI workers: workers only, only at Full access (§3.12, §3.13), and each turned on and checked by the Runner. The
+  // Runner refuses such a crew at the start, after the discussion exists, so Start waits until it would pass.
+  const buildCliRefusal = mode === "build" && crew
+    ? buildCrewCliRefusal(crew, runner?.access ?? null)?.message
+      ?? cliCrewAvailabilityRefusal(crew.workers.map((worker) => worker.modelId), cliCrew)
+    : null;
   const buildWorkerCount = crew?.workers.length ?? 0;
   const buildBudgetEnforceabilityError = useMemo(() => {
     if (mode !== "build") return null;
@@ -439,7 +443,7 @@ export default function DashboardPage() {
       : !hasJudge
           ? "Choose a judge model."
           : buildCliRefusal
-            ? buildCliRefusal.message
+            ? buildCliRefusal
           : buildBudgetEnforceabilityError
             ? buildBudgetEnforceabilityError
           : !hasTopic
@@ -452,6 +456,8 @@ export default function DashboardPage() {
   const canStart = !loading && !blockerHint;
 
   const startDiscussion = async () => {
+    // Nothing is created while a blocker stands (a CLI crew the Runner would refuse would leave a dead Build).
+    if (blockerHint) return;
     setLoading(true);
     setError(null);
     try {
@@ -806,7 +812,7 @@ export default function DashboardPage() {
                   runPolicy: buildRunPolicy,
                 }}
                 probeStatus={(modelId) => actionProtocolStatusForId(modelId, capabilityProfiles)}
-                cliWorkers={cliWorkerOptions}
+                cliWorkers={cliCrew.options}
                 access={runner?.access ?? null}
               />
             )}

@@ -332,6 +332,8 @@ function DiscussionPageInner() {
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
   const [nativeRunState, setNativeRunState] = useState<NativeRunProjection["state"] | undefined>(undefined);
+  /** The run's own access, fixed when it was made: session settings check a CLI crew against it (CW9). */
+  const [nativeRunPermissionProfile, setNativeRunPermissionProfile] = useState<NativeRunProjection["permissionProfile"] | null>(null);
   const [specificationBusy, setSpecificationBusy] = useState(false);
   const [repairIssueBusy, setRepairIssueBusy] = useState(false);
   const [repairIssueError, setRepairIssueError] = useState<string | null>(null);
@@ -1288,6 +1290,7 @@ function DiscussionPageInner() {
         const handoffs = durableBuildHandoffPanels(projection, run.state);
         setNativeProjection(projection);
         setNativeRunState(run.state);
+        setNativeRunPermissionProfile(run.permissionProfile);
         setNativeObservability(observability);
         setNativeActivity(activity);
         // CLI workers (CW9): each recorded CLI run, with the Runner's re-runs of the checks it reported.
@@ -1497,6 +1500,7 @@ function DiscussionPageInner() {
     setNativePermissions([]);
     setNativeObservability(null);
     setNativeProjection(null);
+    setNativeRunPermissionProfile(null);
     nativeTranscriptRef.current = null;
     setNativeTranscript(null);
     setNativeFiles(null);
@@ -1566,6 +1570,7 @@ function DiscussionPageInner() {
     setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     setNativeObservability(null);
     setNativeProjection(null);
+    setNativeRunPermissionProfile(null);
     nativeTranscriptRef.current = null;
     setNativeTranscript(null);
     setNativeFiles(null);
@@ -3068,6 +3073,7 @@ function DiscussionPageInner() {
             attachments={attachments}
             canEdit={!isActive && !streamConnected}
             onSave={handleSessionSettingsSave}
+            runPermissionProfile={nativeRunPermissionProfile}
             onRunnerChange={handleRunnerChange}
           />
         }
@@ -3234,6 +3240,7 @@ function DiscussionPageInner() {
               attachments={attachments}
               canEdit={!isActive && !streamConnected}
               onSave={handleSessionSettingsSave}
+              runPermissionProfile={nativeRunPermissionProfile}
               onRunnerChange={handleRunnerChange}
             />
           </div>
@@ -3386,6 +3393,7 @@ function DiscussionPageInner() {
               attachments={attachments}
               canEdit={!isActive && !streamConnected}
               onSave={handleSessionSettingsSave}
+              runPermissionProfile={nativeRunPermissionProfile}
               onRunnerChange={handleRunnerChange}
             />
           </TabsContent>

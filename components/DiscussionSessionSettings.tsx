@@ -10,6 +10,7 @@ import { ReasoningControl } from "@/components/ReasoningControl";
 import { BuildCrewPicker } from "@/components/build/BuildCrewPicker";
 import { useCliWorkerCrewOptions } from "@/lib/client/use-cli-worker-checks";
 import {
+  buildCrewCliAccess,
   buildCrewCliRefusal,
   buildCrewFromDiscussion,
   buildCrewModelIds,
@@ -17,6 +18,7 @@ import {
   type BuildCrew,
   type BuildCrewMember,
 } from "@/lib/client/build-crew";
+import { cliCrewAvailabilityRefusal } from "@/lib/client/cli-workers";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
 import {
   discussionNeedsLauncherReconnect,
@@ -99,6 +101,8 @@ interface DiscussionSessionSettingsProps {
   busy?: boolean;
   onSave: (value: DiscussionSessionSettingsValue) => boolean;
   onRunnerChange: (selection: RunnerSelection | null) => void;
+  /** The Runner run's own access when the Build has one (fixed at its creation); a CLI crew is checked against it. */
+  runPermissionProfile?: "guarded" | "project" | "full" | null;
 }
 
 function parseModelIds(discussion: Discussion): string[] {
@@ -136,6 +140,7 @@ export function DiscussionSessionSettings({
   busy = false,
   onSave,
   onRunnerChange,
+  runPermissionProfile = null,
 }: DiscussionSessionSettingsProps) {
   const [effort, setEffort] = useState<EffortLevel>(discussion.effort);
   const [selectedModels, setSelectedModels] = useState<string[]>(
@@ -265,9 +270,14 @@ export function DiscussionSessionSettings({
     : isBuild
       ? Boolean(crew?.architect.modelId)
       : hasEnoughParticipatingModels(discussion.mode, compatibleSelected.length);
-  const cliWorkerOptions = useCliWorkerCrewOptions(discussion.runnerAccess ?? null, { enabled: isBuild });
-  // CLI workers need Full access and are workers only (§3.12, §3.13): the Runner refuses such a crew.
-  const cliRefusal = isBuild && crew ? buildCrewCliRefusal(crew, discussion.runnerAccess ?? null) : null;
+  // A Build the Runner already made keeps its own access; one not yet sent uses the chosen ceiling.
+  const cliAccess = buildCrewCliAccess(discussion, runPermissionProfile);
+  const cliCrew = useCliWorkerCrewOptions(cliAccess, { enabled: isBuild });
+  // CLI workers need Full access and are workers only (§3.12, §3.13), and each must be turned on and checked by the
+  // Runner: it refuses such a crew otherwise, so the change is not saved.
+  const cliRefusal = isBuild && crew
+    ? buildCrewCliRefusal(crew, cliAccess)?.message ?? cliCrewAvailabilityRefusal(crew.workers.map((worker) => worker.modelId), cliCrew)
+    : null;
   const canSave = canEdit && !busy && hasEnoughModels && !cliRefusal;
 
   const save = () => {
@@ -414,12 +424,12 @@ export function DiscussionSessionSettings({
                   runPolicy: buildRunPolicy,
                 }}
                 disabled={!canEdit || busy}
-                cliWorkers={cliWorkerOptions}
-                access={discussion.runnerAccess ?? null}
+                cliWorkers={cliCrew.options}
+                access={cliAccess}
               />
               {cliRefusal && (
                 <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs" role="alert">
-                  {cliRefusal.message}
+                  {cliRefusal}
                 </p>
               )}
               {discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt && (
@@ -530,6 +540,7 @@ export function DiscussionSessionSettings({
               disabled={!canEdit || busy}
               onChange={onRunnerChange}
               pickedFolderName={discussion.projectFolderName}
+              launcherAccessCeiling={!discussion.nativeBuildRunId}
             />
           )}
         </fieldset>

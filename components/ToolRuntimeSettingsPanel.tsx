@@ -34,6 +34,8 @@ export function ToolRuntimeSettingsPanel({
   }, [fileSearchEnabledSetting, vectorStoreIdsSetting]);
 
   const persistRunner = (selection: RunnerSelection | null) => {
+    // Launcher session tokens are tab-scoped and must never be persisted (as in ProjectAccessSetup).
+    if (selection?.source === "launcher") return;
     saveToolRuntimeRunner(selection);
     onChanged?.();
   };

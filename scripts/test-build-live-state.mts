@@ -1496,8 +1496,17 @@ assert.deepEqual(
   assert.equal(launch?.waitingForOwner, false, "Resume tries the launch again");
   assert.equal(
     `${launch?.title}. ${launch?.detail}`,
-    "Paused: the Runner could not start CLI workers twice in a row. What failed: windows_batch_argv_unverified.",
+    "Paused: the Runner could not start a CLI worker again. Windows can't safely start this CLI's .cmd launcher: point Settings > Providers > CLI workers at the CLI's .exe and press Test. Then press Resume, or take the CLI worker out of the crew.",
   );
+  // The owner gets a next step, never the raw code, for every code the Runner names; an unknown one keeps its code.
+  for (const code of ["cli_worker_platform_refused", "cli_worker_root_refused", "job_containment_unverified", "cli_executable_unknown", "cli_launch_argv_unsafe"]) {
+    const paused = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: `process_launch_unproven_repeated:${code}` } } as never);
+    assert.doesNotMatch(paused!.detail, new RegExp(code), code);
+    assert.match(paused!.detail, /Then press Resume/, code);
+  }
+  const other = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: "process_launch_unproven_repeated:owned_fence_unavailable" } } as never);
+  assert.match(other!.detail, /Starting the CLI failed \(owned_fence_unavailable\)/);
+  assert.doesNotMatch(`${launch?.title}`, /twice in a row/, "the Runner pauses after any earlier launch failure in the run");
   // Neither falls through to the generic "Reason: …" text, and neither is the worker-stop text.
   for (const pause of [collect, untitled, launch]) {
     assert.doesNotMatch(pause!.detail, /^Reason:|could not be proven stopped/);

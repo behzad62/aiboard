@@ -10,6 +10,7 @@ import {
   Select,
   SelectContent,
   SelectGroup,
+  SelectLabel,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -172,7 +173,7 @@ function ModelSelect({
         ))}
         {cliWorkers.length > 0 && (
           <SelectGroup>
-            <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">CLI workers</div>
+            <SelectLabel>CLI workers</SelectLabel>
             {cliWorkers.map((option) => (
               <SelectItem key={option.runtimeId} value={option.runtimeId} disabled={Boolean(option.disabledReason)}>
                 {option.name}

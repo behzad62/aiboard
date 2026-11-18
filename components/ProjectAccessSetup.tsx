@@ -25,6 +25,7 @@ export function ProjectAccessSetup({ onRunnerChange }: ProjectAccessSetupProps) 
   return (
     <RunnerSetup
       initialSelection={initialSelection}
+      launcherAccessCeiling
       onChange={(selection) => {
         // Launcher session tokens are tab-scoped and must never be persisted.
         if (selection?.source !== "launcher") saveToolRuntimeRunner(selection);

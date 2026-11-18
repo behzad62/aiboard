@@ -302,9 +302,15 @@ export interface CliWorkerHealth {
   state: CliWorkerHealthState;
   label: string;
   reason?: string;
-  /** False only for a CLI refused on this host (the OS or root): it can never run here. */
+  /**
+   * False for a CLI refused on this host (the OS or root: it can never run here) and for one the Runner has not
+   * checked yet, so a Build never starts with a CLI the Runner would refuse.
+   */
   pickable: boolean;
 }
+
+/** The reason a CLI can't be picked before the Runner's free check for it is in. */
+export const CLI_WORKER_UNCHECKED_REASON = "AI Board is still checking this CLI. It can be picked once the check is in.";
 
 const UNAVAILABLE_LABELS: Record<string, string> = {
   not_installed: "Not installed",
@@ -319,7 +325,7 @@ const UNAVAILABLE_LABELS: Record<string, string> = {
 
 /** What the crew picker and Settings say about one CLI, from its free check. */
 export function cliWorkerHealth(check: CliWorkerCheckView | undefined): CliWorkerHealth {
-  if (!check) return { state: "unchecked", label: "Not checked", pickable: true };
+  if (!check) return { state: "unchecked", label: "Not checked", reason: CLI_WORKER_UNCHECKED_REASON, pickable: false };
   const reason = check.reason ? { reason: check.reason } : {};
   if (check.status === "ready") return { state: "ready", label: "Ready", pickable: true };
   if (check.status === "refused") {
@@ -386,6 +392,34 @@ export function cliWorkerCrewOptions(
   return options;
 }
 
+/**
+ * Why a crew's CLI workers can't start now, or null: a CLI worker that is no longer turned on (with its consent) in
+ * Settings, one the Runner hasn't checked yet, or one it refuses on this host. Checked before the discussion is
+ * created or a crew change is saved, so the Runner's start refusal never leaves a dead Build behind. The roles and
+ * access rule is `buildCrewCliRefusal` (lib/client/build-crew.ts).
+ */
+export function cliCrewAvailabilityRefusal(
+  workerRuntimeIds: readonly string[],
+  crew: { options: readonly CliWorkerCrewOption[]; status: "off" | "loading" | "ready" | "error" | "unsupported" },
+): string | null {
+  for (const runtimeId of workerRuntimeIds) {
+    if (!isCliRuntimeId(runtimeId)) continue;
+    const name = cliRuntimeDisplayName(runtimeId) ?? runtimeId;
+    if (crew.status === "unsupported") return `${name}: ${CLI_WORKERS_UPDATE_MESSAGE}`;
+    const option = crew.options.find((candidate) => candidate.runtimeId === runtimeId);
+    if (!option) {
+      return `${name} is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers, or remove it from the crew.`;
+    }
+    if (!option.health.pickable) {
+      if (option.health.state === "unchecked" && crew.status === "error") {
+        return `${name}: AI Board could not check the CLI workers. It tries again shortly.`;
+      }
+      return `${name}: ${option.health.reason ?? option.health.label}`;
+    }
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------ the config a Build pushes (§3.1, §3.3)
 
 /**
@@ -403,7 +437,7 @@ export function cliNativeProviderConfig(
   const modelId = runtimeId.slice(separator + 1);
   const name = cliWorkerName(providerId);
   const entry = entries[providerId];
-  if (!entry?.enabled) throw new Error(`${name} is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers.`);
+  if (!entry?.enabled || !entry.consentedAt) throw new Error(`${name} is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers.`);
   const model = entry.models?.find((candidate) => (candidate.id ?? CLI_DEFAULT_MODEL_ID) === modelId);
   if (!model) throw new Error(`${cliRuntimeDisplayName(runtimeId)} is not one of ${name}'s models in Settings > Providers > CLI workers.`);
   return {
@@ -422,7 +456,10 @@ export function cliNativeProviderConfig(
 
 // ------------------------------------------------------------------ Run details' CLI attempt card (§3.5–§3.7, CW5, CW6)
 
-/** cli-worker-runtime.ts `LIVE_TURN_BASE`: a CLI run's live tail is numbered apart from an API worker's turns. */
+/**
+ * cli-worker-runtime.ts `LIVE_TURN_BASE`: a CLI run's live tail is numbered apart from an API worker's turns
+ * (scripts/test-cli-workers-ui.mts pins them equal).
+ */
 export const CLI_LIVE_TURN_BASE = 1_000_000;
 
 export type CliAttemptOutcome = "done" | "needs_decision" | "cannot_do" | "failure" | "stopped";
@@ -465,6 +502,10 @@ export interface CliAttemptView {
   stopFailure?: string;
   usage?: { inputTokens: number; outputTokens: number };
   reruns: CliRerunView[];
+  /** The run's number in its session's attempt (cli-worker-runtime.ts): its live tail is turn CLI_LIVE_TURN_BASE + runNumber. */
+  runNumber: number;
+  /** Collected later, once its programs were proven stopped (an earlier record said `collected: false`). */
+  collectedAfterStop?: boolean;
 }
 
 const OUTCOME_LABELS: Record<CliAttemptOutcome, string> = {
@@ -575,10 +616,38 @@ export function cliAttemptViews(
       restoredProjectDocs: strings(payload.restoredProjectDocs, 64) ?? [],
       projectChangedDuringAttempt: strings(payload.projectChangedDuringAttempt, 8) ?? [],
       reruns: [],
+      runNumber: 1,
       ...Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined)),
+      ...(text(payload.resultDigest, 128) ? { resultDigest: text(payload.resultDigest, 128) } : {}),
     } as CliAttemptView);
   }
   attempts.sort((left, right) => left.sequence - right.sequence);
+  // Number each run as the Runner does (one more than the records of its task attempt and session so far); a record
+  // that collects an earlier `collected: false` run (§3.11 case 2) is that same run and replaces its card.
+  const recordsSoFar = new Map<string, number>();
+  const uncollected = new Map<string, CliAttemptView & { resultDigest?: string }>();
+  const replaced = new Set<CliAttemptView>();
+  for (const attempt of attempts as Array<CliAttemptView & { resultDigest?: string }>) {
+    const group = `${attempt.taskId}\u0000${attempt.attempt}\u0000${attempt.sessionId}`;
+    const count = recordsSoFar.get(group) ?? 0;
+    recordsSoFar.set(group, count + 1);
+    const pending = uncollected.get(group);
+    if (pending && attempt.collected && (!pending.resultDigest || !attempt.resultDigest || pending.resultDigest === attempt.resultDigest)) {
+      attempt.runNumber = pending.runNumber;
+      attempt.collectedAfterStop = true;
+      if (pending.stopFailure && !attempt.stopFailure) attempt.stopFailure = pending.stopFailure;
+      replaced.add(pending);
+      uncollected.delete(group);
+    } else {
+      attempt.runNumber = count + 1;
+      if (attempt.collected) uncollected.delete(group);
+      else uncollected.set(group, attempt);
+    }
+  }
+  const shown = attempts.filter((attempt) => !replaced.has(attempt));
+  for (const attempt of shown) delete (attempt as { resultDigest?: string }).resultDigest;
+  attempts.length = 0;
+  attempts.push(...shown);
   for (const evidence of options.evidence ?? []) {
     if (!isCliRerun(evidence) || evidence.actor.role !== "worker") continue;
     const view = rerunView(evidence);
@@ -602,6 +671,8 @@ export interface CliLiveTailInput {
 export interface CliLiveTail {
   sessionId: string;
   workerId: string;
+  /** The CLI run's number in its session (the live turn minus CLI_LIVE_TURN_BASE). */
+  runNumber: number;
   streaming: boolean;
   text: string;
 }
@@ -614,6 +685,7 @@ export function cliLiveTails(turns: readonly CliLiveTailInput[]): CliLiveTail[] 
     .map((turn) => ({
       sessionId: turn.sessionId,
       workerId: turn.actor.id,
+      runNumber: turn.turn - CLI_LIVE_TURN_BASE,
       streaming: turn.streaming,
       text: turn.segments.map((segment) => segment.text).join("").slice(-TAIL_CHARS),
     }))

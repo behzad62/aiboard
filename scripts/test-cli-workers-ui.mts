@@ -16,15 +16,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CliWorkerFreeChecks, CliWorkerLastTest, CliWorkerPanel } from "../components/CliWorkersSettings";
 import { BuildCrewPicker } from "../components/build/BuildCrewPicker";
 import { CliAttemptCard, CliAttemptsPanel } from "../components/build/CliAttemptsPanel";
-import { buildCrewCliRefusal, selectBuildCrewRuntimes, type BuildCrew } from "../lib/client/build-crew";
+import { buildCrewCliAccess, buildCrewCliRefusal, selectBuildCrewRuntimes, type BuildCrew } from "../lib/client/build-crew";
 import {
   CLI_ATTEMPT_MINUTES,
   CLI_LIVE_TURN_BASE,
   CLI_TEST_OUTCOMES,
   CLI_WORKERS_FULL_ACCESS_REASON,
+  CLI_WORKERS_UPDATE_MESSAGE,
   CLI_WORKER_CONSENT_NOTE,
+  CLI_WORKER_UNCHECKED_REASON,
   CliWorkersUnsupportedError,
   cliAttemptViews,
+  cliCrewAvailabilityRefusal,
   cliLiveTails,
   cliNativeProviderConfig,
   cliResetText,
@@ -48,9 +51,22 @@ import {
   CLI_TEST_OUTCOMES as RUNNER_TEST_OUTCOMES,
   isCliArgumentValue as runnerIsCliArgumentValue,
 } from "../runner-v2/src/cli-worker-config";
-import { CLI_COLLECT_PENDING_PREFIX as RUNNER_COLLECT, PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX as RUNNER_REPEATED } from "../runner-v2/src/cli-worker-runtime";
+import {
+  CLI_COLLECT_PENDING_PREFIX as RUNNER_COLLECT,
+  LIVE_TURN_BASE as RUNNER_LIVE_TURN_BASE,
+  PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX as RUNNER_REPEATED,
+} from "../runner-v2/src/cli-worker-runtime";
 import { validateProviderConfigs } from "../runner-v2/src/provider-config-store";
 import { CLI_COLLECT_PENDING_PREFIX, PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX } from "../lib/client/discussion-live-state";
+import { LOCAL_RUNNER_SESSIONS_STORAGE_KEY } from "../lib/client/local-runner-handoff";
+import {
+  __exportClientStoreForPersistenceForTests,
+  __loadClientStoreFromAdapterForTests,
+  flush,
+  getUserSettings,
+  updateBrowserToolRuntimeRunner,
+} from "../lib/client/store";
+import type { StorageAdapter } from "../lib/client/storage-adapter";
 
 let checks = 0;
 function pass(name: string): void {
@@ -106,6 +122,7 @@ const RAW_CHECKS = {
   }
   assert.equal(CLI_COLLECT_PENDING_PREFIX, RUNNER_COLLECT);
   assert.equal(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX, RUNNER_REPEATED);
+  assert.equal(CLI_LIVE_TURN_BASE, RUNNER_LIVE_TURN_BASE, "a CLI run's live tail turn numbers");
   assert.equal(getModelDisplayName("claude-code:default"), "Claude Code · CLI default");
   assert.equal(getModelDisplayName("codex-cli:gpt-6-codex"), "Codex CLI · gpt-6-codex");
   assert.equal(getModelDisplayName("agy:gemini-4-pro"), "agy · gemini-4-pro");
@@ -140,8 +157,11 @@ const parsed = parseCliWorkerChecks(RAW_CHECKS);
   assert.equal(spent.label, "Out of usage");
   assert.equal(spent.pickable, true, "an unhealthy CLI stays pickable: the Build hands its tasks to the others");
   assert.equal(cliWorkerHealth({ ...codex!, code: "root_refused", reason: "Claude Code can't run as a worker when AIBoard runs as root." }).pickable, false);
-  assert.equal(cliWorkerHealth(undefined).state, "unchecked");
-  pass("health: ready, refused (never pickable, with its reason), unavailable with its label, unchecked");
+  const unchecked = cliWorkerHealth(undefined);
+  assert.equal(unchecked.state, "unchecked");
+  assert.equal(unchecked.pickable, false, "a CLI the Runner hasn't checked yet can't be picked: it may be refused here");
+  assert.equal(unchecked.reason, CLI_WORKER_UNCHECKED_REASON);
+  pass("health: ready, refused (never pickable, with its reason), unavailable with its label, unchecked (not pickable yet)");
 }
 
 // ------------------------------------------------------------------ the crew picker's CLI rows
@@ -163,6 +183,9 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
     assert.equal(options.find((option) => option.providerId === "claude-code")?.disabledReason, CLI_WORKERS_FULL_ACCESS_REASON);
   }
   assert.deepEqual(cliWorkerCrewOptions({ "claude-code": { ...ENTRIES["claude-code"]!, enabled: false } }, parsed, "full"), [], "a CLI turned off is not offered");
+  const loading = cliWorkerCrewOptions(ENTRIES, null, "full");
+  assert.ok(loading.length > 0 && loading.every((option) => option.disabledReason === CLI_WORKER_UNCHECKED_REASON),
+    "while the checks load (or after a failed read with none in hand) no CLI row can be picked");
 
   // Workers only: a CLI as Architect or reviewer is refused; as a worker it needs Full access.
   const api = { modelId: "anthropic:claude-opus-5-5", reasoningEffort: "high" as const };
@@ -177,6 +200,55 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.equal(reviewer?.role, "reviewer");
   assert.deepEqual(selectBuildCrewRuntimes(asWorker).verifierRuntimeIds, ["anthropic:claude-opus-5-5"], "never a verifier");
   pass("the crew picker offers CLI rows as workers only, at Full access only, and never a refused CLI");
+}
+
+// ------------------------------------------------------------------ Start and Save wait for a crew the Runner accepts
+{
+  // Before the fix a CLI was offered as "Not checked" while the checks ran, or forever after a failed read: the owner
+  // could add it and Start, and only then the Runner refused it (cli_worker_platform_refused), leaving a dead Build.
+  const workers = ["anthropic:claude-opus-5-5", "claude-code:default"];
+  const ready = { options: cliWorkerCrewOptions(ENTRIES, parsed, "full"), status: "ready" as const };
+  assert.equal(cliCrewAvailabilityRefusal(workers, ready), null, "a checked, ready CLI at Full access passes");
+  assert.equal(cliCrewAvailabilityRefusal(["anthropic:claude-opus-5-5"], { options: [], status: "off" }), null, "API workers are not this rule's");
+  assert.match(cliCrewAvailabilityRefusal(["codex-cli:default"], ready)!, /not available on Windows/, "refused on this OS: Start waits");
+  assert.equal(cliCrewAvailabilityRefusal(["agy:default"], ready),
+    "agy · CLI default is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers, or remove it from the crew.",
+    "a crew CLI no longer turned on (with its consent) blocks Start before the discussion is created");
+  const loading = { options: cliWorkerCrewOptions(ENTRIES, null, "full"), status: "loading" as const };
+  assert.match(cliCrewAvailabilityRefusal(workers, loading)!, /still checking this CLI/);
+  const failed = { options: cliWorkerCrewOptions(ENTRIES, null, "full"), status: "error" as const };
+  assert.match(cliCrewAvailabilityRefusal(workers, failed)!, /could not check the CLI workers\. It tries again shortly/);
+  assert.equal(cliCrewAvailabilityRefusal(workers, { options: [], status: "unsupported" }), `Claude Code · CLI default: ${CLI_WORKERS_UPDATE_MESSAGE}`);
+  assert.match(cliCrewAvailabilityRefusal(workers, { options: [], status: "off" })!, /not turned on as a CLI worker/);
+  // Both pages check it before they create or save anything.
+  const dashboard = readFileSync("components/DashboardPage.tsx", "utf8");
+  assert.match(dashboard, /cliCrewAvailabilityRefusal\(crew\.workers\.map/);
+  assert.match(dashboard, /const startDiscussion = async \(\) => \{[^}]*if \(blockerHint\) return;/, "Start creates nothing while a blocker stands");
+  const session = readFileSync("components/DiscussionSessionSettings.tsx", "utf8");
+  assert.match(session, /cliCrewAvailabilityRefusal\(crew\.workers\.map/);
+  assert.match(session, /const canSave = canEdit && !busy && hasEnoughModels && !cliRefusal;/);
+  // A failed read is retried, and the answer belongs to one Runner connection.
+  const hook = readFileSync("lib/client/use-cli-worker-checks.ts", "utf8");
+  assert.match(hook, /scheduleRetry\(\);/);
+  assert.match(hook, /function currentState\(key: string \| null = connectionKey\(\)\)/);
+  pass("Start and Save wait until each crew CLI is turned on, checked and not refused here; a failed check is retried");
+}
+
+// ------------------------------------------------------------------ an existing run's crew is checked at the run's own access
+{
+  const run = { nativeBuildRunId: "run-1", runnerAccess: "full" as const };
+  assert.equal(buildCrewCliAccess(run, "guarded"), "ask", "a run made at Guarded stays Guarded, whatever the ceiling says now");
+  assert.equal(buildCrewCliAccess({ ...run, runnerAccess: "ask" }, "full"), "full", "a run made at Full keeps Full");
+  assert.equal(buildCrewCliAccess(run, "project"), "project");
+  assert.equal(buildCrewCliAccess(run, null), null, "unknown until the run is read: no CLI crew passes");
+  assert.equal(buildCrewCliAccess({ nativeBuildRunId: null, runnerAccess: "full" }, "guarded"), "full", "a Build not yet sent uses the ceiling");
+  const crew: BuildCrew = { architect: { modelId: "anthropic:claude-opus-5-5", reasoningEffort: "high" }, reviewer: null, workers: [{ modelId: "claude-code:default", reasoningEffort: "default" }] };
+  assert.equal(buildCrewCliRefusal(crew, buildCrewCliAccess(run, "guarded"))?.code, "cli_workers_require_full_access");
+  assert.equal(buildCrewCliRefusal(crew, buildCrewCliAccess({ ...run, runnerAccess: "ask" }, "full")), null);
+  const session = readFileSync("components/DiscussionSessionSettings.tsx", "utf8");
+  assert.match(session, /const cliAccess = buildCrewCliAccess\(discussion, runPermissionProfile\);/);
+  assert.match(readFileSync("app/discussion/discussion-client.tsx", "utf8"), /setNativeRunPermissionProfile\(run\.permissionProfile\);/);
+  pass("session settings check a CLI crew against the run's own permission profile once it has a run");
 }
 
 // The picker itself: a CLI worker row shows its health and effort; below Full access it says what to change.
@@ -221,6 +293,7 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.doesNotThrow(() => validateProviderConfigs([config, byDefault] as never), "the Runner accepts what the page pushes");
   assert.throws(() => cliNativeProviderConfig("claude-code:sonnet", 0, ENTRIES), /not one of Claude Code's models/);
   assert.throws(() => cliNativeProviderConfig("agy:default", 0, { agy: { enabled: false, models: [{ id: null }] } }), /not turned on/);
+  assert.throws(() => cliNativeProviderConfig("agy:default", 0, ENTRIES), /not turned on/, "turned on without its consent is not turned on");
   assert.throws(() => cliNativeProviderConfig("openai:gpt-6", 0, ENTRIES), /not a CLI worker/);
   pass("a CLI worker's pushed config has no secret, base URL, token or secret source, is unmetered, and passes the Runner's validator");
 }
@@ -327,12 +400,64 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
 // ------------------------------------------------------------------ Full access is reachable with an `aiboard` session
 {
   // Before CW9 the access ceiling showed only for a pasted token, so a Build started through `aiboard` (the normal
-  // path) was always Guarded and could never take a CLI worker.
+  // path) was always Guarded and could never take a CLI worker. Only the Build pickers ask for it: in the Tools tab a
+  // launcher session's access is never saved, so the ceiling there would do nothing.
   const setup = readFileSync("components/RunnerSetup.tsx", "utf8");
-  assert.match(setup, /\{\(token\.trim\(\) \|\| launcher\) && \(\s*<div[^>]*>\s*<Label[^>]*>Access ceiling/, "the access ceiling shows for a launcher session");
-  assert.match(setup, /launcher \? \{ url: launcher\.url, token: launcher\.token, access: selection\.access, source: "launcher" as const \}/,
-    "choosing an access keeps the launcher connection and never persists its token");
-  pass("the access ceiling (and so Full access) can be chosen for a Build connected through aiboard");
+  assert.match(setup, /\{\(token\.trim\(\) \|\| \(launcher && launcherAccessCeiling\)\) && \(\s*<div[^>]*>\s*<Label[^>]*>Access ceiling/,
+    "the access ceiling shows for a launcher session where the page asks for it");
+  assert.match(setup, /launcherAccessCeiling = false,/, "off unless asked");
+  assert.match(readFileSync("components/ProjectAccessSetup.tsx", "utf8"), /<RunnerSetup\s+initialSelection=\{initialSelection\}\s+launcherAccessCeiling/);
+  assert.match(readFileSync("components/DiscussionSessionSettings.tsx", "utf8"), /launcherAccessCeiling=\{!discussion\.nativeBuildRunId\}/);
+  const tools = readFileSync("components/ToolRuntimeSettingsPanel.tsx", "utf8");
+  assert.doesNotMatch(tools, /launcherAccessCeiling/, "no ceiling for a launcher session in the Tools tab");
+  assert.match(tools, /if \(selection\?\.source === "launcher"\) return;\s*saveToolRuntimeRunner\(selection\);/, "the Tools tab never saves a launcher session");
+  pass("the access ceiling (and so Full access) can be chosen for a Build connected through aiboard, and only there");
+}
+
+// ------------------------------------------------------------------ a launcher session's token is never written to the store
+{
+  const LAUNCHER_TOKEN = "launcher-session-token-canary-5c1e";
+  const memory = new Map<string, string>();
+  (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => { memory.set(key, value); },
+    removeItem: (key: string) => { memory.delete(key); },
+  };
+  memory.set(LOCAL_RUNNER_SESSIONS_STORAGE_KEY, JSON.stringify({
+    runner: { kind: "runner", instanceId: "inst-1", port: 47821, sessionToken: LAUNCHER_TOKEN },
+  }));
+  const saved: string[] = [];
+  const persisted = {
+    userSettings: {
+      id: "default", chatDefaultApplied: true,
+      // What an older Tools tab saved from a launcher session.
+      toolRuntime: { runner: { url: "http://127.0.0.1:47821", token: LAUNCHER_TOKEN, access: "full", source: "launcher" } },
+    },
+  };
+  const adapter = {
+    kind: "indexeddb",
+    load: async () => JSON.stringify(persisted),
+    save: async (blob: string) => { saved.push(blob); },
+    listDiscussionIds: async () => [], loadDiscussionFile: async () => null, saveDiscussionFile: async () => {},
+    deleteDiscussionFile: async () => {}, deleteDiscussion: async () => {}, listBenchmarkRunIds: async () => [],
+    loadBenchmarkRun: async () => null, saveBenchmarkRun: async () => {}, deleteBenchmarkRun: async () => {}, label: () => "memory",
+  } as unknown as StorageAdapter;
+  await __loadClientStoreFromAdapterForTests(adapter);
+  assert.equal(getUserSettings().toolRuntime?.runner ?? null, null, "loading drops a persisted launcher connection");
+  await flush();
+  assert.ok(saved.length > 0, "the cleaned store is written back, so the token leaves IndexedDB or store.json");
+  assert.ok(saved.every((blob) => !blob.includes(LAUNCHER_TOKEN)), "the written store holds no launcher token");
+
+  // Nothing writes one again: not with its source, and not by its token alone.
+  updateBrowserToolRuntimeRunner({ url: "http://127.0.0.1:47821", token: LAUNCHER_TOKEN, access: "full", source: "launcher" } as never);
+  updateBrowserToolRuntimeRunner({ url: "http://127.0.0.1:47821", token: LAUNCHER_TOKEN, access: "full" });
+  assert.equal(getUserSettings().toolRuntime?.runner ?? null, null);
+  updateBrowserToolRuntimeRunner({ url: "http://127.0.0.1:47800", token: "pasted-token", access: "project" });
+  assert.equal(getUserSettings().toolRuntime?.runner?.token, "pasted-token", "a pasted token is still saved");
+  await flush();
+  assert.ok(!JSON.stringify(__exportClientStoreForPersistenceForTests()).includes(LAUNCHER_TOKEN));
+  assert.ok(saved.every((blob) => !blob.includes(LAUNCHER_TOKEN)));
+  pass("a launcher session's token is never written to the store, and one an older version saved is removed on load");
 }
 
 // ------------------------------------------------------------------ Run details: the CLI attempt card
@@ -396,6 +521,55 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.match(panel, /Running/);
   assert.equal(renderToStaticMarkup(createElement(CliAttemptsPanel, { attempts: [] })), "", "nothing for a Build without CLI workers");
   pass("Run details' CLI card shows the live tail, version, outcome, replaced commits, re-runs and an uncollected run");
+}
+
+// ------------------------------------------------------------------ Run details: a later collect, and each run's own tail
+{
+  const event = (sequence: number, payload: Record<string, unknown>): NativeBuildEvent => ({
+    sequence, type: "worker.cli_attempt_recorded", occurredAt: `2026-11-18T13:0${sequence}:00.000Z`,
+    actor: { role: "runner", id: "native-worker-driver" }, payload,
+  });
+  const base = {
+    version: 1, taskId: "task-2", attempt: 1, workerId: "worker-1", sessionId: "session-9", runtimeId: "claude-code:default",
+    providerId: "claude-code", exitCode: 0, outcome: "done",
+  };
+  const digest = "c".repeat(64);
+  // Run 1 is recorded uncollected (its stop unproven), then collected after a Resume; run 3 is a new launch (the
+  // Runner numbers it one past every record of the attempt, the collect's included).
+  const views = cliAttemptViews([
+    event(1, { ...base, collected: false, resultDigest: digest, stopFailure: "A program it started is still running." }),
+    event(2, { ...base, collected: true, resultDigest: digest, replacedCliCommits: 0 }),
+    event(3, { ...base, collected: true, resultDigest: "d".repeat(64), summary: "second run" }),
+  ]);
+  assert.deepEqual(views.map((view) => [view.runNumber, view.collected, view.collectedAfterStop ?? false]), [[3, true, false], [1, true, true]],
+    "the uncollected card is replaced by the record that collected it");
+  const collected = renderToStaticMarkup(createElement(CliAttemptCard, { attempt: views[1]! }));
+  assert.doesNotMatch(collected, /Not collected yet/);
+  assert.match(collected, /Collected after its programs were proven stopped/);
+
+  const tails = cliLiveTails([
+    { sessionId: "session-9", actor: { role: "worker", id: "worker-1" }, turn: CLI_LIVE_TURN_BASE + 1, streaming: false, segments: [{ channel: "tool", text: "output of run one" }] },
+    { sessionId: "session-9", actor: { role: "worker", id: "worker-1" }, turn: CLI_LIVE_TURN_BASE + 3, streaming: false, segments: [{ channel: "tool", text: "output of run three" }] },
+  ]);
+  assert.deepEqual(tails.map((tail) => tail.runNumber), [1, 3]);
+  const panel = renderToStaticMarkup(createElement(CliAttemptsPanel, { attempts: views, tails: tails.map((tail) => ({ ...tail, name: "Claude Code" })) }));
+  const newest = panel.indexOf("second run");
+  assert.ok(newest >= 0 && panel.indexOf("output of run three") > newest && panel.indexOf("output of run one") > panel.indexOf("output of run three"),
+    "each card shows its own run's tail, not the first settled tail of the session");
+  assert.doesNotMatch(panel, /aria-live="polite"/, "the tail is replaced each delta, so it is not announced");
+  assert.match(panel, /aria-live="off"/);
+  pass("Run details: a later collect replaces the 'Not collected yet' card, and each card shows its own run's tail");
+}
+
+// ------------------------------------------------------------------ accessibility of the consent note and the picker's CLI group
+{
+  const consent = readFileSync("components/CliWorkersSettings.tsx", "utf8");
+  assert.doesNotMatch(consent, /role="alertdialog"/, "an inline note is not a dialog");
+  assert.match(consent, /disabled=\{busy\} autoFocus>I understand, turn it on</, "focus moves to the consent button when the note opens");
+  const picker = readFileSync("components/build/BuildCrewPicker.tsx", "utf8");
+  assert.match(picker, /<SelectGroup>\s*<SelectLabel>CLI workers<\/SelectLabel>/, "the CLI workers group has a real label");
+  assert.match(readFileSync("components/ui/select.tsx", "utf8"), /const SelectLabel = React\.forwardRef/);
+  pass("the consent note moves focus to its button, and the crew picker's CLI group is labelled");
 }
 
 console.log(`PASS CLI workers UI (${checks} checks)`);

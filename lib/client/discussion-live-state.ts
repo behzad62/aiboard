@@ -96,6 +96,28 @@ function workerStopPause(reason: string): { kind: (typeof WORKER_STOP_PAUSES)[nu
   return match ? { kind: match[1], taskId: reason.slice(match[0].length) } : undefined;
 }
 
+/**
+ * What the owner can do about a CLI launch the Runner could not start (cli-worker-runtime.ts `launchRefusal`,
+ * `cmdLaunchRefusal` and `runnerLaunchRefusalCode`), said in words rather than as the code.
+ */
+export function cliLaunchFailureStep(code: string): string {
+  switch (code) {
+    case "cli_worker_platform_refused":
+      return "This CLI can't run as a worker on this computer's operating system.";
+    case "cli_worker_root_refused":
+      return "This CLI refuses to run as root: start AI Board as a normal user.";
+    case "job_containment_unverified":
+      return "AI Board could not confirm it can contain the CLI's programs on this PC: update AI Board (`aiboard update`) and check Settings > Providers > CLI workers.";
+    case "cli_executable_unknown":
+      return "AI Board could not tell which program to start: set the CLI's program path in Settings > Providers > CLI workers and press Test.";
+    case "windows_batch_argv_unverified":
+    case "cli_launch_argv_unsafe":
+      return "Windows can't safely start this CLI's .cmd launcher: point Settings > Providers > CLI workers at the CLI's .exe and press Test.";
+    default:
+      return `Starting the CLI failed (${code}): check it in Settings > Providers > CLI workers and press Test.`;
+  }
+}
+
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
 export function nativeBuildPauseDescription(
   projection: (Pick<NativeBuildProjection, "status" | "pauseReason"> &
@@ -188,13 +210,13 @@ export function nativeBuildPauseDescription(
       detail: `Its programs are now stopped; Resume collects what the CLI did on ${taskName(reason.slice(CLI_COLLECT_PENDING_PREFIX.length))}.`,
     };
   }
-  // CLI workers (CW5, §3.11 case 1): a second launch the Runner could not prove in one run pauses it.
+  // CLI workers (CW5, §3.11 case 1): a launch the Runner can't start, after an earlier one in this run, pauses it.
   if (reason.startsWith(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX)) {
     const code = reason.slice(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX.length) || "unknown";
     return {
       waitingForOwner: false,
-      title: "Paused: the Runner could not start CLI workers twice in a row",
-      detail: `What failed: ${code}.`,
+      title: "Paused: the Runner could not start a CLI worker again",
+      detail: `${cliLaunchFailureStep(code)} Then press Resume, or take the CLI worker out of the crew.`,
     };
   }
   const stopPause = workerStopPause(reason);

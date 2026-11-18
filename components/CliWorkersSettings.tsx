@@ -258,14 +258,15 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
       <CliWorkerFreeChecks check={check} {...(now !== undefined ? { now } : {})} />
 
       {askingConsent && (
-        <div className="space-y-2 rounded-md border border-warning/40 bg-warning-soft p-3 text-sm" role="alertdialog" aria-labelledby={`cli-${providerId}-consent`}>
+        <div className="space-y-2 rounded-md border border-warning/40 bg-warning-soft p-3 text-sm" role="group" aria-labelledby={`cli-${providerId}-consent`}>
           <p id={`cli-${providerId}-consent`} className="font-medium">{CLI_WORKER_CONSENT_NOTE}</p>
           <p className="text-xs">
             A headless CLI can&apos;t ask you anything, so it runs only in Builds with Full access, in the task&apos;s own
             worktree. AI Board undoes its commits and re-runs the checks it reports before the Architect sees the work.
           </p>
           <div className="flex gap-2">
-            <Button type="button" size="sm" onClick={() => void turnOn()} disabled={busy}>I understand, turn it on</Button>
+            {/* Focus moves here when the note opens, so a keyboard or screen-reader user lands on it. */}
+            <Button type="button" size="sm" onClick={() => void turnOn()} disabled={busy} autoFocus>I understand, turn it on</Button>
             <Button type="button" size="sm" variant="outline" onClick={() => setAskingConsent(false)}>Cancel</Button>
           </div>
         </div>

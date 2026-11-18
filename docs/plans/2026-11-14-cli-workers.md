@@ -493,6 +493,11 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW0 | Done 2026-11-17: report docs/runner-v2/cli-workers-spike-2026-11-17.md and fixtures under runner-v2/test/fixtures/cli-workers/; the plan amended (CWD-10, CWD-11) | #224 |
 | CW1 | Done | #222 (a3a1df1c) |
 | CW5a | Done | #223 (730b8e67) |
-| CW0b | Started 2026-11-17 | — |
-| CW2–CW10 | Not started; CW2 can start (CW0 and CW1 are done) | — |
-| CW9 | Implemented 2026-11-18 on `claude/cw9-cli-workers-web-d4f590` (on CW5's tip); its PR opens after CW5 (#231) merges. The web needs a Runner with `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | — |
+| CW0b | Done | #228 (cc7c915b) |
+| CW2 | Done | #225 (88f82aa3) |
+| CW3 | Done | #227 (a1b1929e) |
+| CW4 | Done | #226 (dd85ca48) |
+| CW5 | Done | #231 (64ca8fee) |
+| CW6–CW8 | Implemented on their own branches; not on main as of 2026-11-18 | — |
+| CW9 | In review 2026-11-18; merges only after the Runner release carrying CW5–CW8 (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
+| CW10 | Not started | — |

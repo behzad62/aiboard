@@ -40,9 +40,10 @@ function Tail({ text, streaming }: { text: string; streaming: boolean }) {
       <summary className="cursor-pointer select-none px-2 py-1 text-xs font-medium">
         {streaming ? "Live output" : "Last output"}
       </summary>
+      {/* The tail is replaced on every delta, so a screen reader is not sent each one (aria-live off). */}
       <pre
         className="max-h-56 overflow-auto whitespace-pre-wrap break-words px-2 pb-2 font-mono text-[11px] leading-relaxed"
-        aria-live={streaming ? "polite" : undefined}
+        aria-live="off"
       >
         {text || "Waiting for output…"}
       </pre>
@@ -87,6 +88,11 @@ export function CliAttemptCard({ attempt, tail }: { attempt: CliAttemptView; tai
         <p className="rounded-md border border-warning/40 bg-warning-soft px-2 py-1">
           The CLI finished, but its programs could not be proven stopped yet, so nothing was collected.
           {attempt.stopFailure ? ` ${attempt.stopFailure}` : ""}
+        </p>
+      )}
+      {attempt.collectedAfterStop && (
+        <p className="text-muted-foreground">
+          Collected after its programs were proven stopped.
         </p>
       )}
       {attempt.restoredProjectDocs.length > 0 && (
@@ -139,13 +145,13 @@ export function CliAttemptsPanel({
   tails?: CliRunningTail[];
   limit?: number;
 }) {
-  // A tail belongs to the newest record of its session once one exists, unless the CLI is running again.
-  const recordedSessions = new Set(attempts.map((attempt) => attempt.sessionId));
-  const running = tails.filter((tail) => tail.streaming || !recordedSessions.has(tail.sessionId));
-  const settledTail = (attempt: CliAttemptView, index: number) =>
-    attempts.findIndex((candidate) => candidate.sessionId === attempt.sessionId) === index
-      ? tails.find((tail) => tail.sessionId === attempt.sessionId && !tail.streaming)
-      : undefined;
+  // A run's tail is its own live turn (CLI_LIVE_TURN_BASE + its run number); a tail with no record yet is a CLI
+  // still running, or one that finished moments ago.
+  const tailKey = (sessionId: string, runNumber: number) => `${sessionId}\u0000${runNumber}`;
+  const recordedRuns = new Set(attempts.map((attempt) => tailKey(attempt.sessionId, attempt.runNumber)));
+  const running = tails.filter((tail) => tail.streaming || !recordedRuns.has(tailKey(tail.sessionId, tail.runNumber)));
+  const settledTail = (attempt: CliAttemptView) =>
+    tails.find((tail) => !tail.streaming && tail.sessionId === attempt.sessionId && tail.runNumber === attempt.runNumber);
   if (attempts.length === 0 && running.length === 0) return null;
   return (
     <section aria-labelledby="details-cli-title" className="space-y-2 text-sm">
@@ -153,7 +159,7 @@ export function CliAttemptsPanel({
         CLI workers
       </h3>
       {running.map((tail) => (
-        <article key={`running:${tail.sessionId}`} className="space-y-2 rounded-md border bg-background/40 p-3 text-xs" aria-label={`${tail.name} running`}>
+        <article key={`running:${tail.sessionId}:${tail.runNumber}`} className="space-y-2 rounded-md border bg-background/40 p-3 text-xs" aria-label={`${tail.name} running`}>
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-semibold">{tail.name}</span>
             <Badge variant="secondary">{tail.streaming ? "Running" : "Finished"}</Badge>
@@ -162,8 +168,8 @@ export function CliAttemptsPanel({
           <Tail text={tail.text} streaming={tail.streaming} />
         </article>
       ))}
-      {attempts.slice(0, limit).map((attempt, index) => {
-        const tail = settledTail(attempt, index);
+      {attempts.slice(0, limit).map((attempt) => {
+        const tail = settledTail(attempt);
         return <CliAttemptCard key={`${attempt.sequence}`} attempt={attempt} {...(tail ? { tail } : {})} />;
       })}
       {attempts.length > limit && (

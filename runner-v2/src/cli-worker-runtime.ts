@@ -309,7 +309,7 @@ const STDIN_CHUNK_UNITS = 16 * 1024;
 const OUTPUT_FILE_MAX_BYTES = 4 * 1024 * 1024;
 const LIVE_TAIL_CHUNK_CHARS = 4_000;
 /** Live turns of a CLI run are numbered apart from an API worker's turns in the same session. */
-const LIVE_TURN_BASE = 1_000_000;
+export const LIVE_TURN_BASE = 1_000_000;
 const CONCERN_MAX = 2_000;
 const CONCERNS_MAX = 100;
 

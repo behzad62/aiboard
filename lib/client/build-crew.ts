@@ -167,6 +167,20 @@ export function buildCrewCliRefusal(
   });
 }
 
+/**
+ * The access a crew change is checked against (CW9). A Build with a Runner run keeps the access it was made with
+ * (`NativeRunProjection.permissionProfile`), whatever the ceiling says now, so its crew is checked against that; null
+ * until the run is read, which no CLI crew passes. A Build not yet sent uses the chosen ceiling.
+ */
+export function buildCrewCliAccess(
+  discussion: { nativeBuildRunId?: string | null; runnerAccess?: "ask" | "project" | "full" | null },
+  runPermissionProfile: "guarded" | "project" | "full" | null | undefined,
+): "ask" | "project" | "full" | null {
+  if (!discussion.nativeBuildRunId) return discussion.runnerAccess ?? null;
+  if (!runPermissionProfile) return null;
+  return runPermissionProfile === "guarded" ? "ask" : runPermissionProfile;
+}
+
 /** The reviewer shown by default: the first available model that isn't the Architect's. */
 export function defaultReviewerModelId(
   architectModelId: string,

@@ -39,6 +39,7 @@ import type {
   HarnessCertificationResult,
 } from "@/lib/benchmark/types";
 import type { AttachmentRecord } from "@/lib/attachments/types";
+import { isLauncherSessionToken } from "./local-runner-handoff";
 import {
   DISCUSSION_FILE_PATHS,
   createAdapter,
@@ -211,12 +212,31 @@ const RETIRED_STORE_FIELDS = [
   "gameStatsLegacyImportAttempted",
 ] as const;
 
+/**
+ * A launcher session's Runner connection (`aiboard` via /connect) is tab-scoped and its token must never be written
+ * to the store: IndexedDB or a cloud-synced store.json would keep it. Older versions saved one from the Tools tab.
+ */
+export function isLauncherRunnerSettings(runner: unknown): boolean {
+  if (!runner || typeof runner !== "object") return false;
+  const value = runner as { source?: unknown; token?: unknown };
+  return value.source === "launcher" || (typeof value.token === "string" && isLauncherSessionToken(value.token));
+}
+
+/** Whether a persisted store holds a launcher session's connection, which loading drops. */
+function persistedHasLauncherRunner(data: Partial<ClientStore>): boolean {
+  return isLauncherRunnerSettings(data.userSettings?.toolRuntime?.runner);
+}
+
 function hydrateStore(data: Partial<ClientStore> = {}): ClientStore {
   const hydrated: ClientStore & Record<string, unknown> = {
     ...structuredClone(DEFAULT_STORE),
     ...data,
   };
   for (const field of RETIRED_STORE_FIELDS) delete hydrated[field];
+  const runtime = hydrated.userSettings?.toolRuntime;
+  if (runtime && isLauncherRunnerSettings(runtime.runner)) {
+    hydrated.userSettings = { ...hydrated.userSettings, toolRuntime: { ...runtime, runner: null } };
+  }
   // Single-model chat became the default mode in 2026-10. Stores saved before
   // then carry the old implicit "panel" default; move them over exactly once.
   const settings = hydrated.userSettings;
@@ -494,6 +514,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
     const persisted = JSON.parse(raw) as Partial<ClientStore>;
     const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
     const hadLegacyDiscussionData = hasDiscussionOwnedStoreFields(persisted);
+    const hadLauncherRunner = persistedHasLauncherRunner(persisted);
     const benchmarkData = await loadBenchmarkStoreFields();
     const loaded = await loadDiscussionStoreFields(
       hydrateStore(stripBenchmarkStoreFields(persisted))
@@ -502,7 +523,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
       generation,
       mergeBenchmarkStoreFields(loaded, benchmarkData)
     );
-    if (hadLegacyBenchmarkData || hadLegacyDiscussionData) schedulePersist();
+    if (hadLegacyBenchmarkData || hadLegacyDiscussionData || hadLauncherRunner) schedulePersist();
     return { needsPassphrase: false };
   }
   if (env.encrypted && !isUnlocked()) {
@@ -512,6 +533,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
   const persisted = JSON.parse(json) as Partial<ClientStore>;
   const hadLegacyBenchmarkData = hasBenchmarkStoreFields(persisted);
   const hadLegacyDiscussionData = hasDiscussionOwnedStoreFields(persisted);
+  const hadLauncherRunner = persistedHasLauncherRunner(persisted);
   const benchmarkData = await loadBenchmarkStoreFields();
   const loaded = await loadDiscussionStoreFields(
     hydrateStore(stripBenchmarkStoreFields(persisted))
@@ -520,7 +542,7 @@ async function loadStore(generation: number): Promise<{ needsPassphrase: boolean
     generation,
     mergeBenchmarkStoreFields(loaded, benchmarkData)
   );
-  if (hadLegacyBenchmarkData || hadLegacyDiscussionData) schedulePersist();
+  if (hadLegacyBenchmarkData || hadLegacyDiscussionData || hadLauncherRunner) schedulePersist();
   return { needsPassphrase: false };
 }
 
@@ -1809,6 +1831,8 @@ export function updateBrowserSettings(patch: Pick<Partial<UserSettings>, "benchm
 
 /** The Tools tab's Runner connection: it names a Runner, not a user, so it stays in this browser. */
 export function updateBrowserToolRuntimeRunner(runner: NonNullable<UserSettings["toolRuntime"]>["runner"]): void {
+  // A launcher session's connection is never stored (its token is tab-scoped).
+  if (isLauncherRunnerSettings(runner)) return;
   const s = store();
   s.userSettings = { ...s.userSettings, toolRuntime: { ...(s.userSettings.toolRuntime ?? {}), runner } };
   schedulePersist();
@@ -2128,7 +2152,7 @@ export async function __loadClientStoreFromAdapterForTests(
   await runBenchmarkResultSetDeletionRecovery();
   notifyReady();
   notifyEncryptedStoreChange();
-  if (migration.changed) schedulePersist();
+  if (migration.changed || persistedHasLauncherRunner(persisted)) schedulePersist();
   return { needsPassphrase: false };
 }
 
@@ -2338,6 +2362,7 @@ async function switchClientStoreAdapter(
     migration.changed ||
     hadLegacyBenchmarkData ||
     hadLegacyDiscussionData ||
+    persistedHasLauncherRunner(persisted) ||
     raw === null
   ) {
     schedulePersist();
