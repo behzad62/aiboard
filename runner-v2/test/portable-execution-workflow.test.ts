@@ -54,6 +54,10 @@ const deterministicPrTests = [
   // and 10 s on macOS, and 61 s on Windows inside this parallel step.
   "runner-v2/test/control-server-cli-workers.test.ts",
   "runner-v2/test/cli-worker-processes.test.ts",
+  // User steering and Architect questions in the Build runtime: guidance, question resume and supersession across
+  // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
+  // and went stale unseen after 516c7b6e.
+  "runner-v2/test/user-steering-runtime.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
