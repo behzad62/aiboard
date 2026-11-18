@@ -2747,3 +2747,51 @@ test("an unproven stop that cannot be recorded keeps the run paused; a restarted
     fixture.close();
   }
 });
+
+test("CW7: an API worker's unproven stop before its CLI takes two Resumes: the kept handoff pause, then the CLI's run", async () => {
+  const fixture = openFixture("stop-unproven-handoff");
+  try {
+    seedReadyPlan(fixture.store, buildReadyPlanFixture("run_t4", [
+      { id: "U9", files: ["src/u9.ts"] },
+    ], { revisionId: "revision_u9", reviewId: "coverage_u9" }));
+    // The driver's API → CLI switch: the API worker's processes are not proven stopped, so no CLI started. Its kept
+    // outcome is a pause (as cli_collect_pending is), so the attempt runs again on the CLI once the stop is proven.
+    const outcomes: WorkerOutcome[] = [
+      {
+        type: "stop_unproven",
+        reason: "The API worker's processes are not proven stopped, so the CLI worker claude-code:default did not start: still running",
+        outcome: { type: "paused", reason: "worker_handoff_stop_pending:U9" },
+      },
+      { type: "failed", reason: "the CLI's run" },
+    ];
+    const driver = new StopScriptDriver(async () => outcomes.shift()!, ["proven", "proven"]);
+    const scheduler = schedulerFor(fixture.store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    let projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(projection.pauseReason?.reason, "process_stop_unproven:U9");
+
+    // Resume 1: the retried stop is proven, and the kept outcome is recorded: the run pauses again with it.
+    scheduler.resume("resume:u9:1");
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(driver.retries.length, 1);
+    assert.equal(driver.runs, 1, "the first Resume records the kept pause; it runs nothing");
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.pauseReason?.reason, "worker_handoff_stop_pending:U9");
+    assert.equal(projection.tasks.U9.status, "running");
+    assert.equal(projection.unprovenWorkerStops, undefined);
+
+    // Resume 2: the same attempt is dispatched again (its stop retried first), now on the CLI.
+    scheduler.resume("resume:u9:2");
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    projection = projectionOf(fixture.store, "run_t4");
+    assert.equal(driver.runs, 2);
+    assert.equal(projection.tasks.U9.attempt, 1, "the same attempt, not a new one");
+    assert.equal(projection.tasks.U9.failureReason, "the CLI's run");
+  } finally {
+    fixture.close();
+  }
+});

@@ -96,15 +96,16 @@ export function attemptWorkerSpans(
  * The worker whose work the current runtime takes over, on the current runtime's first run after the switch: the
  * latest earlier span of another runtime that did run. A CLI that was assigned but never launched (it has no record) did
  * no work and is skipped. Undefined when there is none, when the latest worker that ran is the current runtime itself
- * (it resumes its own work), or when the current CLI already ran since the switch (its own later runs: guidance, a
- * restart, another Resume, get no handoff again).
+ * (it resumes its own work), or when the current CLI already has a session of its own since the switch: its later runs
+ * (guidance, a restart, another Resume) resume that session, which holds the handoff already. A CLI whose runs since
+ * the switch recorded no session (a crash before it reported one) never took the handoff in, so it gets it again.
  */
 export function handoffPredecessor(
   spans: readonly AttemptWorkerSpan[],
   isCli: (runtimeId: string) => boolean,
 ): { span: AttemptWorkerSpan; index: number } | undefined {
   const current = spans.at(-1);
-  if (!current || current.cliRecords.length > 0) return undefined;
+  if (!current || current.cliRecords.some((record) => record.cliSessionId !== undefined)) return undefined;
   for (let index = spans.length - 2; index >= 0; index -= 1) {
     const span = spans[index]!;
     if (isCli(span.runtimeId) && span.cliRecords.length === 0) continue;
@@ -234,7 +235,8 @@ export function lastAssistantText(messages: readonly AgentMessage[], afterMessag
 /** The handoff's body: the previous worker, its claim, and the Runner's facts. */
 export function renderWorkerHandoff(handoff: WorkerHandoff): string {
   const lines = [
-    `The previous worker on this task attempt was the ${handoff.previousWorker}. It stopped: ${sentence(handoff.stopped)}`,
+    // One line each: a cause or a CLI's failure message spanning lines would leave the quote below and read as facts.
+    `The previous worker on this task attempt was the ${oneLine(handoff.previousWorker)}. It stopped: ${sentence(oneLine(handoff.stopped))}`,
     "You continue its work in the same worktree; its changes are in place.",
     "",
   ];
@@ -242,7 +244,7 @@ export function renderWorkerHandoff(handoff: WorkerHandoff): string {
   if (lastText) {
     // Every line of the claim is quoted, so nothing in it can read as one of the Runner's lines below.
     lines.push("What the previous worker wrote last, quoted line by line. This is its own claim; AIBoard has not checked it:",
-      ...lastText.split(/\r?\n/).map((line) => `> ${line}`));
+      ...lastText.split(LINE_BREAK).map((line) => `> ${line}`));
   } else {
     lines.push("The previous worker left no summary or text.");
   }
@@ -343,18 +345,26 @@ export async function switchHandoff(sources: WorkerHandoffSources):
 }
 
 /**
- * §3.5 step 10: the handoff a CLI gets when it starts fresh after a run of its own on this attempt that left no CLI
- * session to resume. `relaunch` is a launch of its own that a Runner restart cut off before it was recorded.
+ * Whose work a restarted CLI run continues, when it is not the switch handoff's (cli-worker-runtime.ts decides):
+ * - `own`: an earlier run of this runtime that left no CLI session to resume; `cutOff` when its last launch was cut off
+ *   by a Runner restart before it was recorded;
+ * - `cut_off`: another runtime's launch on this attempt that a Runner restart cut off before it was recorded, the latest
+ *   work in the worktree (that runtime has no record, so the switch handoff would skip it as never launched).
  */
-export async function freshRestartHandoff(sources: WorkerHandoffSources, relaunch: boolean): Promise<WorkerHandoff> {
-  const own = attemptWorkerSpans(sources.events(), sources)
-    .filter((span) => span.runtimeId === sources.runtimeId).flatMap((span) => span.cliRecords).at(-1);
-  const providerId = own?.providerId ?? sources.cliProvider(sources.runtimeId);
-  const label = providerId ? cliWorkerLabel({ providerId, runtimeId: sources.runtimeId }) : apiWorkerLabel(sources.runtimeId);
+export type RestartWorkSource = { kind: "own"; cutOff: boolean } | { kind: "cut_off"; runtimeId: string };
+
+/** §3.5 step 10: the handoff a CLI gets when it starts after a run the Runner holds no resumable session for. */
+export async function freshRestartHandoff(sources: WorkerHandoffSources, from: RestartWorkSource): Promise<WorkerHandoff> {
+  const runtimeId = from.kind === "own" ? sources.runtimeId : from.runtimeId;
+  const own = from.kind === "own" ? attemptWorkerSpans(sources.events(), sources)
+    .filter((span) => span.runtimeId === runtimeId).flatMap((span) => span.cliRecords).at(-1) : undefined;
+  const providerId = own?.providerId ?? sources.cliProvider(runtimeId);
+  const label = providerId ? cliWorkerLabel({ providerId, runtimeId }) : apiWorkerLabel(runtimeId, sources.modelId(runtimeId));
   const lastText = own ? cliRecordLastText(own) : undefined;
+  const cutOff = from.kind === "cut_off" || from.cutOff;
   return {
-    previousWorker: `${label} (an earlier run of yours whose CLI session cannot be resumed, so you start a new one)`,
-    stopped: relaunch ? "a Runner restart cut its last run off before the Runner recorded how it ended"
+    previousWorker: from.kind === "own" ? `${label} (an earlier run of yours whose CLI session cannot be resumed, so you start a new one)` : label,
+    stopped: cutOff ? "a Runner restart cut its last run off before the Runner recorded how it ended"
       : own ? describeCliRecordStop(own) : "the Runner holds no record of why",
     ...(lastText ? { lastText } : {}),
     changes: await sources.changes(),
@@ -384,9 +394,26 @@ function parseCause(value: unknown): WorkerHandoffCause | undefined {
   return { fromRuntimeId: cause.fromRuntimeId, failureKind: cause.failureKind as ProviderFailureKind, message: bounded(cause.message, STOP_MESSAGE_MAX) };
 }
 
+/** A control character (C0, DEL, C1) or a Unicode line separator would break the list. */
+const UNSAFE_PATH_CHARACTER = new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f${String.fromCharCode(0x2028, 0x2029)}]`);
+
 /** A path as one line: a control character would break the list, so such a path is shown JSON-quoted. */
 function displayPath(path: string): string {
-  return /[\u0000-\u001f\u007f]/.test(path) ? JSON.stringify(path) : path;
+  return UNSAFE_PATH_CHARACTER.test(path) ? JSON.stringify(path) : path;
+}
+
+/**
+ * Every break a reader may take as a new line: CR, LF, CRLF, vertical tab, form feed, NEL, and the Unicode line and
+ * paragraph separators. A claim is split on all of them, so no line of it escapes its quote.
+ */
+// NEL and the Unicode line and paragraph separators, by code: written as characters they would end a source line.
+const SEPARATORS = String.fromCharCode(0x85, 0x2028, 0x2029);
+const LINE_BREAK = new RegExp(`\\r\\n|[\\n\\r\\v\\f${SEPARATORS}]`);
+const LINE_BREAKS = new RegExp(`(?:\\r\\n|[\\n\\r\\v\\f${SEPARATORS}])+`, "g");
+
+/** Text the Runner writes on one of its own lines: every line break becomes a space. */
+function oneLine(text: string): string {
+  return text.replace(LINE_BREAKS, " ").trim();
 }
 
 /** A stop description as one sentence: a message that already ends a sentence gets no second period. */
