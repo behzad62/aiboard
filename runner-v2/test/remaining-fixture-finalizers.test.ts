@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import ts from "typescript";
-import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
+import { finalizeExpectingUnverifiedCleanup } from "./support/certified-fixture-cleanup.js";
 
 const fixtures = [
   ["lsp-client.test.ts", "LSP client retries termination after a failed close while the server remains live"],
@@ -44,7 +44,7 @@ for (const [file, name] of fixtures) {
         if (signal !== 0) { rawSignals++; return true; }
         throw Object.assign(new Error("controlled observation"), { code: scenario === "unknown-observation" ? "EPERM" : "ESRCH" });
       }, removeListener: () => undefined };
-      const scope = { assert, join, finalizeCertifiedFixture,
+      const scope = { assert, join, finalizeCertifiedFixture: finalizeExpectingUnverifiedCleanup,
         root: "synthetic-root", state: "synthetic-state", marker: "marker", pidMarker: "marker", descendantMarker: "marker",
         hostPid: 42, pid: 42, supervisorPid: 42, descendantPid: 42,
         hasPrimaryFailure: scenario === "primary-undefined", primaryFailure: undefined,
