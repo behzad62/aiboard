@@ -97,7 +97,12 @@ export function RunnerSetup({
       token: next.token ?? token,
       access: next.access ?? access,
     };
-    onChange?.(selection.token.trim() ? { ...selection, source: "manual" as const } : null);
+    if (selection.token.trim()) {
+      onChange?.({ ...selection, source: "manual" as const });
+      return;
+    }
+    // A launcher session keeps its own connection; only the access ceiling is the owner's choice here.
+    onChange?.(launcher ? { url: launcher.url, token: launcher.token, access: selection.access, source: "launcher" as const } : null);
   };
 
   const test = async () => {
@@ -210,7 +215,7 @@ export function RunnerSetup({
           />
         </div>
       </div>
-      {token.trim() && (
+      {(token.trim() || launcher) && (
         <div className="space-y-1.5">
           <Label className="text-xs">Access ceiling</Label>
           <div className="grid gap-2 sm:grid-cols-3">

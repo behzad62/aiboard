@@ -79,6 +79,11 @@ export function knownDefectRepairNote(
   ].join("\n");
 }
 
+/** runner-v2/src/cli-worker-runtime.ts `CLI_COLLECT_PENDING_PREFIX`. */
+export const CLI_COLLECT_PENDING_PREFIX = "cli_collect_pending:";
+/** runner-v2/src/cli-worker-runtime.ts `PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX`. */
+export const PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX = "process_launch_unproven_repeated:";
+
 /** The Runner's pauses for a worker's stop, each of which keeps the task's folder and claim. */
 const WORKER_STOP_PAUSES = [
   ["process_stop_unproven:", "unproven"],
@@ -171,10 +176,30 @@ export function nativeBuildPauseDescription(
   if (reason === "project_handoff_required" || reason.startsWith("project_handoff")) {
     return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
   }
+  const taskName = (taskId: string): string => {
+    const title = taskId ? projection.tasks?.[taskId]?.objective?.trim() : undefined;
+    return title ? `"${title}"` : taskId ? `task ${taskId}` : "a task";
+  };
+  // CLI workers (CW5): the stop after a CLI's result was proven on the last Resume; the next one collects.
+  if (reason.startsWith(CLI_COLLECT_PENDING_PREFIX)) {
+    return {
+      waitingForOwner: false,
+      title: "Paused: a CLI worker's finished work is ready to collect",
+      detail: `Its programs are now stopped; Resume collects what the CLI did on ${taskName(reason.slice(CLI_COLLECT_PENDING_PREFIX.length))}.`,
+    };
+  }
+  // CLI workers (CW5, §3.11 case 1): a second launch the Runner could not prove in one run pauses it.
+  if (reason.startsWith(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX)) {
+    const code = reason.slice(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX.length) || "unknown";
+    return {
+      waitingForOwner: false,
+      title: "Paused: the Runner could not start CLI workers twice in a row",
+      detail: `What failed: ${code}.`,
+    };
+  }
   const stopPause = workerStopPause(reason);
   if (stopPause) {
-    const title = stopPause.taskId ? projection.tasks?.[stopPause.taskId]?.objective?.trim() : undefined;
-    const task = title ? `"${title}"` : stopPause.taskId ? `task ${stopPause.taskId}` : "a task";
+    const task = taskName(stopPause.taskId);
     const failure = projection.pauseReason?.detail;
     const failed = failure ? `What failed: ${failure} ` : "";
     if (stopPause.kind === "unrecorded") {

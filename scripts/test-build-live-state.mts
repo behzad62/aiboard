@@ -1469,6 +1469,41 @@ assert.deepEqual(
   assert.doesNotMatch(outcome!.detail, /could not be proven stopped|tries the stop again/);
 }
 
+// CLI workers (CW9): the two CLI pauses get their own text, the exact words of the plan's CW9 row, and both
+// leave Resume available (waitingForOwner: false).
+{
+  const collect = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "cli_collect_pending:task-7", taskId: "task-7" },
+    tasks: { "task-7": { objective: "Add the login form" } },
+  } as never);
+  assert.equal(collect?.waitingForOwner, false, "Resume collects, so it stays available");
+  assert.equal(
+    `${collect?.title}. ${collect?.detail}`,
+    "Paused: a CLI worker's finished work is ready to collect. Its programs are now stopped; Resume collects what the CLI did on \"Add the login form\".",
+  );
+  assert.doesNotMatch(collect!.detail, /cli_collect_pending|task-7/);
+  const untitled = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "cli_collect_pending:task-9" },
+  } as never);
+  assert.equal(untitled?.detail, "Its programs are now stopped; Resume collects what the CLI did on task task-9.");
+
+  const launch = nativeBuildPauseDescription({
+    status: "paused",
+    pauseReason: { reason: "process_launch_unproven_repeated:windows_batch_argv_unverified" },
+  } as never);
+  assert.equal(launch?.waitingForOwner, false, "Resume tries the launch again");
+  assert.equal(
+    `${launch?.title}. ${launch?.detail}`,
+    "Paused: the Runner could not start CLI workers twice in a row. What failed: windows_batch_argv_unverified.",
+  );
+  // Neither falls through to the generic "Reason: …" text, and neither is the worker-stop text.
+  for (const pause of [collect, untitled, launch]) {
+    assert.doesNotMatch(pause!.detail, /^Reason:|could not be proven stopped/);
+  }
+}
+
 // Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as
 // "Working…". Only an open model or tool segment means a session is working now.
 {

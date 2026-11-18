@@ -86,6 +86,8 @@ export interface NativeRunnerHealth {
     secretlessProviderConfigs?: boolean;
     /** VF7b: `/v2/browser` and `POST /v2/browser/install` (Settings > Tools). */
     browserInstall?: boolean;
+    /** CW3: `GET /v2/cli-workers` and `POST /v2/cli-workers/<id>/test`. */
+    cliWorkerChecks?: boolean;
   };
   catalogVersion?: string;
 }
@@ -116,7 +118,8 @@ export interface NativeProviderConfig {
   modelId: string;
   displayName?: string;
   billingBasis: "account_not_metered" | "api_priced" | "unknown";
-  transport: "account-runner" | "openai-compatible" | "anthropic" | "google";
+  /** "cli": a CLI worker (Codex CLI, Claude Code, agy), which signs in with its own login (CLI workers plan §3.1). */
+  transport: "account-runner" | "openai-compatible" | "anthropic" | "google" | "cli";
   baseUrl?: string;
   /**
    * Absent on every web push since HM4a: home-backed configs name
@@ -135,6 +138,8 @@ export interface NativeProviderConfig {
   };
   priority: number;
   reasoningEffort?: string;
+  /** Only for `transport: "cli"`: the effort passed to the CLI. */
+  cli?: { reasoningEffort?: string };
   protocol?: "chat-completions" | "responses";
   inputCostMicrosPerMillion?: number;
   outputCostMicrosPerMillion?: number;

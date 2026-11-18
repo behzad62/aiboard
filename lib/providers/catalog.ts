@@ -1,6 +1,7 @@
 import type { ModelCapabilities } from "./base";
 import { formatModelId } from "./base";
 import type { ProviderId } from "./constants";
+import { cliRuntimeDisplayName } from "./cli-workers";
 
 export interface CatalogModel {
   id: string;
@@ -441,5 +442,7 @@ export function getModelDisplayName(fullModelId: string): string {
   const entry = MODEL_CATALOG.find(
     (m) => formatModelId(m.providerId, m.id) === fullModelId
   );
-  return entry?.name ?? fullModelId.split(":").slice(1).join(":") ?? fullModelId;
+  if (entry) return entry.name;
+  // A CLI worker (Codex CLI, Claude Code, agy) is never in the catalog: it is a Build worker only.
+  return cliRuntimeDisplayName(fullModelId) ?? fullModelId.split(":").slice(1).join(":") ?? fullModelId;
 }

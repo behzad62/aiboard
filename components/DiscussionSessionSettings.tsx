@@ -8,7 +8,9 @@ import { BuildRunPolicyControl } from "@/components/BuildRunPolicyControl";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ReasoningControl } from "@/components/ReasoningControl";
 import { BuildCrewPicker } from "@/components/build/BuildCrewPicker";
+import { useCliWorkerCrewOptions } from "@/lib/client/use-cli-worker-checks";
 import {
+  buildCrewCliRefusal,
   buildCrewFromDiscussion,
   buildCrewModelIds,
   defaultReviewerModelId,
@@ -263,7 +265,10 @@ export function DiscussionSessionSettings({
     : isBuild
       ? Boolean(crew?.architect.modelId)
       : hasEnoughParticipatingModels(discussion.mode, compatibleSelected.length);
-  const canSave = canEdit && !busy && hasEnoughModels;
+  const cliWorkerOptions = useCliWorkerCrewOptions(discussion.runnerAccess ?? null, { enabled: isBuild });
+  // CLI workers need Full access and are workers only (§3.12, §3.13): the Runner refuses such a crew.
+  const cliRefusal = isBuild && crew ? buildCrewCliRefusal(crew, discussion.runnerAccess ?? null) : null;
+  const canSave = canEdit && !busy && hasEnoughModels && !cliRefusal;
 
   const save = () => {
     if (!canSave) return;
@@ -409,7 +414,14 @@ export function DiscussionSessionSettings({
                   runPolicy: buildRunPolicy,
                 }}
                 disabled={!canEdit || busy}
+                cliWorkers={cliWorkerOptions}
+                access={discussion.runnerAccess ?? null}
               />
+              {cliRefusal && (
+                <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs" role="alert">
+                  {cliRefusal.message}
+                </p>
+              )}
               {discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt && (
                 <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
                   A paused Build switches to these models when you save; a running Build switches when

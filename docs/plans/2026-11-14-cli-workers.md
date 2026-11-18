@@ -495,3 +495,4 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW5a | Done | #223 (730b8e67) |
 | CW0b | Started 2026-11-17 | — |
 | CW2–CW10 | Not started; CW2 can start (CW0 and CW1 are done) | — |
+| CW9 | Implemented 2026-11-18 on `claude/cw9-cli-workers-web-d4f590` (on CW5's tip); its PR opens after CW5 (#231) merges. The web needs a Runner with `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | — |

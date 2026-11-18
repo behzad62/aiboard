@@ -1,5 +1,5 @@
 import type { Discussion, ReasoningEffort } from "@/lib/db/schema";
-import { isCliRuntimeId } from "@/runner-v2/src/cli-crew-policy";
+import { isCliRuntimeId, nativeBuildCliCrewRefusal, type CliCrewPolicyRefusal } from "@/runner-v2/src/cli-crew-policy";
 
 /** One model in one Build role, with the reasoning effort it runs that role at. */
 export interface BuildCrewMember {
@@ -147,6 +147,24 @@ export function selectBuildCrewRuntimes(crew: BuildCrew): BuildCrewRuntimes {
     workerRuntimeIds: workerRuntimeIds.length > 0 ? workerRuntimeIds : [architectRuntimeId],
     verifierRuntimeIds: runtimes.map((runtime) => runtime.runtimeId).filter((runtimeId) => !isCliRuntimeId(runtimeId)),
   };
+}
+
+/**
+ * The CLI crew rule a crew breaks at this access, or null (§3.12, §3.13): the Runner refuses the same crew at the
+ * Build's start, so the composer says so before it is sent.
+ */
+export function buildCrewCliRefusal(
+  crew: BuildCrew,
+  access: "ask" | "project" | "full" | null | undefined,
+): CliCrewPolicyRefusal | null {
+  const selected = selectBuildCrewRuntimes(crew);
+  return nativeBuildCliCrewRefusal({
+    architectRuntimeId: selected.architectRuntimeId,
+    reviewerRuntimeId: selected.reviewerRuntimeId,
+    workerRuntimeIds: selected.workerRuntimeIds,
+    verifierRuntimeIds: selected.verifierRuntimeIds,
+    permissionProfile: access === "full" ? "full" : access === "project" ? "project" : "guarded",
+  });
 }
 
 /** The reviewer shown by default: the first available model that isn't the Architect's. */

@@ -48,6 +48,8 @@ import { initialNativeBuildTextAttachments } from "./build-guidance-files";
 import { followUpObjective } from "./build-notes";
 import { initialBuildVisualInputs } from "./build-user-attachments";
 import { buildCrewFromDiscussion, runtimeModelId, selectBuildCrewRuntimes } from "./build-crew";
+import { cliNativeProviderConfig, isCliRuntimeId } from "./cli-workers";
+import { homeCliWorkerEntries } from "./home-client";
 import {
   buildVerificationSummary,
   nativeBuildAttachmentIdentityPatch,
@@ -629,6 +631,8 @@ export function createNativeProviderConfig(
   reasoningEffort?: string | null,
   options: NativeProviderConfigOptions = {},
 ): NativeProviderConfig {
+  // A CLI worker signs in with its own login: no key, no secret source, its effort from Settings (CW9).
+  if (isCliRuntimeId(runtimeId)) return cliNativeProviderConfig(runtimeId, priority, homeCliWorkerEntries());
   const described = describeNativeProviderConfig(runtimeId, priority, reasoningEffort, options);
   if (described.transport === "account-runner") return described;
   const pushed: NativeProviderConfig = { ...described, secretSource: "home" };
