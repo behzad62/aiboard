@@ -70,7 +70,7 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
   // CW7: failover across the CLI boundary and the handoff both ways, with the fake CLI as a child and a scripted API
-  // model (no real CLI, no prompt): 6 tests, about 27 s run alone on Windows (51 s on a busy PC), most of it the four driver runs.
+  // model (no real CLI, no prompt): 11 tests, the nine driver tests side by side as CW5's are: about 36 s run alone on Windows.
   "runner-v2/test/cli-worker-handoff.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",

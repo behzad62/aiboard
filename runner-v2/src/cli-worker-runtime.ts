@@ -35,6 +35,7 @@ import {
   CLI_ATTEMPT_RECORDED_EVENT_TYPE,
   boundedRecordText,
   parseCliAttemptRecord,
+  resumableCliSession,
   type CliAttemptOutcomeKind,
   type CliAttemptRecord,
   type CliProjectChange,
@@ -239,8 +240,16 @@ export interface CliWorkerAttemptInput {
   config: CliWorkerRuntimeConfig;
   /** The same context pack text an API worker gets. */
   contextText: string;
-  /** CW7 (§3.9): the handoff from another worker that ran this attempt before, as the prompt's "Earlier work" section. */
+  /**
+   * CW7 (§3.9): the handoff from another worker that ran this attempt before, as the prompt's "Earlier work" section.
+   * The driver sets it only on this runtime's first run after the switch.
+   */
   earlierWork?: string;
+  /**
+   * CW7 (§3.5 step 10): the handoff this CLI gets when it starts fresh after an earlier run of its own on this attempt
+   * (no CLI session of its own to resume, as after a Runner restart that cut it off before it reported one).
+   */
+  freshRestartWork?: (relaunch: boolean) => Promise<string | undefined>;
   submission: WorkerSubmissionContext;
   signal?: AbortSignal;
 }
@@ -379,7 +388,7 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   await rm(outputPath, { force: true });
   if (adapter.schemaDelivery === "file") await writeFile(schemaPath, `${cliWorkerResultSchemaJson()}\n`, "utf8");
 
-  const resume = [...records].reverse().find((record) => record.providerId === providerId && record.cliSessionId)?.cliSessionId;
+  const resume = resumableCliSession(records, input.config.runtimeId);
   const args = buildCliWorkerArgs(launchSpec(input, { schemaPath, outputPath, worktree: input.workspace.path, resume }));
   const cmdRefusal = cmdLaunchRefusal(deps.host, executable.form, args);
   if (cmdRefusal) return launchUnproven(deps.schedulerStore, input.runId, cmdRefusal);
@@ -393,7 +402,7 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
     if (!(error instanceof ForeignHistoryError)) throw error;
     return { type: "settled", outcome: { type: "failed", reason: cliHistoryRefusal(error) } };
   }
-  const { recordedTip, projectBefore } = await launchBaseline(deps, input, folder, runNumber);
+  const { recordedTip, projectBefore, relaunch } = await launchBaseline(deps, input, folder, runNumber);
   const usage = beginUsage(deps.budgetLedger, input, clock, runNumber);
   if (usage.exhausted !== undefined) return { type: "settled", outcome: { type: "paused", reason: `budget_exhausted:${usage.exhausted}` } };
 
@@ -405,11 +414,15 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
   let file: CliRunResultFile;
   let resultDigest: string;
   try {
+    // §3.5 step 10: a CLI that cannot resume a session of its own after its own earlier run here (a recorded one, or a
+    // launch a Runner restart cut off) starts fresh with the handoff section.
+    const ownEarlierRun = relaunch || records.some((record) => record.runtimeId === input.config.runtimeId);
+    const earlierWork = input.earlierWork ?? (!resume && ownEarlierRun ? await input.freshRestartWork?.(relaunch) : undefined);
     const browser = await startBrowser(deps.browser, input);
     const prompt = buildCliWorkerPrompt({
       taskContext: input.contextText,
       ...(browser.note ? { browserNote: browser.note } : {}),
-      ...(input.earlierWork ? { earlierWork: input.earlierWork } : {}),
+      ...(earlierWork ? { earlierWork } : {}),
     });
     let handle: CliProcessHandle;
     try {
@@ -511,7 +524,7 @@ export async function runCliWorkerAttempt(deps: CliWorkerRuntimeDeps, input: Cli
  * Its baseline is kept, and a result file it may have left (never recorded, so never digested) is removed.
  */
 async function launchBaseline(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemptInput, folder: string, runNumber: number):
-  Promise<{ recordedTip: string; projectBefore: ProjectFolderState }> {
+  Promise<{ recordedTip: string; projectBefore: ProjectFolderState; relaunch: boolean }> {
   const path = join(folder, `run-${runNumber}.launch.json`);
   let text: string | undefined;
   try {
@@ -527,14 +540,14 @@ async function launchBaseline(deps: CliWorkerRuntimeDeps, input: CliWorkerAttemp
       throw new Error(`The CLI run's launch record ${path} cannot be read.`);
     }
     await rm(join(folder, `run-${runNumber}.result.json`), { force: true });
-    return { recordedTip: earlier.recordedTip, projectBefore: { head: state.head, index: state.index, status: state.status } };
+    return { recordedTip: earlier.recordedTip, projectBefore: { head: state.head, index: state.index, status: state.status }, relaunch: true };
   }
   // §3.7: the baseline or the Runner's own last commit, never HEAD, so commits an earlier CLI run left are undone too.
   const recordedTip = await deps.workspaceManager.runnerTip(input.workspace);
   const projectBefore = await deps.workspaceManager.projectFolderState();
   await writeFile(path, `${JSON.stringify({ version: 1, recordedTip, projectBefore })}
 `, { encoding: "utf8", flag: "wx" });
-  return { recordedTip, projectBefore };
+  return { recordedTip, projectBefore, relaunch: false };
 }
 
 /** The Runner-owned folder of one worker session's CLI files (§3.5 step 2), outside the worktree. */

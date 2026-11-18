@@ -151,7 +151,7 @@ export const CLI_RUNTIME_TEST_CONCURRENCY = process.platform === "win32" ? 4 : 2
 let template: Promise<{ project: string; revision: string }> | undefined;
 
 /** The project every harness starts from, with the Runner's baseline captured once per test file. */
-function baselineTemplate(): Promise<{ project: string; revision: string }> {
+export function baselineTemplate(): Promise<{ project: string; revision: string }> {
   template ??= (async () => {
     const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-worker-template-")));
     process.once("exit", () => { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* a temp folder */ } });

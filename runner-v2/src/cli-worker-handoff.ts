@@ -7,14 +7,17 @@
  *
  * - the previous worker and why it stopped (the failure `failOver` recorded on the assignment it made, or the CLI's
  *   latest `worker.cli_attempt_recorded` event);
- * - its last assistant text or CLI summary, at most 2,000 characters, labelled as the previous worker's claim;
+ * - its last assistant text or CLI summary from its own turn on the attempt, at most 2,000 characters, quoted line by
+ *   line as the previous worker's claim;
  * - the changed files with line counts from `git diff --numstat <baseline>` in the worktree, and the files Git does not
  *   track yet: facts;
  * - the evidence ids the Runner recorded for this attempt: facts;
  * - "do not repeat completed work".
  *
- * API → CLI (and CLI → another CLI): the CLI prompt's "Earlier work on this task" section. CLI → API: one continuation
- * message on the API worker's resume path. The same CLI again resumes its own recorded session (cli-worker-runtime.ts).
+ * API → CLI (and CLI → another CLI runtime): the CLI prompt's "Earlier work on this task" section, on the CLI's first
+ * run after the switch only. CLI → API: one continuation message on the API worker's resume path. The same CLI runtime
+ * again resumes its own recorded session (cli-worker-runtime.ts); one with no session of its own to resume after its
+ * own earlier run starts fresh with the handoff section (§3.5 step 10).
  *
  * Reads only: Git inspection and the stores. Nothing here decides an outcome; a handoff that cannot read the worktree
  * says so and the attempt goes on.
@@ -22,7 +25,8 @@
 
 import type { AgentMessage } from "./agent-contracts.js";
 import { CLI_WORKER_DISPLAY_NAMES } from "./cli-worker-adapters.js";
-import type { CliAttemptRecord } from "./cli-worker-attempt-record.js";
+import { CLI_ATTEMPT_RECORDED_EVENT_TYPE, parseCliAttemptRecord, type CliAttemptRecord } from "./cli-worker-attempt-record.js";
+import type { CliWorkerProviderId } from "./cli-worker-config.js";
 import type { GitRunner } from "./git-repository.js";
 import type { ProviderFailure, ProviderFailureKind } from "./provider-health.js";
 import type { SchedulerEvent } from "./scheduler-store.js";
@@ -52,43 +56,86 @@ export function workerHandoffCause(fromRuntimeId: string, failure: ProviderFailu
   return { fromRuntimeId, failureKind: failure.kind, message: bounded(redactSensitiveText(failure.message, STOP_MESSAGE_MAX * 2), STOP_MESSAGE_MAX) || "no message" };
 }
 
-export interface AttemptRuntimeAssignment {
+/**
+ * One runtime's turn on this attempt's worker session: from the `worker.runtime_assigned` event that gave it the
+ * attempt to the next one. Its CLI records are the `worker.cli_attempt_recorded` events it wrote in that turn; why it
+ * stopped is the cause on the next assignment.
+ */
+export interface AttemptWorkerSpan {
   runtimeId: string;
-  handoff?: WorkerHandoffCause;
+  cause?: WorkerHandoffCause;
+  cliRecords: CliAttemptRecord[];
 }
 
-/** This attempt's runtime assignments for one worker session, oldest first. */
-export function attemptRuntimeAssignments(
+/** This attempt's worker spans for one worker session, oldest first. */
+export function attemptWorkerSpans(
   events: readonly SchedulerEvent[],
   input: { taskId: string; attempt: number; sessionId: string },
-): AttemptRuntimeAssignment[] {
-  const entries: AttemptRuntimeAssignment[] = [];
+): AttemptWorkerSpan[] {
+  const spans: AttemptWorkerSpan[] = [];
   for (const event of events) {
-    if (event.type !== "worker.runtime_assigned") continue;
     const payload = event.payload as Record<string, unknown>;
-    if (payload.taskId !== input.taskId || payload.attempt !== input.attempt || payload.sessionId !== input.sessionId) continue;
-    if (typeof payload.runtimeId !== "string") continue;
-    const handoff = parseCause(payload.handoff);
-    entries.push({ runtimeId: payload.runtimeId, ...(handoff ? { handoff } : {}) });
+    if (payload?.taskId !== input.taskId || payload.attempt !== input.attempt || payload.sessionId !== input.sessionId) continue;
+    if (event.type === "worker.runtime_assigned") {
+      if (typeof payload.runtimeId !== "string") continue;
+      const cause = parseCause(payload.handoff);
+      const previous = spans.at(-1);
+      if (previous && cause && cause.fromRuntimeId === previous.runtimeId) previous.cause = cause;
+      spans.push({ runtimeId: payload.runtimeId, cliRecords: [] });
+    } else if (event.type === CLI_ATTEMPT_RECORDED_EVENT_TYPE) {
+      let record: CliAttemptRecord;
+      try { record = parseCliAttemptRecord(payload); } catch { continue; }
+      const current = spans.at(-1);
+      if (current && record.runtimeId === current.runtimeId) current.cliRecords.push(record);
+    }
   }
-  return entries;
+  return spans;
 }
 
 /**
- * The worker that worked on this attempt before the current runtime: the latest assignment to another runtime, and
- * why it stopped (the cause on the assignment that moved the attempt away from it). Undefined when the current runtime
- * is the only one that ran this attempt, or ran it again with no other worker in between.
+ * The worker whose work the current runtime takes over, on the current runtime's first run after the switch: the
+ * latest earlier span of another runtime that did run. A CLI that was assigned but never launched (it has no record) did
+ * no work and is skipped. Undefined when there is none, when the latest worker that ran is the current runtime itself
+ * (it resumes its own work), or when the current CLI already ran since the switch (its own later runs: guidance, a
+ * restart, another Resume, get no handoff again).
  */
-export function previousWorker(entries: readonly AttemptRuntimeAssignment[]):
-  { runtimeId: string; cause?: WorkerHandoffCause; assignments: number } | undefined {
-  const current = entries.at(-1);
-  if (!current) return undefined;
-  let index = entries.length - 2;
-  while (index >= 0 && entries[index]!.runtimeId === current.runtimeId) index -= 1;
-  if (index < 0) return undefined;
-  const runtimeId = entries[index]!.runtimeId;
-  const cause = entries[index + 1]!.handoff;
-  return { runtimeId, ...(cause && cause.fromRuntimeId === runtimeId ? { cause } : {}), assignments: entries.length };
+export function handoffPredecessor(
+  spans: readonly AttemptWorkerSpan[],
+  isCli: (runtimeId: string) => boolean,
+): { span: AttemptWorkerSpan; index: number } | undefined {
+  const current = spans.at(-1);
+  if (!current || current.cliRecords.length > 0) return undefined;
+  for (let index = spans.length - 2; index >= 0; index -= 1) {
+    const span = spans[index]!;
+    if (isCli(span.runtimeId) && span.cliRecords.length === 0) continue;
+    return span.runtimeId === current.runtimeId ? undefined : { span, index };
+  }
+  return undefined;
+}
+
+/** The id of the handoff message the API worker of span `index` (0-based) got: one per span, so a resume adds none. */
+export function handoffMessageId(taskId: string, attempt: number, index: number): string {
+  return `worker-handoff:${taskId}:${attempt}:${index + 1}`;
+}
+
+/**
+ * Where the API conversation of span `index` starts: the handoff message of the first API span after the latest CLI
+ * that ran before it, or undefined when no CLI ran before it (the conversation from its start). API workers in a row
+ * share one conversation, so their text is one span here.
+ */
+export function apiConversationStart(
+  spans: readonly AttemptWorkerSpan[],
+  index: number,
+  isCli: (runtimeId: string) => boolean,
+  ids: { taskId: string; attempt: number },
+): string | undefined {
+  for (let cli = index - 1; cli >= 0; cli -= 1) {
+    if (spans[cli]!.cliRecords.length === 0) continue;
+    for (let api = cli + 1; api <= index; api += 1) {
+      if (!isCli(spans[api]!.runtimeId)) return handoffMessageId(ids.taskId, ids.attempt, api);
+    }
+  }
+  return undefined;
 }
 
 /** The changed files in a task worktree against its baseline (facts the Runner read from Git). */
@@ -164,9 +211,15 @@ export function cliRecordLastText(record: CliAttemptRecord): string | undefined 
   return record.outcome === "failure" ? undefined : record.summary;
 }
 
-/** The text of the newest assistant message that has any: the API worker's last words. */
-export function lastAssistantText(messages: readonly AgentMessage[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+/**
+ * The text of the newest assistant message that has any: the API worker's last words. With `afterMessageId`, only
+ * messages after that one count (the worker's own part of the conversation); a missing start message means the worker
+ * left nothing in the conversation.
+ */
+export function lastAssistantText(messages: readonly AgentMessage[], afterMessageId?: string): string | undefined {
+  const start = afterMessageId === undefined ? -1 : messages.findIndex((message) => message.id === afterMessageId);
+  if (afterMessageId !== undefined && start < 0) return undefined;
+  for (let index = messages.length - 1; index > start; index -= 1) {
     const message = messages[index]!;
     if (message.role !== "assistant") continue;
     const text = typeof message.content === "string" ? message.content
@@ -181,13 +234,15 @@ export function lastAssistantText(messages: readonly AgentMessage[]): string | u
 /** The handoff's body: the previous worker, its claim, and the Runner's facts. */
 export function renderWorkerHandoff(handoff: WorkerHandoff): string {
   const lines = [
-    `The previous worker on this task attempt was the ${handoff.previousWorker}. It stopped: ${handoff.stopped}.`,
+    `The previous worker on this task attempt was the ${handoff.previousWorker}. It stopped: ${sentence(handoff.stopped)}`,
     "You continue its work in the same worktree; its changes are in place.",
     "",
   ];
   const lastText = handoff.lastText?.trim() ? lastTextForHandoff(handoff.lastText) : undefined;
   if (lastText) {
-    lines.push("What the previous worker wrote last. This is its own claim; AIBoard has not checked it:", "<<<", lastText, ">>>");
+    // Every line of the claim is quoted, so nothing in it can read as one of the Runner's lines below.
+    lines.push("What the previous worker wrote last, quoted line by line. This is its own claim; AIBoard has not checked it:",
+      ...lastText.split(/\r?\n/).map((line) => `> ${line}`));
   } else {
     lines.push("The previous worker left no summary or text.");
   }
@@ -240,6 +295,73 @@ export function cliHandoffContinuationMessage(id: string, handoff: WorkerHandoff
   };
 }
 
+/** What the driver gives the handoff: its reads of this attempt, each run only when a handoff is due. */
+export interface WorkerHandoffSources {
+  taskId: string;
+  attempt: number;
+  /** The runtime that runs now. */
+  runtimeId: string;
+  /** The scheduler events of the run, read once per handoff. */
+  events: () => readonly SchedulerEvent[];
+  sessionId: string;
+  /** The CLI provider of a runtime that is a CLI worker; undefined for an API worker. */
+  cliProvider: (runtimeId: string) => CliWorkerProviderId | undefined;
+  /** An API runtime's model id, for its label. */
+  modelId: (runtimeId: string) => string | undefined;
+  /** The worker session's checkpointed conversation (the API workers' messages). */
+  messages: () => Promise<readonly AgentMessage[]>;
+  changes: () => Promise<WorktreeChangesReading>;
+  /** This attempt's evidence ids, oldest first. */
+  evidenceIds: () => readonly string[];
+}
+
+/**
+ * The handoff on the first run of `runtimeId` after the attempt switched to it from another worker that ran, when
+ * either side is a CLI. API → API gets none: the new worker inherits the conversation.
+ */
+export async function switchHandoff(sources: WorkerHandoffSources):
+  Promise<{ handoff: WorkerHandoff; fromCli: boolean; id: string } | undefined> {
+  const spans = attemptWorkerSpans(sources.events(), sources);
+  if (spans.at(-1)?.runtimeId !== sources.runtimeId) return undefined;
+  const isCli = (runtimeId: string) => sources.cliProvider(runtimeId) !== undefined;
+  const previous = handoffPredecessor(spans, isCli);
+  if (!previous) return undefined;
+  const record = previous.span.cliRecords.at(-1);
+  const fromCli = record !== undefined;
+  if (!fromCli && !isCli(sources.runtimeId)) return undefined;
+  const lastText = record ? cliRecordLastText(record)
+    : lastAssistantText(await sources.messages(), apiConversationStart(spans, previous.index, isCli, sources));
+  const handoff: WorkerHandoff = {
+    previousWorker: record ? cliWorkerLabel(record) : apiWorkerLabel(previous.span.runtimeId, sources.modelId(previous.span.runtimeId)),
+    stopped: previous.span.cause ? describeHandoffCause(previous.span.cause)
+      : record ? describeCliRecordStop(record) : "the Runner holds no record of why",
+    ...(lastText ? { lastText } : {}),
+    changes: await sources.changes(),
+    evidenceIds: sources.evidenceIds(),
+  };
+  return { handoff, fromCli, id: handoffMessageId(sources.taskId, sources.attempt, spans.length - 1) };
+}
+
+/**
+ * §3.5 step 10: the handoff a CLI gets when it starts fresh after a run of its own on this attempt that left no CLI
+ * session to resume. `relaunch` is a launch of its own that a Runner restart cut off before it was recorded.
+ */
+export async function freshRestartHandoff(sources: WorkerHandoffSources, relaunch: boolean): Promise<WorkerHandoff> {
+  const own = attemptWorkerSpans(sources.events(), sources)
+    .filter((span) => span.runtimeId === sources.runtimeId).flatMap((span) => span.cliRecords).at(-1);
+  const providerId = own?.providerId ?? sources.cliProvider(sources.runtimeId);
+  const label = providerId ? cliWorkerLabel({ providerId, runtimeId: sources.runtimeId }) : apiWorkerLabel(sources.runtimeId);
+  const lastText = own ? cliRecordLastText(own) : undefined;
+  return {
+    previousWorker: `${label} (an earlier run of yours whose CLI session cannot be resumed, so you start a new one)`,
+    stopped: relaunch ? "a Runner restart cut its last run off before the Runner recorded how it ended"
+      : own ? describeCliRecordStop(own) : "the Runner holds no record of why",
+    ...(lastText ? { lastText } : {}),
+    changes: await sources.changes(),
+    evidenceIds: sources.evidenceIds(),
+  };
+}
+
 const FAILURE_PHRASES: Readonly<Record<ProviderFailureKind, string>> = Object.freeze({
   usage_limit: "it ran out of usage",
   rate_limit: "it was rate-limited",
@@ -265,6 +387,11 @@ function parseCause(value: unknown): WorkerHandoffCause | undefined {
 /** A path as one line: a control character would break the list, so such a path is shown JSON-quoted. */
 function displayPath(path: string): string {
   return /[\u0000-\u001f\u007f]/.test(path) ? JSON.stringify(path) : path;
+}
+
+/** A stop description as one sentence: a message that already ends a sentence gets no second period. */
+function sentence(text: string): string {
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
 }
 
 function bounded(text: string, limit: number): string {

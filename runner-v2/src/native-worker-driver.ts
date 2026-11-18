@@ -60,26 +60,19 @@ import { runWorkerTask, workerSubmissionContext } from "./worker-runtime.js";
 import type { ChangeSet } from "./change-set.js";
 import {
   proveCliStop,
-  cliAttemptRecords,
   cliHistoryRefusal,
   runCliWorkerAttempt,
   type CliWorkerRuntimeConfig,
   type CliWorkerRuntimeDeps,
 } from "./cli-worker-runtime.js";
 import {
-  apiWorkerLabel,
-  attemptRuntimeAssignments,
   cliHandoffContinuationMessage,
-  cliRecordLastText,
-  cliWorkerLabel,
-  describeCliRecordStop,
-  describeHandoffCause,
   earlierWorkSection,
-  lastAssistantText,
-  previousWorker,
+  freshRestartHandoff,
   readWorktreeChanges,
+  switchHandoff,
   workerHandoffCause,
-  type WorkerHandoff,
+  type WorkerHandoffSources,
 } from "./cli-worker-handoff.js";
 import { resolveWorkerSessionId } from "./worker-identity.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
@@ -251,24 +244,12 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     let threw = false;
     let primary: unknown;
     try {
-      outcome = await this.runAttempt(assignment, (close) => retained.push(close));
+      outcome = await this.runAttempt(assignment, (close) => retained.push(close), () => this.stopAttemptProcesses(assignment, retained));
     } catch (error) {
       threw = true;
       primary = error;
     }
-    // The stop proof: every retained cleanup (the attempt's managed Build
-    // tool runtime, and each subagent's exact owner: a subagent's own cleanup
-    // failure only reaches the worker as a tool error result), then the
-    // worker owner's managed processes.
-    const stopFailures: unknown[] = [];
-    for (const close of retained) {
-      try { await close(); } catch (error) { stopFailures.push(error); }
-    }
-    try {
-      await this.options.managedProcesses?.closeAgent(this.attemptOwner(assignment));
-    } catch (error) {
-      stopFailures.push(error);
-    }
+    const stopFailures = await this.stopAttemptProcesses(assignment, retained);
     const stopFailed = stopFailures.length > 0;
     const stopFailure = stopFailures.length === 1 ? stopFailures[0] : new AggregateError(stopFailures, stopFailures.map((failure) => errorMessage(failure)).join(" "));
     const cleanupUnproven = threw && isProcessStopUnprovenError(primary);
@@ -337,6 +318,25 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     if (cli) cli.deps.owners?.release(owner);
   }
 
+  /**
+   * The stop proof: every retained cleanup (the attempt's managed Build tool runtime, and each subagent's exact owner:
+   * a subagent's own cleanup failure only reaches the worker as a tool error result), then the worker owner's managed
+   * processes. Returns the failures; with none, every retained cleanup ran and the list is cleared.
+   */
+  private async stopAttemptProcesses(assignment: WorkerAssignment, retained: Array<() => Promise<void>>): Promise<unknown[]> {
+    const failures: unknown[] = [];
+    for (const close of retained) {
+      try { await close(); } catch (error) { failures.push(error); }
+    }
+    try {
+      await this.options.managedProcesses?.closeAgent(this.attemptOwner(assignment));
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 0) retained.length = 0;
+    return failures;
+  }
+
   /** The CLI branch's config for a runtime, when it is a CLI worker this driver can run. */
   private cliRuntime(runtimeId: string | undefined): { config: CliWorkerRuntimeConfig; deps: CliWorkerRuntimeDeps } | undefined {
     const config = runtimeId === undefined ? undefined : this.options.cliWorkers?.runtimes.get(runtimeId);
@@ -373,8 +373,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
   private async runAttempt(
     assignment: WorkerAssignment,
     retainCleanup: (close: () => Promise<void>) => void,
+    stopProcesses: () => Promise<unknown[]>,
   ): Promise<WorkerOutcome> {
     let lifecycleContinuations = 0;
+    // An API worker ran in this call: its managed processes (a dev server, a watcher) may still run in the worktree.
+    let apiRan = false;
     const persistedAssignment = this.persistedRuntimeAssignment(assignment);
     let runtimeId = persistedAssignment?.runtimeId;
     const sessionId = resolveWorkerSessionId(
@@ -432,6 +435,20 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         }
         throw error;
       }
+      // CW7: the API worker before a CLI is stopped first, so nothing of it writes in the worktree (or into the handoff
+      // read below) or holds a port while the CLI runs. A stop not proven starts no CLI; once the scheduler's retried
+      // stop proves it, the attempt runs again on this CLI.
+      if (cli && apiRan) {
+        const failures = await stopProcesses();
+        if (failures.length > 0) {
+          return {
+            type: "stop_unproven",
+            reason: `The API worker's processes are not proven stopped, so the CLI worker ${runtimeId} did not start: ${failures.map((failure) => errorMessage(failure)).join("; ")}`,
+            outcome: { type: "paused", reason: `${WORKER_HANDOFF_STOP_PENDING_PREFIX}${assignment.task.id}` },
+          };
+        }
+        apiRan = false;
+      }
       let workspace: TaskWorkspace;
       try {
         workspace = await this.options.workspaceManager.createTaskWorkspace(
@@ -459,7 +476,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         sessionId,
       );
       // CW7 (§3.9): across a CLI boundary, what the worker before this runtime left on this attempt.
-      const handoff = await this.workerHandoff(assignment, runtimeId, sessionId, workspace);
+      const handoffSources = this.handoffSources(assignment, runtimeId, sessionId, workspace);
+      const handoff = await switchHandoff(handoffSources);
       const repositoryRevision = /^HEAD ([0-9a-f]{40,64})/.exec(context.repositorySnapshot)?.[1];
       await recordContextPack({
         store: this.options.contextManifests,
@@ -491,6 +509,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           config: cli.config,
           contextText: context.pack.text,
           ...(handoff ? { earlierWork: earlierWorkSection(handoff.handoff) } : {}),
+          freshRestartWork: async (relaunch) => earlierWorkSection(await freshRestartHandoff(handoffSources, relaunch)),
           submission: workerSubmissionContext({
             ...(this.options.git ? { git: this.options.git } : {}),
             runId: assignment.runId,
@@ -530,6 +549,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         runtimeId = next.runtimeId;
         continue;
       }
+      apiRan = true;
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -766,43 +786,22 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     return { type: "next", runtimeId: selection.runtime.runtimeId };
   }
 
-  /**
-   * CW7 (§3.9): the handoff from the worker that ran this attempt before `runtimeId`, when one of the two is a CLI. An
-   * API worker that follows another API worker inherits its conversation and gets none. The previous worker's text is
-   * a claim; the changed files and the evidence ids are facts the Runner read.
-   */
-  private async workerHandoff(
-    assignment: WorkerAssignment,
-    runtimeId: string,
-    sessionId: string,
-    workspace: TaskWorkspace,
-  ): Promise<{ handoff: WorkerHandoff; fromCli: boolean; id: string } | undefined> {
-    const key = { runId: assignment.runId, taskId: assignment.task.id, attempt: assignment.attempt, sessionId };
-    const assignments = attemptRuntimeAssignments(this.options.schedulerStore.readRun(assignment.runId), key);
-    const previous = assignments.at(-1)?.runtimeId === runtimeId ? previousWorker(assignments) : undefined;
-    if (!previous) return undefined;
-    const record = cliAttemptRecords(this.options.schedulerStore, key).filter((entry) => entry.runtimeId === previous.runtimeId).at(-1);
-    const previousCli = this.cliRuntime(previous.runtimeId)?.config;
-    const fromCli = record !== undefined || previousCli !== undefined;
-    if (!fromCli && !this.cliRuntime(runtimeId)) return undefined;
-    let lastText = record ? cliRecordLastText(record) : undefined;
-    if (!fromCli) {
-      // The API worker's last words, from its checkpointed conversation in this session.
-      lastText = lastAssistantText((await this.options.sessions.load(sessionId).catch(() => undefined))?.checkpoint?.messages ?? []);
-    }
-    const handoff: WorkerHandoff = {
-      previousWorker: record ? cliWorkerLabel(record)
-        : previousCli ? cliWorkerLabel({ providerId: previousCli.providerId, runtimeId: previous.runtimeId })
-          : apiWorkerLabel(previous.runtimeId, this.candidateById.get(previous.runtimeId)?.modelId),
-      stopped: previous.cause ? describeHandoffCause(previous.cause)
-        : record ? describeCliRecordStop(record) : "the Runner holds no record of why",
-      ...(lastText ? { lastText } : {}),
-      changes: await readWorktreeChanges(requireGitRunner(this.options.git).lifecycle("inspection").run, workspace.path, workspace.baselineRevision),
-      evidenceIds: this.options.evidenceStore.list({ runId: assignment.runId, taskId: assignment.task.id, limit: 1_000 })
-        .filter((entry) => entry.attempt === assignment.attempt)
+  /** CW7 (§3.9): what the handoff reads of this attempt, each only when a handoff is due. */
+  private handoffSources(assignment: WorkerAssignment, runtimeId: string, sessionId: string, workspace: TaskWorkspace): WorkerHandoffSources {
+    return {
+      taskId: assignment.task.id,
+      attempt: assignment.attempt,
+      runtimeId,
+      sessionId,
+      events: () => this.options.schedulerStore.readRun(assignment.runId),
+      cliProvider: (id) => this.cliRuntime(id)?.config.providerId,
+      modelId: (id) => this.candidateById.get(id)?.modelId,
+      messages: async () => (await this.options.sessions.load(sessionId).catch(() => undefined))?.checkpoint?.messages ?? [],
+      changes: () => readWorktreeChanges(requireGitRunner(this.options.git).lifecycle("inspection").run, workspace.path, workspace.baselineRevision),
+      // The newest of this attempt's records, so a long task never hides them behind its older attempts.
+      evidenceIds: () => this.options.evidenceStore.list({ runId: assignment.runId, taskId: assignment.task.id, attempt: assignment.attempt, limit: 1_000 })
         .map((entry) => entry.id),
     };
-    return { handoff, fromCli, id: `worker-handoff:${assignment.task.id}:${assignment.attempt}:${previous.assignments}` };
   }
 
   private persistedRuntimeAssignment(assignment: WorkerAssignment) {
@@ -1124,6 +1123,12 @@ export function workerSelectionPreference(
     .map(([runtimeId]) => runtimeId));
   return { activeAssignments, affinity, demoted };
 }
+
+/**
+ * CW7: the kept outcome of an attempt whose API worker's processes were not proven stopped before a CLI took it over.
+ * Once the stop is proven, the same attempt runs again on the CLI it was assigned to.
+ */
+export const WORKER_HANDOFF_STOP_PENDING_PREFIX = "worker_handoff_stop_pending:";
 
 export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
   return failure.kind !== "invalid_request" && failure.kind !== "cancelled";
