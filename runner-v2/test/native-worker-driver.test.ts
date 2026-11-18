@@ -39,7 +39,7 @@ import { emptyProjectionForTest } from "./support/projection-fixtures.js";
 import { captureWorkingTreeIdentity } from "../src/command-evidence-identity.js";
 import { CliWorkerOwners, type CliWorkerRuntimeDeps } from "../src/cli-worker-runtime.js";
 import { runGit } from "./support/git-fixture.js";
-import { FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliScenario } from "./support/fake-cli.js";
+import { FAKE_CLI_SCRIPT, cliFixture, writeFakeCliScenario, type FakeCliScenario } from "./support/fake-cli.js";
 import { ChildCliLauncher, cliDoneResult, writeClaudeStream } from "./support/cli-worker-fixture.js";
 
 class ScriptedModel implements AgentModel {
@@ -1009,7 +1009,7 @@ function emptyArtifactHash(): string {
 // ---------------------------------------------------------------------------------------------------------------
 // CW5: the driver's CLI branch (docs/plans/2026-11-14-cli-workers.md §3.5, §3.11), with the fake CLI as a child.
 
-async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean } = {}) {
+async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean; stdoutFixture?: string } = {}) {
   // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
   // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
@@ -1037,8 +1037,8 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
   closers.push(() => { sessions.close(); ledger.close(); scheduler.close(); evidence.close(); memory.close(); });
   seedRunningTask(scheduler);
-  const { structured = cliDoneResult(), working, ...rest } = scenario;
-  const stdout = writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
+  const { structured = cliDoneResult(), working, stdoutFixture, ...rest } = scenario;
+  const stdout = stdoutFixture ?? writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
   const launcher = new ChildCliLauncher(writeFakeCliScenario(fake, { cli: "claude-code", stdout, ...rest }));
   const cli: AgentRuntimeCandidate = { runtimeId: "claude-code:default", providerId: "claude-code", modelId: "sonnet", capabilities: ["code"], priority: 1, workerOnly: true };
   const api: AgentRuntimeCandidate = { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 2 };
@@ -1182,4 +1182,20 @@ test("CW5: an unproven stop keeps the collect pending, and retryStop proves the 
   const collected = await driver.run(fixture.assignment);
   assert.equal(collected.type, "submitted", JSON.stringify(collected));
   assert.equal(fixture.launcher.starts.length, 1);
+});
+
+test("CW7: a CLI out of usage with no healthy worker left pauses all_worker_runtimes_unavailable, its cause recorded", async (t) => {
+  const fixture = await cliDriverFixture(t, "no-healthy", { stdoutFixture: cliFixture("claude-code/usage-limit.synthetic.stdout.jsonl"), exitCode: 1 });
+  // The crew's API worker is out already.
+  fixture.health.recordFailure("primary", { kind: "authentication", message: "invalid key" });
+  const outcome = await fixture.driver().run(fixture.assignment);
+  assert.deepEqual(outcome, { type: "paused", reason: "all_worker_runtimes_unavailable" });
+  assert.equal(fixture.launcher.starts.length, 1);
+  assert.equal(fixture.apiModel.requests.length, 0);
+  const state = fixture.health.get("claude-code");
+  assert.equal(state.status, "cooldown");
+  assert.equal(state.failureKind, "usage_limit");
+  // The health change is durable, as an API worker's is.
+  const changes = fixture.scheduler.readRun("run_1").filter((event) => event.type === "provider.health_changed");
+  assert.deepEqual(changes.map((event) => (event.payload.state as { providerId: string }).providerId), ["claude-code"]);
 });
