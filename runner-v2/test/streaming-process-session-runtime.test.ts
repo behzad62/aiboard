@@ -3317,6 +3317,51 @@ for (const answer of ["failed launch naming its identity", "late successful laun
   }
 }
 
+test("a late identity landing at any tick around a joined cleanup run's last steps still ends released", { timeout: 20_000 }, async () => {
+  // The answer is released k microtask ticks after the transport's run reports its unbound quiesce, so across the sweep
+  // it lands before, inside and after that run's settlement, its late-result check and its deregistration.
+  const outcomes: string[] = [];
+  for (let ticks = 0; ticks <= 24; ticks++) {
+    const fixture = await makeFixture(2, "cleaned");
+    const abort = new AbortController();
+    let answer!: () => void; const answered = new Promise<void>((resolve) => { answer = resolve; });
+    let transportRunning = false;
+    const quiesced: unknown[] = [], released: unknown[] = [];
+    const runtime = createStreamingProcessSessionRuntime({
+      ...fixture.runtimeOptions,
+      host: {
+        ...fixture.runtimeOptions.host,
+        launch: async ({ signal }) => {
+          setTimeout(() => abort.abort(), 10);
+          await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+          await answered;
+          return fixture.backendBinding;
+        },
+        quiesce: async ({ record }) => {
+          const binding = (record as { backendBinding?: unknown }).backendBinding;
+          if (!binding) {
+            if (transportRunning) {
+              transportRunning = false;
+              void (async () => { for (let tick = 0; tick < ticks; tick++) await Promise.resolve(); answer(); })();
+            }
+            return "outcome_unknown";
+          }
+          quiesced.push(binding); return "verified";
+        },
+        release: async ({ record }) => { released.push((record as { backendBinding?: unknown }).backendBinding); return "verified"; },
+      },
+    });
+    await assert.rejects(runtime.open({ ...fixture.request, signal: abort.signal }));
+    transportRunning = true;
+    await runtime.cleanupOwnedLaunch({ launchId: "launch-1", timeoutMs: 1_000 }).catch(() => undefined);
+    for (let waited = 0; waited < 500 && fixture.kernel.store.readHostLaunch("launch-1")?.state !== "released"; waited += 5) await new Promise((resolve) => setTimeout(resolve, 5));
+    const record = fixture.kernel.store.readHostLaunch("launch-1")!;
+    if (record.state !== "released" || released.length !== 1) outcomes.push(`${ticks} ticks: ${record.state}, binding ${record.backendBinding ? "durable" : "missing"}, released ${released.length}`);
+    else assert.deepEqual(quiesced.at(-1), fixture.backendBinding);
+  }
+  assert.deepEqual(outcomes, [], "every late answer is bound and its exact backend released once");
+});
+
 test("abort is caller-bounded when every provider phase is permanently noncooperative", { timeout: 2_000 }, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
   for (const phase of ["isolate", "launch", "channel", "handshake"] as const) {
     const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence }); const never = async () => await new Promise<never>(() => undefined);

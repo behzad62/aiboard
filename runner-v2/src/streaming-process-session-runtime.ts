@@ -192,8 +192,9 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
   };
   // Results a cancelled launch learns after its record moved into cleanup: the isolation lease, or the exact backend a
   // late launch result or a failed launch's identity names. They are kept per launch until a cleanup step finds the
-  // record blocked, then made durable (an expired owner is taken over first). Every cleanup run applies them before it
-  // starts and again when it settles, so neither a run in flight nor an expired owner can drop them.
+  // record blocked, then made durable (an expired owner is taken over first): where the late answer lands, or when a
+  // cleanup run settles blocked. A cancelled launch's late path then waits out any run in flight and always starts a
+  // fresh one, so a run that settled just before the answer cannot leave the binding unworked.
   const lateLaunchResults = new Map<string, Readonly<{ lease?: StreamingSessionLease; backendBinding?: StreamingSessionBackendBinding }>>();
   const noteLateLaunchResults = (launchId: string, lease?: StreamingSessionLease, backendBinding?: StreamingSessionBackendBinding) => {
     if (lease || backendBinding) lateLaunchResults.set(launchId, Object.freeze({ ...(lease ? { lease } : {}), ...(backendBinding ? { backendBinding } : {}) }));
@@ -207,24 +208,28 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
       record.effects.some((effect) => effect.effectId === `launch:${launchId}` && effect.status === "pending"));
     if (!record || record.state === "released" || record.state === "handed_off" || (!needsLease && !needsBackend)) { lateLaunchResults.delete(launchId); return false; }
     if (record.state !== "cleanup_blocked") return false;
-    if (Date.parse(record.ownerExpiresAt) <= clock().getTime()) {
-      // As a cancelled launch's own cleanup does: take over the expired owner and leave each duty it had not settled
-      // blocked under the new one, so a current owner writes the binding.
-      record = writer.transitionLaunch({ type: "takeover_cleanup", launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, newOwnerId: `cancel-cleanup:${launchId}`, newFencingToken: record.fencingToken + 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), at: clock().toISOString() });
-      const failure = cleanupFailure("cleanup_timeout_or_cancelled");
-      const results = (cleanupEffect(record)?.resources ?? []).filter((resource) => resource.status !== "succeeded").map((resource) => ({ resource: resource.resource, identity: resource.identity, ownerId: resource.ownerId, fencingToken: resource.fencingToken, status: "failed" as const, failure }));
-      record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, blocker: failure, results, at: clock().toISOString() });
-    }
-    const owner = { launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, at: clock().toISOString() };
-    if (needsLease) writer.transitionLaunch({ type: "bind_cleanup_isolation", ...owner, lease: late.lease! });
-    else writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, backendBinding: late.backendBinding! });
+    // A refused write (a race at the owner's exact expiry) keeps the result for the next blocked step; the cleanup
+    // that asked goes on as it would without it.
+    try {
+      if (Date.parse(record.ownerExpiresAt) <= clock().getTime()) {
+        // As a cancelled launch's own cleanup does: take over the expired owner and leave each duty it had not settled
+        // blocked under the new one, so a current owner writes the binding.
+        record = writer.transitionLaunch({ type: "takeover_cleanup", launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, newOwnerId: `cancel-cleanup:${launchId}`, newFencingToken: record.fencingToken + 1, ownerExpiresAt: new Date(clock().getTime() + 60_000).toISOString(), at: clock().toISOString() });
+        const failure = cleanupFailure("cleanup_timeout_or_cancelled");
+        const results = (cleanupEffect(record)?.resources ?? []).filter((resource) => resource.status !== "succeeded").map((resource) => ({ resource: resource.resource, identity: resource.identity, ownerId: resource.ownerId, fencingToken: resource.fencingToken, status: "failed" as const, failure }));
+        record = writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, blocker: failure, results, at: clock().toISOString() });
+      }
+      const owner = { launchId, ownerId: record.ownerId, fencingToken: record.fencingToken, expectedRevision: record.revision, at: clock().toISOString() };
+      if (needsLease) writer.transitionLaunch({ type: "bind_cleanup_isolation", ...owner, lease: late.lease! });
+      else writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, backendBinding: late.backendBinding! });
+    } catch { return false; }
     lateLaunchResults.delete(launchId);
     return true;
   };
   const performHostCleanup = async (launchId: string, timeoutMs = 1_000, signal?: AbortSignal) => {
-    applyLateLaunchResults(launchId);
     let outcome = await performHostCleanupOnce(launchId, timeoutMs, signal);
     while (outcome !== "cleaned" && applyLateLaunchResults(launchId)) outcome = await performHostCleanupOnce(launchId, timeoutMs, signal);
+    if (outcome === "cleaned") lateLaunchResults.delete(launchId);
     return outcome;
   };
   const performHostCleanupOnce = async (launchId: string, timeoutMs: number, signal?: AbortSignal) => {
@@ -1703,12 +1708,12 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
             unresolvedProviderEffects.delete(request.launchId);
             cleanupPromise = undefined;
             if (hostCleanupChannels.get(request.launchId)?.failed) return;
-            // A cleanup run already in flight (a transport's cleanupOwnedLaunch) binds the late results when it
-            // settles; one that settled just before they were kept is followed by a run that binds them first.
-            for (let runs = 0; runs < 3; runs++) {
-              await runHostCleanup(request.launchId, 25);
-              if (!lateLaunchResults.has(request.launchId)) break;
+            // A run in flight (a transport's cleanupOwnedLaunch) may be past the step that binds late results or
+            // that checks the host duty: wait it out, then start one fresh run on everything now known.
+            for (let running = hostCleanupRuns.get(request.launchId); running; running = hostCleanupRuns.get(request.launchId)) {
+              try { await running; } catch {}
             }
+            await runHostCleanup(request.launchId, 25);
           }).catch((failure) => { if (attachment) attachment.failure = failure; });
           try { await bounded(immediateCleanup, 75); } catch (failure) { if (attachment) attachment.failure = failure; }
           revoker.dispose();
