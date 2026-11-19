@@ -654,9 +654,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       throw error;
     }
     // A caller that gave the invocation up before its claim (a tool call the broker stopped waiting for while it was
-    // still on its way here, a cancelled attempt) never gets a launch: the fresh launch below has no abort check of its
-    // own (the stop race only stops a process it has already launched), so nothing may start after the caller's stop
-    // proof read this invocation as absent. The claim is settled as never launched.
+    // still on its way here, a cancelled attempt) never gets a launch, so nothing may start after the caller's stop
+    // proof read this invocation as absent: the claim is settled as never launched, before any backend effect. The
+    // launch callback checks again right before backend.launch, for a stop during the awaits in between.
     if (request.signal?.aborted) {
       await this.failBeforeLaunch(record, output, "Cancelled before launch: the caller's signal was aborted.");
       throw new SubprocessRuntimeError(
@@ -741,6 +741,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
             request.assertReuseAuthority?.();
             this.assertFence(record.invocationId, fence);
             if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) throw new Error("Exact reuse/execution authority lost before backend launch.");
+          } else if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) {
+            // A fresh launch the caller gave up during the awaits since the claim (the backend probe, the prepared
+            // environment's callback) never starts: the stop race would only stop it after it ran. Settled as never
+            // launched below.
+            throw new Error("Cancelled, stopped or expired before backend launch; nothing was started.");
           }
           return await selected.backend.launch(
             deepFreeze({

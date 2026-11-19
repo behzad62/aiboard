@@ -88,6 +88,9 @@ const deterministicPrTests = [
   // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side and one
   // unit test, with the host's process facts injected on Windows; about 14 s on a loaded Windows PC run alone.
   "runner-v2/test/cli-worker-browser.test.ts",
+  // The one-shot command executor over a fake runtime, plus one test over the real subprocess runtime: a call its
+  // caller gave up before the claim never launches. Seven tests, about 0.7 s.
+  "runner-v2/test/one-shot-command-executor.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",
