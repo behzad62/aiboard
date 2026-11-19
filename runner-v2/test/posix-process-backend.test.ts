@@ -2268,6 +2268,15 @@ test("C4 POSIX output pump probes a zero-length readable so pending EOF can reti
   assert.equal(zeroLengthReads, 1, "the readable-mode pump must explicitly advance a pending EOF when no bytes are buffered");
   assert.equal(vm.runInContext("posixStdoutClosed", context), true, "that EOF must retire the exact stdout pipe obligation");
 });
+/**
+ * Every wait in the two C4 fixture tests below: 1.5x the slowest whole-test time measured in GitHub CI.
+ * - The measurement covered the 40 portable runs up to main df4a7430 (2026-11-19). The slowest was 447.9 ms (the
+ *   closed-unread-tail test on macOS); the slowest on Ubuntu was 368.8 ms. Windows CI does not run this file.
+ * - No step takes longer than its whole test.
+ * - A fixture wait returns as soon as its condition holds. A settlement that must stay blocked gets the same time, so
+ *   a wrong settlement would have had room to show.
+ */
+const C4_FIXTURE_STEP_MS = 672;
 test("C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-f1-channel-"));
   const nonce = "f1-closed-pipes";
@@ -2372,7 +2381,7 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
       fence,
       reattest: () => "live" as const,
       effect: async <T>(_kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T> => effect(),
-      snapshot: <T>(read: () => T) => ({ status: "applied" as const, value: read() }),
+      snapshot: fenceSnapshot,
     }),
   });
   const earlyChannel = await provider.acquire(portableV2Binding(root, nonce, "supervisor-birth", workloadGroup), fence);
@@ -2387,7 +2396,7 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
   try {
     vm.runInContext("retirePosixWorkload('force_terminate'); tickPosix()", context);
     assert.deepEqual(
-      await earlyChannel.settleBackpressuredOutput?.(Date.now() + 100),
+      await earlyChannel.settleBackpressuredOutput?.(Date.now() + C4_FIXTURE_STEP_MS),
       { status: "blocked", reason: "deadline" },
       "the real portable settlement must remain blocked while the producer pipes are open, even with an empty snapshot",
     );
@@ -2404,7 +2413,7 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
       vm.runInContext("drainOutput('stdout', child.stdout, stdoutPath)", context);
       await waitForPosixLiveFixtureCondition(
         () => delivered.length === 1 && existsSync(join(channelAckDirectory, "stdout-000000000001.json")),
-        Date.now() + 1_000,
+        Date.now() + C4_FIXTURE_STEP_MS,
         "late POSIX pipe tail did not reach the real backpressured sink and acknowledgement.",
       );
       assert.equal(Buffer.concat(delivered).toString("utf8"), "late-tail");
@@ -2414,7 +2423,7 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
 
       vm.runInContext("markPosixPipeClosed('stdout'); markPosixPipeClosed('stderr'); tickPosix()", context);
       assert.equal(JSON.parse(readFileSync(statePath, "utf8")).status, "stopped", "closed and drained pipes may now publish terminal stopped proof");
-      assert.deepEqual(await outputChannel.settleBackpressuredOutput?.(Date.now() + 1_000), { status: "settled" });
+      assert.deepEqual(await outputChannel.settleBackpressuredOutput?.(Date.now() + C4_FIXTURE_STEP_MS), { status: "settled" });
       assert.equal(exits, 1, "the witness exits only after terminal proof and settled durable output");
     } finally {
       outputUnsubscribe();
@@ -2528,7 +2537,7 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
       fence,
       reattest: () => "live" as const,
       effect: async <T>(_kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T> => effect(),
-      snapshot: <T>(read: () => T) => ({ status: "applied" as const, value: read() }),
+      snapshot: fenceSnapshot,
     }),
   });
   try {
@@ -2551,11 +2560,11 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
     });
     await waitForPosixLiveFixtureCondition(
       () => earlyDelivered.length === 1,
-      Date.now() + 1_000,
+      Date.now() + C4_FIXTURE_STEP_MS,
       "the occupied durable chunk did not reach the real portable consumer",
     );
     assert.deepEqual(
-      await earlyChannel.settleBackpressuredOutput?.(Date.now() + 100),
+      await earlyChannel.settleBackpressuredOutput?.(Date.now() + C4_FIXTURE_STEP_MS),
       { status: "blocked", reason: "deadline" },
       "the real channel must not settle while a closed pipe still contains unread bytes behind backpressure",
     );
@@ -2588,13 +2597,13 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
     try {
       await waitForPosixLiveFixtureCondition(
         () => delivered.includes("capacity-occupied"),
-        Date.now() + 1_000,
+        Date.now() + C4_FIXTURE_STEP_MS,
         "the final real portable consumer did not observe the capacity-occupying chunk",
       );
       releaseOccupied();
       await waitForPosixLiveFixtureCondition(
         () => existsSync(join(channelAckDirectory, "stdout-000000000001.json")),
-        Date.now() + 1_000,
+        Date.now() + C4_FIXTURE_STEP_MS,
         "the real consumer did not ACK the capacity-occupying durable chunk",
       );
 
@@ -2606,13 +2615,13 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
       assert.equal(retainedAfterCapacityFreed, 1, "the drained tail must remain retained until its own acknowledgement is retired");
       await waitForPosixLiveFixtureCondition(
         () => delivered.includes("closed-unread-tail"),
-        Date.now() + 1_000,
+        Date.now() + C4_FIXTURE_STEP_MS,
         "the ACK-freed tick did not drain and deliver the closed pipe tail exactly once",
       );
       assert.deepEqual(delivered, ["capacity-occupied", "closed-unread-tail"], "the tail must be delivered only after capacity is actually freed");
       assert.equal(existsSync(join(channelAckDirectory, "stdout-000000000002.json")), false, "the blocked tail consumer must not fabricate its acknowledgement");
       assert.deepEqual(
-        await outputChannel.settleBackpressuredOutput?.(Date.now() + 100),
+        await outputChannel.settleBackpressuredOutput?.(Date.now() + C4_FIXTURE_STEP_MS),
         { status: "blocked", reason: "deadline" },
         "a stopped snapshot with the undelivered tail must remain unsettled in the real portable channel",
       );
@@ -2627,12 +2636,12 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
       try {
         await waitForPosixLiveFixtureCondition(
           () => existsSync(join(channelAckDirectory, "stdout-000000000002.json")),
-          Date.now() + 1_000,
+          Date.now() + C4_FIXTURE_STEP_MS,
           "the replacement real portable consumer did not acknowledge the drained tail",
         );
         vm.runInContext("tickPosix()", context);
         assert.equal(JSON.parse(readFileSync(statePath, "utf8")).status, "stopped", "tail acknowledgement retirement preserves the already-durable stopped proof");
-        assert.deepEqual(await completionChannel.settleBackpressuredOutput?.(Date.now() + 1_000), { status: "settled" });
+        assert.deepEqual(await completionChannel.settleBackpressuredOutput?.(Date.now() + C4_FIXTURE_STEP_MS), { status: "settled" });
       } finally {
         unsubscribeCompletion();
         await completionChannel.detach();
@@ -4569,6 +4578,13 @@ async function finalizePosixLiveFixture(
     throw new Error("POSIX live fixture release returned without retiring its exact authority directory.");
   rmSync(resolvedRoot, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   if (existsSync(resolvedRoot)) throw new Error("POSIX live fixture root remained after successful exact cleanup.");
+}
+/**
+ * A fenced snapshot as the real authority gives one (runPortableFenceSnapshot): a read that throws comes back as
+ * `blocked` with its error, never as a throw out of the snapshot.
+ */
+function fenceSnapshot<T>(read: () => T): { readonly status: "applied"; readonly value: T } | { readonly status: "blocked"; readonly error: unknown } {
+  try { return { status: "applied", value: read() }; } catch (error) { return { status: "blocked", error }; }
 }
 async function waitForPosixLiveFixtureCondition(
   condition: () => boolean,

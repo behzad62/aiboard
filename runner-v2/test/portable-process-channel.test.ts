@@ -880,6 +880,7 @@ async function settlementFixture() {
   let coordinationBlips = 0;
   let takeoverAfterSnapshot = false;
   let expireOnReattest = false;
+  let expireInsideSnapshot = false;
   let entered!: () => void;
   let resume!: () => void;
   const atAck = new Promise<void>((resolve) => { entered = resolve; });
@@ -905,6 +906,8 @@ async function settlementFixture() {
           return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("transient sidecar") };
         }
         if (coordination) return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("held lock") };
+        // The settlement loop checked the clock before this call; the deadline passes once the fenced read has begun.
+        if (expireInsideSnapshot) now = 2_000;
         const result = await runPortableFenceSnapshot({ lockPath: join(root, "effect.lock"), expectedFence: fence,
           readCurrentFence: () => current, read });
         if (takeoverAfterSnapshot) current = { ownerId: "successor", fencingToken: 8 };
@@ -917,6 +920,7 @@ async function settlementFixture() {
     takeover: () => { current = { ownerId: "successor", fencingToken: 8 }; },
     takeoverAfterSnapshot: () => { takeoverAfterSnapshot = true; },
     expireOnReattest: () => { expireOnReattest = true; },
+    expireInsideSnapshot: () => { expireInsideSnapshot = true; },
     blockCoordination: () => { coordination = true; },
     transientCoordination: (count: number) => { coordinationBlips = count; },
     stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 })),
@@ -1205,6 +1209,17 @@ test("portable output settlement still waits for an output chunk the supervisor 
     await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
     fixture.stop();
     // The fixture clock stands at 1 000: this deadline is 300 ms of wall time away.
+    assert.deepEqual(await fixture.channel.settleBackpressuredOutput(1_300), { status: "blocked", reason: "deadline" });
+  } finally { await fixture.close(); }
+});
+
+test("portable output settlement names the deadline when it passes inside the fenced read", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  try {
+    // The loop sees time before the deadline, then the fenced read refuses because it has passed: the settlement is
+    // blocked by the deadline, never reported as unaccounted output and never thrown.
+    fixture.expireInsideSnapshot();
     assert.deepEqual(await fixture.channel.settleBackpressuredOutput(1_300), { status: "blocked", reason: "deadline" });
   } finally { await fixture.close(); }
 });
