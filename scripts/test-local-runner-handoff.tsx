@@ -392,6 +392,68 @@ for (const badHash of [
   assert.equal(readLauncherSession(storage), null);
 }
 
+{
+  // A browser's fetch rejects with "Illegal invocation" when it is called on any object but the global
+  // (`input.fetchImpl(...)`); Node's fetch does not, so every test above that injects its own fetch missed it.
+  // This stub behaves like the browser's. Both the page's default fetch and a caller's unbound one must pair
+  // the Runner and its account runner, and the default fetch must also revoke both sessions.
+  const ACCOUNTS_INSTANCE = "accounts_inst-1";
+  const ACCOUNTS_CODE = `v1.${ACCOUNTS_INSTANCE}.${"J".repeat(43)}`;
+  const ACCOUNTS_TOKEN = `session_${"K".repeat(43)}`;
+  const requests: string[] = [];
+  function browserLikeFetch(this: unknown, url: string, init?: Record<string, unknown>) {
+    if (this !== undefined && this !== globalThis) {
+      return Promise.reject(new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation"));
+    }
+    requests.push(`${String(init?.method)} ${url}`);
+    const body = url === "http://127.0.0.1:8787/v1/local-pair/exchange"
+      ? { version: 1, instanceId: INSTANCE, kind: "runner", port: 8787, sessionToken: SESSION_TOKEN, peers: [{ instanceId: ACCOUNTS_INSTANCE, kind: "accounts", port: 8788, code: ACCOUNTS_CODE }] }
+      : url === "http://127.0.0.1:8788/v1/local-pair/exchange"
+        ? { version: 1, instanceId: ACCOUNTS_INSTANCE, kind: "accounts", port: 8788, sessionToken: ACCOUNTS_TOKEN, peers: [] }
+        : { version: 1 };
+    return Promise.resolve({ ok: true, status: 200, json: async () => body });
+  }
+  const pairBothRunners = async (fetchImpl: FetchLike | undefined, storage: StorageLike) => {
+    const result = await consumeConnectFragment({
+      location: { hash: `#pair=${CODE}&runners=8787,8788`, pathname: "/connect", search: "" },
+      history: { replaceState: () => {} },
+      fetchImpl,
+      storage,
+    });
+    assert.equal(result.status, "connected", result.status === "error" ? result.error.message : "not connected");
+    assert.deepEqual(result.status === "connected" ? result.failures : null, []);
+    assert.equal(getLauncherConnection(storage)?.token, SESSION_TOKEN);
+    assert.equal(getPeerConnection("accounts", storage)?.token, ACCOUNTS_TOKEN);
+  };
+
+  const globals = globalThis as { fetch?: unknown };
+  const nodeFetch = globals.fetch;
+  globals.fetch = browserLikeFetch;
+  try {
+    const storage = memoryStorage();
+    await pairBothRunners(undefined, storage);
+    assert.equal(await revokeLauncherSession({ storage }), true);
+    assert.deepEqual(requests, [
+      "POST http://127.0.0.1:8787/v1/local-pair/exchange",
+      "POST http://127.0.0.1:8788/v1/local-pair/exchange",
+      "DELETE http://127.0.0.1:8787/v1/local-pair/session",
+      "DELETE http://127.0.0.1:8788/v1/local-pair/session",
+    ]);
+    assert.equal(readLauncherSession(storage), null);
+  } finally {
+    globals.fetch = nodeFetch;
+  }
+
+  requests.length = 0;
+  const storage = memoryStorage();
+  await pairBothRunners(browserLikeFetch as FetchLike, storage);
+  assert.deepEqual(requests, [
+    "POST http://127.0.0.1:8787/v1/local-pair/exchange",
+    "POST http://127.0.0.1:8788/v1/local-pair/exchange",
+  ]);
+  clearLauncherSession(storage);
+}
+
 console.log("PASS local runner handoff");
 }
 
