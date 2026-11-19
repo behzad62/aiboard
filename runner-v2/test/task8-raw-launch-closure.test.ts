@@ -61,6 +61,64 @@ const RAW_EXECUTION_ALLOWLIST: readonly RawExecutionRule[] = [
   { file: "windows-birth/session.mjs", container: "submit", kinds: ["process-kill"], reason: "signal-zero existence observation within a valid inspection lease; never destructive PID authority" },
   { file: "windows-birth/session.mjs", container: "collect", kinds: ["process-kill"], reason: "signal-zero absence confirmation after native error, gated by exact live inspection generation and request deadline" },
   { file: "windows-birth/session.mjs", container: "closeOnce", kinds: ["member-kill"], reason: "rescue only through the retained original helper ChildProcess handle after EOF retirement fails; rescue remains cleanup failure" },
+  // Reviewed 2026-11-19: the call sites added since T8's acceptance (the audit failed from 43247a00 on). None starts a
+  // run's workload; each is an owner-facing command, a fixed system tool, or a non-destructive existence probe.
+  { file: "extension-registry.ts", container: "lockOwnerGone", kinds: ["process-kill"], reason: "signal-zero probe of a lock owner's PID; an answering PID keeps the lock held" },
+  { file: "launcher.ts", container: "<module>", kinds: ["child-process-import"], reason: "the `aiboard` launcher, the entry point that starts the Runner, before any run exists" },
+  { file: "launcher.ts", container: "runLauncher", kinds: ["member-kill"], reason: "stops only the optional account peer it spawned when that peer failed to start" },
+  { file: "launcher.ts", container: "pidAlive", kinds: ["process-kill"], reason: "non-destructive signal-zero existence probe only" },
+  { file: "launcher.ts", container: "spawnPeerRunner", kinds: ["child-process-spawn"], reason: "starts the co-launched account peer (OD-32), never a run's workload" },
+  { file: "launcher.ts", container: "openPairUrl", kinds: ["child-process-spawn"], reason: "opens the pairing URL in the owner's browser" },
+  { file: "machine-hint.ts", container: "<module>", kinds: ["child-process-import"], reason: "machine-id reader import only" },
+  { file: "machine-hint.ts", container: "run", kinds: ["child-process-execFile"], reason: "bounded read of the machine id with a fixed system tool (reg.exe from SystemRoot, ioreg)" },
+  { file: "managed-process-supervisor.mjs", container: "endRoot", kinds: ["child-process-spawn", "powershell-launcher", "member-kill"], reason: "Assign-path root ender: one fixed Windows PowerShell script that kills only an exact pid and creation-time identity; its own child is killed at its ceilings" },
+  { file: "portable-process-posix-control.mjs", container: "readPosixProcessCommandLine", kinds: ["child-process-spawnSync"], reason: "exact POSIX command-line read for identity inspection only" },
+  { file: "portable-process-posix-control.mjs", container: "posixProcessGroupAlive", kinds: ["process-kill"], reason: "signal-zero probe of an owned process group only" },
+  { file: "portable-process-posix-control.mjs", container: "inspectPosixProcessIdentities", kinds: ["child-process-spawnSync"], reason: "batched exact POSIX process identity inspection only" },
+  { file: "portable-process-posix-control.mjs", container: "linuxClockTicks", kinds: ["child-process-execFileSync"], reason: "getconf CLK_TCK for CPU evidence only" },
+  { file: "portable-process-posix-control.mjs", container: "readPosixPsCpu", kinds: ["child-process-spawnSync"], reason: "ps CPU time of owned processes for CPU evidence only" },
+  { file: "self-update.ts", container: "<module>", kinds: ["child-process-import"], reason: "the owner's update, uninstall and doctor commands, outside any run" },
+  { file: "self-update.ts", container: "smokeCheckVersion", kinds: ["child-process-execFile"], reason: "runs the downloaded bundle's own `version` as the update's smoke check" },
+  { file: "self-update.ts", container: "runPowerShell", kinds: ["powershell-launcher", "child-process-execFile"], reason: "Windows PowerShell from SystemRoot for the owner's update and uninstall steps" },
+  { file: "self-update.ts", container: "runDoctorCommand", kinds: ["child-process-execFile"], reason: "`git --version` for the owner's `aiboard doctor`" },
+  { file: "shell-inventory.ts", container: "<module>", kinds: ["child-process-import", "powershell-launcher"], reason: "shell inventory import, and the shell names in its type and list" },
+  { file: "shell-inventory.ts", container: "detect", kinds: ["powershell-launcher"], reason: "names the installed PowerShells the inventory reports" },
+  { file: "shell-inventory.ts", container: "pwshExecutable", kinds: ["powershell-launcher"], reason: "looks up pwsh on PATH for the inventory" },
+  { file: "shell-inventory.ts", container: "powerShellVersion", kinds: ["child-process-execFile"], reason: "bounded version probe of an installed PowerShell for the inventory" },
+  { file: "windows-job-process-host.ts", container: "processIsAlive", kinds: ["process-kill"], reason: "non-destructive signal-zero existence probe only" },
+] as const;
+
+type AmbientEnvironmentRule = Readonly<{ file: string; container: string; reason: string }>;
+// native-build-factory.ts snapshots the ambient environment for every run's processes; these read named variables of
+// the Runner's (or an owner command's) own environment for a path, a flag or a tool's location, and pass none of it
+// wholesale to a run's child. Reviewed 2026-11-19, like the raw-execution rules above.
+const AMBIENT_ENVIRONMENT_ALLOWLIST: readonly AmbientEnvironmentRule[] = [
+  { file: "aiboard-home-paths.ts", container: "currentAiboardHome", reason: "locates the AIBoard home from AIBOARD_HOME and the user's home path" },
+  { file: "aiboard-home-paths.ts", container: "createAiboardHomeDeny", reason: "the home deny rule's default location, from the same path variables" },
+  { file: "child-environment.ts", container: "createChildEnvironmentFactory", reason: "reads only AIBOARD_MCP_DEPTH to give a child depth + 1; the child's environment comes from the injected snapshot" },
+  { file: "child-environment.ts", container: "isWindowsAppsPathEntry", reason: "LOCALAPPDATA, to recognize the WindowsApps PATH entry it filters" },
+  { file: "copilot-runtime.ts", container: "copilotRuntimeRoot", reason: "AIBOARD_COPILOT_RUNTIME_DIR, the Copilot runtime folder's override" },
+  { file: "extension-control-routes.ts", container: "browse", reason: "USERPROFILE or HOME as the folder browser's starting folder" },
+  { file: "home-cli.ts", container: "runHomeCommand", reason: "the owner's `aiboard` home and keys commands read their own shell's environment" },
+  { file: "launcher.ts", container: "runLauncher", reason: "the `aiboard` launcher entry point: terminal style, MCP depth, and the environment it starts the Runner and its peer with" },
+  { file: "launcher.ts", container: "openPairUrl", reason: "SystemRoot, to locate cmd.exe for opening the pairing URL" },
+  { file: "lifecycle-diagnostics.ts", container: "lifecycleTrace", reason: "the opt-in AIBOARD_LIFECYCLE_TRACE flag" },
+  { file: "machine-hint.ts", container: "readMachineId", reason: "SystemRoot, to locate reg.exe" },
+  { file: "openai-compatible-model.ts", container: "completeResponses", reason: "the opt-in AIBOARD_DEBUG_PROMPT_CACHE flag" },
+  { file: "playwright-cli-guard.mjs", container: "main", reason: "the guard reads its own environment, which the Runner already built for the session" },
+  { file: "portable-process-posix-control.mjs", container: "readPosixProcessCommandLine", reason: "runs ps with LC_ALL=C over the Runner's own environment, for identity inspection only" },
+  { file: "portable-process-posix-control.mjs", container: "inspectPosixProcessIdentities", reason: "runs ps with LC_ALL=C over the Runner's own environment, for identity inspection only" },
+  { file: "protected-locations.ts", container: "resolveProtectedLocations", reason: "home and system path variables, to list the locations a run may not touch" },
+  { file: "remote-tool-runtime.ts", container: "remotePathGuardFor", reason: "home path variables for the remote path guard" },
+  { file: "runner-internal-process-kernel.ts", container: "launch", reason: "reads only AIBOARD_MCP_DEPTH; the process's environment is the caller's" },
+  { file: "runner-start.ts", container: "startRunner", reason: "the home location at startup, and the AIBOARD_LOCAL_PAIR_DEV_ORIGIN development flag" },
+  { file: "self-update.ts", container: "runPowerShell", reason: "SystemRoot, to locate Windows PowerShell for the owner's update" },
+  { file: "self-update.ts", container: "runUninstallCommand", reason: "the owner's `aiboard uninstall` reads its own environment" },
+  { file: "shell-inventory.ts", container: "bashExecutable", reason: "SystemRoot, ProgramFiles and PATH to find an installed bash" },
+  { file: "shell-inventory.ts", container: "detect", reason: "SystemRoot, to find Windows PowerShell" },
+  { file: "shell-inventory.ts", container: "onPath", reason: "PATH, to find installed shells" },
+  { file: "terminal-style.ts", container: "colorEnabled", reason: "terminal color flags (NO_COLOR, FORCE_COLOR)" },
+  { file: "terminal-style.ts", container: "styleFor", reason: "terminal color flags (NO_COLOR, FORCE_COLOR)" },
 ] as const;
 
 type Finding = Readonly<{
@@ -228,8 +286,15 @@ function packageFindings(): Finding[] {
 test("Task 8 production tree has no raw execution or ambient environment escape outside exact hosts", () => {
   const findings = [...sourceFiles(SOURCE_ROOT).flatMap(auditSource), ...packageFindings()];
   const matchedRules = new Set<number>();
+  const matchedEnvironmentRules = new Set<number>();
   const allowed = (finding: Finding): boolean => {
-    if (finding.kind === "ambient-process-env") return finding.file === "native-build-factory.ts";
+    if (finding.kind === "ambient-process-env") {
+      if (finding.file === "native-build-factory.ts") return true;
+      const index = AMBIENT_ENVIRONMENT_ALLOWLIST.findIndex((rule) => rule.file === finding.file && rule.container === finding.container);
+      if (index < 0) return false;
+      matchedEnvironmentRules.add(index);
+      return true;
+    }
     if (finding.file === "managed-process-job-host.ps1" && finding.kind === "powershell-process-launch") return true;
     const index = RAW_EXECUTION_ALLOWLIST.findIndex((rule) =>
       rule.file === finding.file && rule.container === finding.container && rule.kinds.includes(finding.kind));
@@ -243,10 +308,13 @@ test("Task 8 production tree has no raw execution or ambient environment escape 
   const stale = RAW_EXECUTION_ALLOWLIST.filter((_rule, index) => !matchedRules.has(index));
   assert.deepEqual(stale, [], `Raw execution exceptions must remain exact and live:\n${stale.map((rule) =>
     `${rule.file} ${rule.container} ${rule.kinds.join(",")} — ${rule.reason}`).join("\n")}`);
+  const staleEnvironment = AMBIENT_ENVIRONMENT_ALLOWLIST.filter((_rule, index) => !matchedEnvironmentRules.has(index));
+  assert.deepEqual(staleEnvironment, [], `Ambient environment exceptions must remain exact and live:\n${staleEnvironment.map((rule) =>
+    `${rule.file} ${rule.container} — ${rule.reason}`).join("\n")}`);
 });
 
 
-test("Task 8 configured provider inventory has no local child-process transport", () => {
+test("Task 8 configured provider inventory: model transports launch no child, and CLI workers launch only through the managed process host", () => {
   const providerPath = join(SOURCE_ROOT, "provider-config-store.ts");
   const providerSource = ts.createSourceFile(providerPath, readFileSync(providerPath, "utf8"), ts.ScriptTarget.Latest, true);
   let transports: string[] | undefined;
@@ -258,9 +326,18 @@ test("Task 8 configured provider inventory has no local child-process transport"
       return member.literal.text;
     });
   }
-  assert.deepEqual(transports, ["account-runner", "openai-compatible", "anthropic", "google"]);
+  // CW1 (0d60ba7a) added "cli": a CLI worker runs its own CLI, so it is a local process, but never a model transport.
+  assert.deepEqual(transports, ["account-runner", "openai-compatible", "anthropic", "google", "cli"]);
 
   const factory = readFileSync(join(SOURCE_ROOT, "native-build-factory.ts"), "utf8");
+  assert.match(factory, /if \(config\.transport === "cli"\) \{\s*(?:\/\/[^\n]*\n\s*)*throw new Error\(/,
+    "createTransportModel refuses a CLI runtime: it never becomes a model transport");
+  // Its processes start only through the managed process host (cli-worker-processes.ts, createManagedCliProcessLauncher),
+  // never by a raw launch in a CLI worker module.
+  for (const file of sourceFiles(SOURCE_ROOT).filter((path) => /^cli-worker-.*\.ts$/.test(relative(SOURCE_ROOT, path)))) {
+    const raw = auditSource(file).filter((finding) => finding.kind !== "ambient-process-env");
+    assert.deepEqual(raw, [], `${relative(SOURCE_ROOT, file)} must start CLI processes only through the managed process host`);
+  }
   for (const transport of ["account-runner", "anthropic", "google"]) {
     assert.match(factory, new RegExp(`config\\.transport === ["']${transport}["']`));
   }
