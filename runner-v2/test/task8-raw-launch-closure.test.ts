@@ -92,31 +92,31 @@ const RAW_EXECUTION_ALLOWLIST: readonly RawExecutionRule[] = [
 type AmbientEnvironmentRule = Readonly<{ file: string; container: string; reads: readonly string[]; reason: string }>;
 // native-build-factory.ts snapshots the ambient environment for every run's processes. These read the Runner's (or an
 // owner command's) own environment for a path, a flag or a tool's location. `reads` is each function's exact list of
-// reads: "process.env.NAME" for one variable, or the whole object as it is used ("environment: process.env",
-// "runtime.environment ?? process.env"; see ambientRead). A new read, a named read turned into a spread, or a whole
-// object moved to another use fails the audit. Reviewed 2026-11-19, like the raw-execution rules.
+// reads: "process.env.NAME" for one variable, or the whole object with where it goes, followed outward to its variable,
+// return or statement ("location = seams.location ?? { environment: process.env }"; see placement). A new read, a named
+// read turned into a spread, or a whole object moved to another use fails the audit. Reviewed 2026-11-19, like the raw-execution rules.
 const AMBIENT_ENVIRONMENT_ALLOWLIST: readonly AmbientEnvironmentRule[] = [
-  { file: "aiboard-home-paths.ts", container: "currentAiboardHome", reads: ["environment: process.env"], reason: "passes its environment to resolveAiboardHome, which reads AIBOARD_HOME and the user's home path" },
-  { file: "aiboard-home-paths.ts", container: "createAiboardHomeDeny", reads: ["environment: process.env"], reason: "the home deny rule's default location, from the same path variables" },
+  { file: "aiboard-home-paths.ts", container: "currentAiboardHome", reads: ["return resolveAiboardHome({ environment: process.env })"], reason: "passes its environment to resolveAiboardHome, which reads AIBOARD_HOME and the user's home path" },
+  { file: "aiboard-home-paths.ts", container: "createAiboardHomeDeny", reads: ["options = { environment: process.env }"], reason: "the home deny rule's default location, from the same path variables" },
   { file: "child-environment.ts", container: "createChildEnvironmentFactory", reads: ["process.env.AIBOARD_MCP_DEPTH"], reason: "only AIBOARD_MCP_DEPTH, to give a child depth + 1; the child's environment comes from the injected snapshot" },
   { file: "child-environment.ts", container: "isWindowsAppsPathEntry", reads: ["process.env.LOCALAPPDATA", "process.env.LOCALAPPDATA"], reason: "LOCALAPPDATA, to recognize the WindowsApps PATH entry it filters" },
   { file: "copilot-runtime.ts", container: "copilotRuntimeRoot", reads: ["environment = process.env"], reason: "default for the environment it reads AIBOARD_COPILOT_RUNTIME_DIR from, the Copilot runtime folder's override" },
   { file: "extension-control-routes.ts", container: "browse", reads: ["process.env.HOME", "process.env.USERPROFILE"], reason: "USERPROFILE or HOME as the folder browser's starting folder" },
-  { file: "home-cli.ts", container: "runHomeCommand", reads: ["runtime.environment ?? process.env"], reason: "the owner's `aiboard` home and keys commands read their own shell's environment" },
-  { file: "launcher.ts", container: "runLauncher", reads: ["runtime.environment ?? process.env", "runtime.environment ?? process.env", "runtime.environment ?? process.env"], reason: "the `aiboard` launcher entry point's terminal style, MCP depth and path resolution (the Runner and its peers inherit the launcher's environment through spawn's default)" },
+  { file: "home-cli.ts", container: "runHomeCommand", reads: ["environment = runtime.environment ?? process.env"], reason: "the owner's `aiboard` home and keys commands read their own shell's environment" },
+  { file: "launcher.ts", container: "runLauncher", reads: ["styleFor(runtime.environment ?? process.env) (ConditionalExpression)", "runtime.environment ?? process.env (ParenthesizedExpression)", "environment = runtime.environment ?? process.env"], reason: "the `aiboard` launcher entry point's terminal style, MCP depth and path resolution (the Runner and its peers inherit the launcher's environment through spawn's default)" },
   { file: "launcher.ts", container: "openPairUrl", reads: ["process.env.SystemRoot"], reason: "SystemRoot, to locate cmd.exe for opening the pairing URL" },
   { file: "lifecycle-diagnostics.ts", container: "lifecycleTrace", reads: ["process.env.AIBOARD_LIFECYCLE_TRACE"], reason: "the opt-in AIBOARD_LIFECYCLE_TRACE flag" },
   { file: "machine-hint.ts", container: "readMachineId", reads: ["process.env.SystemRoot"], reason: "SystemRoot, to locate reg.exe" },
   { file: "openai-compatible-model.ts", container: "completeResponses", reads: ["process.env.AIBOARD_DEBUG_PROMPT_CACHE"], reason: "the opt-in AIBOARD_DEBUG_PROMPT_CACHE flag" },
   { file: "playwright-cli-guard.mjs", container: "main", reads: ["environment = process.env"], reason: "the guard reads its own environment, which the Runner already built for the session" },
-  { file: "portable-process-posix-control.mjs", container: "readPosixProcessCommandLine", reads: ["env: { ...process.env }"], reason: "ps with LC_ALL=C over the Runner's own environment (what ps would inherit anyway), for identity inspection only" },
-  { file: "portable-process-posix-control.mjs", container: "inspectPosixProcessIdentities", reads: ["env: { ...process.env }"], reason: "ps with LC_ALL=C over the Runner's own environment (what ps would inherit anyway), for identity inspection only" },
-  { file: "protected-locations.ts", container: "resolveProtectedLocations", reads: ["input.env ?? process.env"], reason: "home and system path variables, to list the locations a run may not touch" },
-  { file: "remote-tool-runtime.ts", container: "remotePathGuardFor", reads: ["env: process.env"], reason: "home path variables for the remote path guard" },
+  { file: "portable-process-posix-control.mjs", container: "readPosixProcessCommandLine", reads: ["ran = spawnSync({ env: { ...process.env } })"], reason: "ps with LC_ALL=C over the Runner's own environment (what ps would inherit anyway), for identity inspection only" },
+  { file: "portable-process-posix-control.mjs", container: "inspectPosixProcessIdentities", reads: ["ran = spawnSync({ env: { ...process.env } })"], reason: "ps with LC_ALL=C over the Runner's own environment (what ps would inherit anyway), for identity inspection only" },
+  { file: "protected-locations.ts", container: "resolveProtectedLocations", reads: ["env = input.env ?? process.env"], reason: "home and system path variables, to list the locations a run may not touch" },
+  { file: "remote-tool-runtime.ts", container: "remotePathGuardFor", reads: ["return createRemotePathGuard(options.protectedLocations ?? resolveProtectedLocations({ env: process.env }))"], reason: "home path variables for the remote path guard" },
   { file: "runner-internal-process-kernel.ts", container: "launch", reads: ["process.env.AIBOARD_MCP_DEPTH"], reason: "only AIBOARD_MCP_DEPTH; the process's environment is the caller's" },
-  { file: "runner-start.ts", container: "startRunner", reads: ["environment: process.env", "process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN"], reason: "the home location's default environment at startup, and the AIBOARD_LOCAL_PAIR_DEV_ORIGIN development flag" },
+  { file: "runner-start.ts", container: "startRunner", reads: ["location = seams.location ?? { environment: process.env }", "process.env.AIBOARD_LOCAL_PAIR_DEV_ORIGIN"], reason: "the home location's default environment at startup, and the AIBOARD_LOCAL_PAIR_DEV_ORIGIN development flag" },
   { file: "self-update.ts", container: "runPowerShell", reads: ["process.env.SystemRoot"], reason: "SystemRoot, to locate Windows PowerShell for the owner's uninstall" },
-  { file: "self-update.ts", container: "runUninstallCommand", reads: ["runtime.environment ?? process.env"], reason: "the owner's `aiboard uninstall` reads its own environment" },
+  { file: "self-update.ts", container: "runUninstallCommand", reads: ["environment = runtime.environment ?? process.env"], reason: "the owner's `aiboard uninstall` reads its own environment" },
   { file: "shell-inventory.ts", container: "bashExecutable", reads: ["process.env.ProgramFiles", "process.env.SystemRoot"], reason: "SystemRoot and ProgramFiles, to find an installed bash" },
   { file: "shell-inventory.ts", container: "detect", reads: ["process.env.SystemRoot"], reason: "SystemRoot, to find Windows PowerShell" },
   { file: "shell-inventory.ts", container: "onPath", reads: ["process.env.PATH", "process.env.Path"], reason: "PATH, to find installed shells" },
@@ -200,66 +200,117 @@ function bindingAliases(source: ts.SourceFile): Readonly<{
   visit(source);
   return { aliases, namespaces };
 }
-/** The `process` object: `process`, `globalThis.process` or `global.process`. */
-function isProcessObject(node: ts.Expression): boolean {
-  if (ts.isIdentifier(node)) return node.text === "process";
-  return ts.isPropertyAccessExpression(node) && node.name.text === "process" &&
-    ts.isIdentifier(node.expression) && (node.expression.text === "globalThis" || node.expression.text === "global");
+const PROCESS_MODULE = /^(?:node:)?process$/;
+
+/** The process module loaded at run time: `require("node:process")` or `import("process")`, awaited or not. */
+function processModuleLoad(node: ts.Expression): boolean {
+  const call = ts.isAwaitExpression(node) ? node.expression : node;
+  if (!ts.isCallExpression(call) || call.arguments.length !== 1) return false;
+  const target = call.arguments[0]!;
+  if (!ts.isStringLiteralLike(target) || !PROCESS_MODULE.test(target.text)) return false;
+  return ts.isIdentifier(call.expression) && call.expression.text === "require" || call.expression.kind === ts.SyntaxKind.ImportKeyword;
 }
 
-/** `process.env` itself: `process.env`, `process?.env`, `process["env"]`, `globalThis.process.env`. */
+/** The `process` object: `process`, `globalThis.process`, `global["process"]`, or a load of the process module. */
+function isProcessObject(node: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(node)) return isProcessObject(node.expression);
+  if (ts.isIdentifier(node)) return node.text === "process";
+  if (processModuleLoad(node)) return true;
+  const onGlobal = (target: ts.Expression) => ts.isIdentifier(target) && (target.text === "globalThis" || target.text === "global");
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === "process" && onGlobal(node.expression);
+  return ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) &&
+    node.argumentExpression.text === "process" && onGlobal(node.expression);
+}
+
+/** `process.env` itself (`process.env`, `process?.env`, `process["env"]`, `globalThis.process.env`), or `process[key]`. */
 function isProcessEnv(node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression {
   if (ts.isPropertyAccessExpression(node)) return node.name.text === "env" && isProcessObject(node.expression);
-  return ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) &&
-    node.argumentExpression.text === "env" && isProcessObject(node.expression);
+  if (!ts.isElementAccessExpression(node) || !isProcessObject(node.expression)) return false;
+  // A key that is not a literal may be "env".
+  return !ts.isStringLiteralLike(node.argumentExpression) || node.argumentExpression.text === "env";
+}
+
+/** A node's source text on one line, the same in a CRLF and an LF checkout. */
+function compact(node: ts.Node): string {
+  return node.getText().replace(/\s+/g, " ");
 }
 
 /**
  * What one `process.env` use reads: a named variable (`process.env.NAME`, `process.env["NAME"]`), or the whole
- * environment object, named by where it goes (`environment: process.env`, `env: { ...process.env }`,
- * `f(process.env)`, `x = process.env`, `options.env ?? process.env`). A rule then pins each whole-object use, not
- * only how many there are.
+ * environment object, named by where it goes (see placement). A rule then pins each whole-object use, not only how
+ * many there are.
  */
 function ambientRead(node: ts.PropertyAccessExpression | ts.ElementAccessExpression): string {
+  if (ts.isElementAccessExpression(node) && !ts.isStringLiteralLike(node.argumentExpression)) {
+    return `process[${compact(node.argumentExpression)}], a key that may be "env"`;
+  }
   const parent = node.parent;
   if (ts.isPropertyAccessExpression(parent) && parent.expression === node) return `process.env.${parent.name.text}`;
   if (ts.isElementAccessExpression(parent) && parent.expression === node && ts.isStringLiteralLike(parent.argumentExpression)) {
     return `process.env.${parent.argumentExpression.text}`;
   }
-  if (ts.isSpreadAssignment(parent)) return placement(parent.parent, "{ ...process.env }");
-  if (ts.isSpreadElement(parent)) return `...process.env (${ts.SyntaxKind[parent.parent.kind]})`;
   return placement(node, "process.env");
 }
 
-/** Where an expression goes: a property, a variable or default, a call's argument, an operand, a return. */
+/**
+ * Where an expression goes, followed outward through object properties, spreads, call arguments and operands up to a
+ * variable, a default, a return or another statement: `location = seams.location ?? { environment: process.env }`.
+ * An object shows only the path to the expression, not its other properties.
+ */
 function placement(node: ts.Node, shown: string): string {
   const parent = node.parent;
-  if (ts.isPropertyAssignment(parent) && parent.initializer === node) return `${parent.name.getText()}: ${shown}`;
-  if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.initializer === node) {
-    return `${parent.name.getText()} = ${shown}`;
-  }
+  if (ts.isPropertyAssignment(parent) && parent.initializer === node) return placement(parent.parent, `{ ${compact(parent.name)}: ${shown} }`);
+  if (ts.isSpreadAssignment(parent)) return placement(parent.parent, `{ ...${shown} }`);
   if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.arguments?.some((argument) => argument === node)) {
-    return `${parent.expression.getText()}(${shown})`;
+    return placement(parent, `${compact(parent.expression)}(${shown})`);
   }
   if (ts.isBinaryExpression(parent)) {
     const operator = ts.tokenToString(parent.operatorToken.kind) ?? ts.SyntaxKind[parent.operatorToken.kind];
-    return parent.right === node ? `${parent.left.getText()} ${operator} ${shown}` : `${shown} ${operator} ${parent.right.getText()}`;
+    return placement(parent, parent.right === node
+      ? `${compact(parent.left)} ${operator} ${shown}` : `${shown} ${operator} ${compact(parent.right)}`);
   }
+  if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.initializer === node) return `${compact(parent.name)} = ${shown}`;
   if (ts.isReturnStatement(parent)) return `return ${shown}`;
   return `${shown} (${ts.SyntaxKind[parent.kind]})`;
 }
 
-/** `const { env } = process`, `import { env } from "node:process"`, or the process module under another name. */
+/** A destructured key that can bind `env`: `env`, `"env"`, `["env"]`, a computed key that is not a literal, or a rest. */
+function bindsEnvironment(key: ts.Node | undefined, rest: boolean): boolean {
+  if (rest) return true;
+  if (key && (ts.isIdentifier(key) || ts.isStringLiteralLike(key))) return key.text === "env";
+  return key !== undefined && ts.isComputedPropertyName(key) &&
+    (!ts.isStringLiteralLike(key.expression) || key.expression.text === "env");
+}
+
+/**
+ * The environment, or the process object, under another name: `const { env } = process`, `({ env: e } = process)`,
+ * `function f({ env } = process)`, `const p = process`, `import { env } from "node:process"`, `export * from "process"`.
+ */
 function environmentAliases(node: ts.Node): ts.Node[] {
-  if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && isProcessObject(node.initializer)) {
-    return node.name.elements.filter((element) => (element.propertyName ?? element.name).getText() === "env");
+  if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && node.initializer && isProcessObject(node.initializer)) {
+    if (ts.isIdentifier(node.name)) return node.name.text === "process" ? [] : [node.name];
+    return ts.isObjectBindingPattern(node.name) ? node.name.elements.filter((element) =>
+      bindsEnvironment(element.propertyName ?? element.name, element.dotDotDotToken !== undefined)) : [];
   }
-  if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier) ||
-      !/^(?:node:)?process$/.test(node.moduleSpecifier.text)) return [];
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isProcessObject(node.right)) {
+    if (ts.isObjectLiteralExpression(node.left)) {
+      return node.left.properties.filter((property) => ts.isSpreadAssignment(property) || bindsEnvironment(property.name, false));
+    }
+    return ts.isIdentifier(node.left) && node.left.text === "process" ? [] : [node.left];
+  }
+  if (!(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) || !node.moduleSpecifier ||
+      !ts.isStringLiteral(node.moduleSpecifier) || !PROCESS_MODULE.test(node.moduleSpecifier.text)) return [];
+  if (ts.isExportDeclaration(node)) {
+    const clause = node.exportClause;
+    if (!clause || ts.isNamespaceExport(clause)) return [node];
+    return clause.elements.filter((element) => ["env", "default"].includes((element.propertyName ?? element.name).text));
+  }
   const clause = node.importClause;
   const bindings = clause?.namedBindings;
-  const named = bindings && ts.isNamedImports(bindings)
-    ? bindings.elements.filter((element) => (element.propertyName ?? element.name).text === "env") : [];
+  const named = bindings && ts.isNamedImports(bindings) ? bindings.elements.filter((element) => {
+    const imported = (element.propertyName ?? element.name).text;
+    return imported === "env" || imported === "default" && element.name.text !== "process";
+  }) : [];
   // Another local name for the process module would hide its `.env` from this audit.
   const renamed = [clause?.name, bindings && ts.isNamespaceImport(bindings) ? bindings.name : undefined]
     .filter((name): name is ts.Identifier => name !== undefined && name.text !== "process");
@@ -280,7 +331,7 @@ function auditSource(file: string): Finding[] {
     }
     if (ts.isCallExpression(node) && moduleCall(node)) add(node, "dynamic-child-process-load", node.getText(source));
     if (isProcessEnv(node)) add(node, "ambient-process-env", ambientRead(node));
-    for (const alias of environmentAliases(node)) add(alias, "ambient-process-env", `process.env as ${alias.getText()}`);
+    for (const alias of environmentAliases(node)) add(alias, "ambient-process-env", `process.env via ${compact(alias)}`);
     if (ts.isCallExpression(node)) auditCall(node, source, aliases, namespaces, add);
     if (rawProcessModule && ts.isPropertyAssignment(node) &&
         node.name.getText(source).replace(/["']/g, "") === "shell" &&
