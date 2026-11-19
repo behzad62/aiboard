@@ -1,7 +1,7 @@
 /**
  * CLI workers on the web (docs/plans/2026-11-14-cli-workers.md packet CW9). Run: npx tsx scripts/test-cli-workers-ui.mts
  *
- * - Settings: the free checks, model and effort, the Full-access note, Test with its reasons and the reset time.
+ * - Settings: CLI workers have their own tab (not Providers); the free checks, model and effort, the Full-access note, Test with its reasons and the reset time.
  * - The crew picker: CLI rows are workers only, Full access only, and a CLI refused here can't be picked.
  * - The config a Build pushes for a CLI worker passes the Runner's own validator.
  * - Run details: the CLI attempt card (version, outcome, replaced commits, re-runs, live tail).
@@ -233,7 +233,7 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.equal(cliCrewAvailabilityRefusal(["anthropic:claude-opus-5-5"], { options: [], status: "off" }), null, "API workers are not this rule's");
   assert.match(cliCrewAvailabilityRefusal(["codex-cli:default"], ready)!, /not available on Windows/, "refused on this OS: Start waits");
   assert.equal(cliCrewAvailabilityRefusal(["agy:default"], ready),
-    "agy · CLI default is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers, or remove it from the crew.",
+    "agy · CLI default is not turned on as a CLI worker. Turn it on in Settings > CLI workers, or remove it from the crew.",
     "a crew CLI no longer turned on (with its consent) blocks Start before the discussion is created");
   const loading = { options: cliWorkerCrewOptions(ENTRIES, null, "full"), status: "loading" as const };
   assert.match(cliCrewAvailabilityRefusal(workers, loading)!, /still checking this CLI/);
@@ -407,6 +407,27 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   }
   assert.match(CLI_WORKER_CONSENT_NOTE, /runs any command as you, in the task's worktree, with its own permission prompts turned off/);
   pass("Settings shows the free checks, agy's stated usage, each Test reason and the stated reset time; a refused CLI can't be turned on or tested");
+}
+
+// ------------------------------------------------------------------ Settings: CLI workers have their own tab
+{
+  // The owner moved CLI workers out of the Providers tab (CWD-8, 2026-11-20). The tab waits for the first read of the
+  // home like Providers does, opens from /settings?tab=cli-workers, and every pointer names the new place.
+  const page = readFileSync("app/settings/settings-client.tsx", "utf8");
+  assert.match(page, /<TabsTrigger value="cli-workers">CLI workers<\/TabsTrigger>/, "a top-level CLI workers tab");
+  assert.match(page, /const TAB_VALUES = \[[^\]]*"cli-workers"/, "deep link: /settings?tab=cli-workers opens it");
+  assert.match(page, /<TabsContent value="cli-workers">\s*<HomeGate home=\{home\}>\s*<CliWorkersSettings \/>\s*<\/HomeGate>\s*<\/TabsContent>/,
+    "the tab renders CliWorkersSettings behind the home gate");
+  assert.equal(page.match(/<CliWorkersSettings \/>/g)?.length, 1, "rendered once, in its own tab only");
+  const providersStart = page.indexOf('<TabsContent value="providers"');
+  const providersEnd = page.indexOf("{/* ── CLI workers", providersStart);
+  assert.ok(providersStart >= 0 && providersEnd > providersStart, "the Providers tab comes before the CLI workers tab");
+  assert.ok(!page.slice(providersStart, providersEnd).includes("CliWorkersSettings"), "the Providers tab no longer shows CLI workers");
+  for (const file of ["app/runner-guide/page.tsx", "components/build/BuildCrewPicker.tsx", "components/CliWorkersSettings.tsx", "lib/client/cli-workers.ts", "lib/client/discussion-live-state.ts", "CLAUDE.md"]) {
+    assert.ok(!/Providers (>|&gt;) CLI workers/.test(readFileSync(file, "utf8")), `${file} still points at Settings > Providers > CLI workers`);
+  }
+  assert.match(readFileSync("app/runner-guide/page.tsx", "utf8"), /href="\/settings\?tab=cli-workers"/, "the guide links to the tab");
+  pass("Settings: CLI workers have their own tab behind the home gate, with a deep link; Providers no longer shows them");
 }
 
 // ------------------------------------------------------------------ Settings writes go through the home client only

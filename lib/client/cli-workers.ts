@@ -409,7 +409,7 @@ export function cliCrewAvailabilityRefusal(
     if (crew.status === "unsupported") return `${name}: ${CLI_WORKERS_UPDATE_MESSAGE}`;
     const option = crew.options.find((candidate) => candidate.runtimeId === runtimeId);
     if (!option) {
-      return `${name} is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers, or remove it from the crew.`;
+      return `${name} is not turned on as a CLI worker. Turn it on in Settings > CLI workers, or remove it from the crew.`;
     }
     if (!option.health.pickable) {
       if (option.health.state === "unchecked" && crew.status === "error") {
@@ -438,9 +438,9 @@ export function cliNativeProviderConfig(
   const modelId = runtimeId.slice(separator + 1);
   const name = cliWorkerName(providerId);
   const entry = entries[providerId];
-  if (!entry?.enabled || !entry.consentedAt) throw new Error(`${name} is not turned on as a CLI worker. Turn it on in Settings > Providers > CLI workers.`);
+  if (!entry?.enabled || !entry.consentedAt) throw new Error(`${name} is not turned on as a CLI worker. Turn it on in Settings > CLI workers.`);
   const model = entry.models?.find((candidate) => (candidate.id ?? CLI_DEFAULT_MODEL_ID) === modelId);
-  if (!model) throw new Error(`${cliRuntimeDisplayName(runtimeId)} is not one of ${name}'s models in Settings > Providers > CLI workers.`);
+  if (!model) throw new Error(`${cliRuntimeDisplayName(runtimeId)} is not one of ${name}'s models in Settings > CLI workers.`);
   return {
     runtimeId,
     providerId,

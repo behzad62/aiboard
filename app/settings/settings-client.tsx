@@ -82,10 +82,10 @@ interface SettingsData {
 
 const MODES: DiscussionMode[] = ["chat", "panel", "debate", "specialist", "build"];
 
-const TAB_VALUES = ["providers", "tools", "extensions", "capability-lab", "defaults", "storage", "security"];
+const TAB_VALUES = ["providers", "cli-workers", "tools", "extensions", "capability-lab", "defaults", "storage", "security"];
 
 /**
- * Providers, Tools, Capability Lab and Defaults are saved in the AIBoard home, so
+ * Providers, CLI workers, Tools, Capability Lab and Defaults are saved in the AIBoard home, so
  * they need a connected, home-capable AI Board (plan §6.1). Storage is about this
  * browser's history and works without one.
  */
@@ -264,8 +264,9 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-8">
           <TabsTrigger value="providers">Providers</TabsTrigger>
+          <TabsTrigger value="cli-workers">CLI workers</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
           <TabsTrigger value="extensions">Extensions</TabsTrigger>
           <TabsTrigger value="capability-lab">Capability Lab</TabsTrigger>
@@ -399,8 +400,13 @@ export default function SettingsPage() {
               </TabsContent>
             </Tabs>
           </div>
+          </HomeGate>
+        </TabsContent>
 
-          <CliWorkersSettings />
+        {/* ── CLI workers ───────────────────────────────────────── */}
+        <TabsContent value="cli-workers">
+          <HomeGate home={home}>
+            <CliWorkersSettings />
           </HomeGate>
         </TabsContent>
 

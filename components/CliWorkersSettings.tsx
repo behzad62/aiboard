@@ -153,7 +153,7 @@ export interface CliWorkerPanelProps {
   now?: number;
 }
 
-/** One CLI in Settings > Providers > CLI workers. Every change is one awaited home save through `onSave`. */
+/** One CLI in Settings > CLI workers. Every change is one awaited home save through `onSave`. */
 export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = true, onSave, onTest, now }: CliWorkerPanelProps) {
   const name = cliWorkerName(providerId);
   const health = cliWorkerHealth(check);
@@ -431,7 +431,7 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
 }
 
 /**
- * Settings > Providers > CLI workers (CWD-8): the free checks, Refresh, each CLI's models and effort, the Full-access
+ * Settings > CLI workers (CWD-8): the free checks, Refresh, each CLI's models and effort, the Full-access
  * note, and Test. Settings save to the AIBoard home through home-client.ts; a Test's result is saved by the Runner.
  */
 export function CliWorkersSettings() {
