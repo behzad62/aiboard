@@ -349,7 +349,7 @@ test("R2: a host that ends before its started line fails the launch and keeps ev
   );
   assert.equal(existsSync(marker), true, "the workload ran before the host ended");
   assert.doesNotMatch(readJobEvents(join(root, "job-host")), /"type":"(started|error|natural_stopped)"/, "the host wrote no lifecycle line");
-  const last = supervisorStatusLines(join(root, "job-host")).at(-1)!;
+  const last = await lastStatusWithEvidence(join(root, "job-host"));
   assert.equal(last.status, "stopped", JSON.stringify(last));
   assert.equal((last.memberEvidence as { count?: number } | undefined)?.count, 1, `the unsettled watch is evidence: ${JSON.stringify(last)}`);
   assert.match(JSON.stringify(last.memberEvidence), /ended without settling its membership watch/);
@@ -360,8 +360,10 @@ test("R2: a host that ends before its started line fails the launch and keeps ev
 test("R2: a workload that wrote output before its host ended before the started line is a blocked failed start", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
   const { root, launch } = setup("started-unwritable-output", "started_emit_unwritable");
   await assert.rejects(launch(process.execPath, ["-e", `process.stdout.write("x".repeat(4096)); setTimeout(() => {}, 60000)`]),
-    blockedStart(/output remains unsettled/));
-  const last = supervisorStatusLines(join(root, "job-host")).at(-1)!;
+    // The launcher fails on the first terminal status it reads: the one written at the host's exit ("exited before"), or
+    // the unsettled output recorded after it.
+    blockedStart(/output remains unsettled|exited before it reported that its workload started/));
+  const last = await lastStatusWithEvidence(join(root, "job-host"));
   assert.equal(last.childPid, 0, JSON.stringify(last));
   assert.equal((last.memberEvidence as { count?: number } | undefined)?.count, 1, `the unsettled watch is evidence: ${JSON.stringify(last)}`);
 });
@@ -389,6 +391,17 @@ function supervisorStatusLines(jobHostDirectory: string): Record<string, unknown
   assert.equal(records.length, 1, `one Job record: ${records.join(", ")}`);
   const record = JSON.parse(readFileSync(join(jobHostDirectory, records[0]!), "utf8")) as { supervisor: { statusPath: string } };
   return readFileSync(record.supervisor.statusPath, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/**
+ * The supervisor's last status line once it carries member evidence. A launch that failed on the host's exit-time status
+ * returns before the supervisor writes the status that records the unsettled watch, so the test waits for that line.
+ * The exit-time status is exited_unknown, which nothing verifies empty or releases, so the start stays held meanwhile.
+ * If the evidence is never recorded, the wait fails the test.
+ */
+async function lastStatusWithEvidence(jobHostDirectory: string): Promise<Record<string, unknown>> {
+  await waitFor(() => supervisorStatusLines(jobHostDirectory).at(-1)?.memberEvidence !== undefined, 30_000, "the supervisor's status with member evidence");
+  return supervisorStatusLines(jobHostDirectory).at(-1)!;
 }
 
 /** Every Job event file under a job-host directory, concatenated. */
