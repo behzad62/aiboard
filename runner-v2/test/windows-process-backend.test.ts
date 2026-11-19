@@ -733,7 +733,7 @@ test("Windows portable baseline is selectable without Job Objects and reports cr
   assert.equal(probe.capabilities.crash_cleanup, "unavailable");
 });
 
-test("Windows portable launch consumes the caller's shared absolute startup deadline", async () => {
+test("Windows portable launch consumes the caller's shared absolute startup deadline", { skip: process.platform !== "win32" && "Windows host" }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-absolute-startup-deadline-"));
   const stateDirectory = join(root, "state");
   const backend = new WindowsProcessBackend({
@@ -767,7 +767,7 @@ test("Windows portable launch is bounded by the shared measured start ceiling", 
   assert.doesNotMatch(source, /WINDOWS_PORTABLE_STARTUP_DEADLINE_MS/);
 });
 
-test("Windows portable launch cancelled before its supervisor starts creates nothing", async () => {
+test("Windows portable launch cancelled before its supervisor starts creates nothing", { skip: process.platform !== "win32" && "Windows host" }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cancelled-before-start-"));
   const stateDirectory = join(root, "state");
   const backend = new WindowsProcessBackend({ stateDirectory, semanticFacts: verifiedWindowsSemanticFacts });
@@ -804,46 +804,53 @@ test("Windows portable launch cancelled while it prepares starts no supervisor",
 });
 
 // The portable launch follows its supervisor's progress up to a ceiling (WINDOWS_PORTABLE_START_CEILING_MS), so a call
-// cancelled while the supervisor starts must end the wait at once, as a failed start on its exact identity.
-test("Windows portable launch cancelled while its supervisor starts fails on its exact identity and leaves nothing", { skip: process.platform !== "win32" && "Windows host", timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async () => {
+// cancelled while the supervisor starts ends the wait at once and hands back the exact identity: the caller then stops
+// the workload, verifies it empty and releases it on the supervisor's own proof, as the runtimes do.
+test("Windows portable launch cancelled while its supervisor starts hands back its identity, and the workload is stopped", { skip: process.platform !== "win32" && "Windows host", timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cancelled-while-starting-"));
   const stateDirectory = join(root, "state");
-  const marker = join(root, "ran.txt");
+  const ran = join(root, "ran.txt"), finished = join(root, "finished.txt");
   const backend = new WindowsProcessBackend({ stateDirectory, semanticFacts: verifiedWindowsSemanticFacts });
   const cancel = new AbortController();
   const composed = backend as unknown as { operations: NativeProcessOperations };
   const real = composed.operations;
-  let supervisorPid: number | undefined;
+  let probed = false;
   // The call is cancelled right after the supervisor's real birth probe, before it publishes its state.
   composed.operations = { ...real, inspectProcessBirth: (pid, platform, attemptDeadlineMs) => {
     const inspection = real.inspectProcessBirth(pid, platform, attemptDeadlineMs);
-    if (supervisorPid === undefined) { supervisorPid = pid; cancel.abort(); }
+    if (!probed) { probed = true; cancel.abort(); }
     return inspection;
   } };
+  // The workload records its pid as soon as it runs, and that it finished only after 20 s.
+  const workload = `const fs = require("fs"); fs.writeFileSync(${JSON.stringify(ran)}, String(process.pid)); setTimeout(() => fs.writeFileSync(${JSON.stringify(finished)}, "finished"), 20000)`;
+  let binding: ProcessBackendBinding | undefined;
+  let released = false;
   const ownedLeft = () => readdirSync(stateDirectory).filter((name) => name.startsWith("owned-"));
   await withInspectionFixture({
     fixtureName: "Windows portable cancelled start", root,
     registerCleanup: register => backend.registerInspectionCleanup(register),
     body: async () => {
       const started = Date.now();
-      await assert.rejects(backend.launch({ ...request(["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setTimeout(() => {}, 5000)`]), signal: cancel.signal }),
-        /launch was cancelled/);
+      const failure = await backend.launch({ ...request(["-e", workload]), signal: cancel.signal })
+        .then(() => assert.fail("the cancelled launch was accepted"), (error: unknown) => error);
       assert.ok(Date.now() - started < 60_000, "the cancelled launch did not wait for its ceiling");
-      assert.ok(supervisorPid !== undefined, "the supervisor was started and probed");
-      // The failed start was cleaned up on its exact identity (its owned processes proven gone), and its launch state is
-      // removed.
-      assert.deepEqual(ownedLeft(), []);
+      assert.equal((failure as { code?: unknown }).code, "process_launch_failed_with_identity", String(failure));
+      assert.match((failure as Error).message, /launch was cancelled/);
+      const identity = failedLaunchIdentity(failure);
+      assert.ok(identity, "the cancelled launch handed back its exact identity");
+      binding = bindingFor(identity);
+      assert.equal(ownedLeft().length, 1, "the launch state is kept for the caller to settle");
+      // The caller settles it as any binding: force_terminate, the recorded stop, verified empty, released.
+      await drainAndCleanupWindowsFixture(backend, binding, fence);
+      released = true;
+      assert.deepEqual(ownedLeft(), [], "the released launch state is removed");
+      // The workload was stopped: if it ran (the supervisor starts it before it reads control), it is gone and never
+      // finished.
+      t.diagnostic(`workload ran before it was stopped: ${existsSync(ran)}; settled ${Date.now() - started} ms after the launch`);
+      if (existsSync(ran)) assert.throws(() => process.kill(Number(readFileSync(ran, "utf8")), 0), "the workload was stopped");
+      assert.ok(Date.now() - started < 20_000 && !existsSync(finished), "the workload never finished");
     },
-    // The supervisor exits on its own once it has handled the cleanup's force_terminate.
-    cleanupWorkloads: async () => {
-      if (supervisorPid === undefined) return;
-      const deadline = Date.now() + 60_000;
-      for (;;) {
-        try { process.kill(supervisorPid, 0); } catch { return; }
-        if (Date.now() >= deadline) throw new Error(`the cancelled launch's supervisor ${supervisorPid} did not exit`);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    },
+    cleanupWorkloads: async () => { if (binding && !released) await drainAndCleanupWindowsFixture(backend, binding, fence); },
     certifyWorkloads: async () => { assert.deepEqual(ownedLeft(), [], "no launch state is left to clean up"); },
     removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
   });

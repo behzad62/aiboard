@@ -8,6 +8,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ProcessLaunchFailedWithIdentityError,
   ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
@@ -333,6 +334,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
     } catch (error) {
+      // A call cancelled after its supervisor started: the exact identity goes back with the failure and nothing is
+      // cleaned up here, so the caller stops it, verifies it empty and releases it on the supervisor's own proof, as any
+      // binding (the supervisor is still starting, and may already have started the workload).
+      if (identity && error instanceof PortableLaunchCancelledError)
+        throw new ProcessLaunchFailedWithIdentityError(error.message,
+          launchResult(identity, readState(directory)?.updatedAt ?? new Date().toISOString()), { cause: error });
       if (!identity) {
         const failedState = readState(directory);
         if (this.options.platform === "windows" &&
@@ -1004,9 +1011,10 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   }
   private async waitForState(directory: string, nonce: string, pid: number, deadline: number, signal?: AbortSignal): Promise<SupervisorState> {
     while (Date.now() < deadline) {
-      // A cancellation after the supervisor started (during its birth probe or this wait) fails the launch as any
-      // failed start, on its exact identity.
-      assertLaunchNotCancelled(signal);
+      // Windows: a cancellation after the supervisor started (during its birth probe or this wait) fails the launch with
+      // its exact identity, which exists from the supervisor's birth. A POSIX identity exists only once the supervisor
+      // publishes, so a POSIX launch finishes this short wait and the caller's stop then stops the accepted launch.
+      if (this.options.platform === "windows") assertLaunchNotCancelled(signal);
       const state = readState(directory);
       if (Date.now() >= deadline) break;
       if (state && state.nonce === nonce && state.supervisorPid === pid && state.status !== "preparing") return state;
@@ -1241,8 +1249,9 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+class PortableLaunchCancelledError extends Error {}
 function assertLaunchNotCancelled(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new Error("Portable process launch was cancelled before its supervisor proved the launch.");
+  if (signal?.aborted) throw new PortableLaunchCancelledError("Portable process launch was cancelled before its supervisor proved the launch.");
 }
 const DEFAULT_OPERATIONS: NativeProcessOperations = {
   inspectProcessBirth: osProcessBirth,
