@@ -7,28 +7,69 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
-import { createExecutionHostCliWorkerProcesses } from "../src/cli-worker-processes.js";
+import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses } from "../src/cli-worker-processes.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { createRunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import { cliFixture, FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
+import { cliFixture, FAKE_CLI_SCRIPT, fakeGrandchildAlive, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
 
 const CLAUDE = "C:\\Tools\\claude.exe";
 const CANARIES = ["canary@example.test", "Canary Org", "00000000-0000-4000-8000-000000000000"];
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+// Every bound a step of the test below waits on, as the owner's rule sets it: 1.5x the slowest passing GitHub CI run of
+// the whole test, 37,919 ms on Windows (50 Windows portable-contract runs, 2026-11-17 to 11-19; median 23.7 s), since no
+// step takes longer than its whole test. The probes had the product's 8 s bound and the passing Test 30 s; the probes'
+// version came back unknown once (CI run 44500809465). The hanging Test's 1.5 s is a deadline that must pass, not a bound.
+const CI_STEP_BOUND_MS = 56_879;
+
+/** Wraps the sessions to note how each process and each session's stop ended, so a failure names its cause. */
+function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProcesses {
+  return {
+    async open(input) {
+      const session = await processes.open(input);
+      const running = new Map<string, number>();
+      return {
+        async start(spec) {
+          const began = Date.now();
+          const started = await session.start(spec);
+          // The CLI's own argv, after the wrapper and the scenario; long arguments (the Test's schema) cut short.
+          const name = `${input.purpose} ${spec.args.slice(2).map((arg) => (arg.length > 40 ? `${arg.slice(0, 40)}…` : arg)).join(" ")}`;
+          const startedAt = Date.now();
+          running.set(name, startedAt);
+          let stdoutChars = 0;
+          return {
+            closeInput: async (text) => await started.closeInput(text),
+            async read(waitMs) {
+              const output = await started.read(waitMs);
+              stdoutChars += output.stdout.length;
+              if (output.exited) {
+                running.delete(name);
+                notes.push(`${name}: started in ${startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - startedAt} ms, ${stdoutChars} stdout chars`);
+              }
+              return output;
+            },
+          };
+        },
+        async close() {
+          for (const [name, startedAt] of running) notes.push(`${name}: no exit read after ${Date.now() - startedAt} ms`);
+          try {
+            await session.close();
+            notes.push(`${input.purpose} session: stop proven`);
+          } catch (error) {
+            notes.push(`${input.purpose} session: stop not proven: ${inspect(error, { depth: Infinity })}`);
+            throw error;
+          }
+        },
+      };
+    },
+  };
 }
 
 // The host's process facts are injected, not probed: the probe alone takes about 9 s on a Windows host. On Windows they
@@ -38,7 +79,7 @@ const PROCESS_HOST_FACTS = process.platform === "win32"
   ? { processHostFacts: { portableDuplex: "unavailable", windowsBatchArgv: "unavailable", exactTreeBirth: "verified", jobContainment: "verified" } as const }
   : {};
 
-test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2, the Test folder goes after the verified stop, and a timed-out Test's tree is stopped", { timeout: 120_000 }, async () => {
+test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2, the Test folder goes after the verified stop, and a timed-out Test's tree is stopped", { timeout: 120_000 }, async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-processes-")));
   const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
   for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
@@ -72,15 +113,22 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     spare: { keepWarm: true, idleTimeoutMs: 60_000, maxSpares: 4 },
   });
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), windowsJobHost: sharedJobHost, ...PROCESS_HOST_FACTS });
+  const notes: string[] = [];
+  const trace = () => `\nprocesses:\n  ${notes.join("\n  ")}`;
+  // A step at its bound can outlast the test's own timeout. node:test aborts this signal then, while the body is still
+  // pending, and also once any test ends, so it prints only while the body has not reached its finally.
+  let settled = false;
+  t.signal.addEventListener("abort", () => { if (!settled) console.error(`the test was aborted${trace()}`); }, { once: true });
+  let bodyFailed = false;
   try {
     // The passing Test ends on its result event, so its deadline is only a bound; the hanging one waits it out.
     const detection = (testTimeoutMs: number) => new CliWorkerDetection({
       stateDirectory: state,
-      processes: createExecutionHostCliWorkerProcesses({
+      processes: traced(createExecutionHostCliWorkerProcesses({
         host,
         capabilitiesConfig: () => capabilitiesConfig,
         capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: state }),
-      }),
+      }), notes),
       lookup: async (name) => (name === "claude" ? { status: "found", path: CLAUDE } : { status: "missing" }),
       platform: "win32",
       isRoot: () => false,
@@ -88,13 +136,14 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
       // On Windows the host's own Job fact decides (§3.11); a POSIX host has none, and the win32 seam needs one.
       windowsJobContainment: async () => (process.platform === "win32" ? (await host.windowsProcessFacts?.())?.jobContainment : "verified"),
       command: (_path, args) => ({ executable: process.execPath, arguments: [wrapper, scenario, ...args] }),
+      probeTimeoutMs: CI_STEP_BOUND_MS,
       testTimeoutMs,
     });
 
     // A Test runs the free checks first (their probes in their own transient binding), then the CLI.
-    const passed = await detection(30_000).test("claude-code", { model: null });
-    assert.equal(passed.lastTest.outcome, "passed", JSON.stringify(passed));
-    assert.equal(passed.lastTest.cliVersion, "2.1.326", "the probes' version reached the result");
+    const passed = await detection(CI_STEP_BOUND_MS).test("claude-code", { model: null });
+    assert.equal(passed.lastTest.outcome, "passed", JSON.stringify(passed) + trace());
+    assert.equal(passed.lastTest.cliVersion, "2.1.326", "the probes' version reached the result" + trace());
     assert.equal(passed.stopVerified, true);
     const record = JSON.parse(readFileSync(join(scenarios, "passing-run.json"), "utf8")) as FakeCliRecord;
     // Native real paths on both sides: GitHub's Windows image gives the CLI a long cwd and tmpdir() an 8.3 one.
@@ -108,11 +157,11 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     // On Windows the child is detached, outside libuv's own kill-on-close job, so only the Runner's Job can stop it.
     scenario = scenarioFor("hanging", { holdMs: 60_000, grandchildMs: 60_000, ...(process.platform === "win32" ? { grandchildDetached: true } : {}) });
     const timedOut = await detection(1_500).test("claude-code", { model: null });
-    assert.equal(timedOut.lastTest.outcome, "timed_out", JSON.stringify(timedOut));
+    assert.equal(timedOut.lastTest.outcome, "timed_out", JSON.stringify(timedOut) + trace());
     assert.equal(timedOut.stopVerified, true);
     const hanging = JSON.parse(readFileSync(join(scenarios, "hanging-run.json"), "utf8")) as FakeCliRecord;
     assert.ok(hanging.grandchildPid, "the fake started its child");
-    assert.equal(alive(hanging.grandchildPid!), false, "the CLI's own child was stopped with it");
+    assert.equal(await fakeGrandchildAlive(hanging), false, "the CLI's own child was stopped with it");
     assert.deepEqual(readdirSync(tests), []);
 
     // Checks and Tests leave no history: each binding's run root and process records went with it after its proven
@@ -135,8 +184,30 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     };
     scan(state);
     assert.deepEqual(holding, [], "no file under the state folder holds an account field");
+  } catch (error) {
+    bodyFailed = true;
+    console.error(`the test failed${trace()}`);
+    throw error;
   } finally {
-    await host.close();
-    rmSync(root, { recursive: true, force: true });
+    settled = true;
+    let closed = false;
+    try {
+      await host.close();
+      closed = true;
+    } catch (error) {
+      // A close that fails after the body failed must not hide the body's error (CI runs 44349809623 and 44350732167
+      // showed only the close). Either way its nested causes are printed in full.
+      console.error(`host.close failed${bodyFailed ? " after the test had already failed" : ""}: ${inspect(error, { depth: Infinity })}${trace()}`);
+      if (!bodyFailed) throw error;
+    }
+    // The folders stay when the stop was not proven: a process may still hold or write them.
+    if (closed) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        if (!bodyFailed) throw error;
+        console.error(`the test folder could not be removed: ${inspect(error)}`);
+      }
+    }
   }
 });

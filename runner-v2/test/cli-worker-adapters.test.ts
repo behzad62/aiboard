@@ -39,7 +39,7 @@ import { classifyCliFailureText, fixedOffsetLocalClock, statedResetFromText, typ
 import { CLI_RESULT_LIMITS, CLI_WORKER_RESULT_SCHEMA, cliWorkerResultSchemaJson, parseCliWorkerResult, parseCliWorkerResultText } from "../src/cli-worker-result.js";
 import { MODEL_CATALOG_SNAPSHOT } from "../src/generated/model-catalog.js";
 import type { CheckToolLookup } from "../src/check-tool-lookup.js";
-import { CLI_FIXTURES, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, cliFixture, readCliFixture, writeFakeCliScenario, type FakeCliRecord } from "./support/fake-cli.js";
+import { CLI_FIXTURES, FAKE_CLI_SCENARIO_ENV, FAKE_CLI_SCRIPT, cliFixture, fakeGrandchildAlive, readCliFixture, writeFakeCliScenario, type FakeCliRecord } from "./support/fake-cli.js";
 
 /** Fixture readers accept LF or CRLF: every run below is also read with its line endings turned into CRLF. */
 const crlf = (text: string) => text.replace(/\r?\n/g, "\r\n");
@@ -932,7 +932,7 @@ test("the fake CLIs: unmatched argv exits before stdin, no stray -o file, the gr
   assert.deepEqual(spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim().split(/\r?\n/), ["docs/project/plan.md"]);
 });
 
-test("the fake CLI's detached grandchild outlives the fake, so a stop test can prove it stopped", (t) => {
+test("the fake CLI's detached grandchild outlives the fake, so a stop test can prove it stopped", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-fake-cli-"));
   // Set once the fake has recorded it, so the cleanup registered first can stop the grandchild.
   const grandchild: { pid?: number } = {};
@@ -944,9 +944,11 @@ test("the fake CLI's detached grandchild outlives the fake, so a stop test can p
     // Started outside the folder the test removes: on Windows a live process's working folder cannot be deleted.
     ["-p"], "x", directory, tmpdir());
   assert.equal(run.status, 0, run.stderr);
-  const pid = (JSON.parse(readFileSync(join(directory, "detached-run.json"), "utf8")) as FakeCliRecord).grandchildPid;
+  const record = JSON.parse(readFileSync(join(directory, "detached-run.json"), "utf8")) as FakeCliRecord;
+  const pid = record.grandchildPid;
   grandchild.pid = pid;
   assert.ok(pid && pid > 0);
-  // Signal 0 only asks whether the process exists: the fake has exited and its detached grandchild is still there.
-  assert.doesNotThrow(() => process.kill(pid, 0));
+  // The fake has exited and its detached grandchild is still there. This is also the positive control of the
+  // stop-proof checks' fakeGrandchildAlive: on Windows its token must reach the command line the check reads.
+  assert.equal(await fakeGrandchildAlive(record), true);
 });

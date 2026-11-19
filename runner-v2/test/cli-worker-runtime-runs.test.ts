@@ -23,7 +23,7 @@ import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-facto
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { workerSubmissionContext } from "../src/worker-runtime.js";
-import { FAKE_CLI_SCENARIO_ENV, cliFixture, type FakeCliRecord } from "./support/fake-cli.js";
+import { FAKE_CLI_SCENARIO_ENV, cliFixture, fakeGrandchildAlive, type FakeCliRecord } from "./support/fake-cli.js";
 import { fixtureGitContext, runGit } from "./support/git-fixture.js";
 import { RUN, TASK, WORKER, SESSION, CLAUDE_SESSION, OWNER, WINDOWS, harness, claudeStream, records, done, CLI_RUNTIME_TEST_CONCURRENCY } from "./support/cli-worker-runtime-harness.js";
 
@@ -165,7 +165,7 @@ describe("CW5 loop: runs over time and the managed launcher", { concurrency: CLI
     const ran = JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord;
     // The owner's depth registration reaches the CLI through the run binding's per-owner environment (§3.11).
     assert.equal(ran.mcpDepth, "2");
-    if (windows) assert.throws(() => process.kill(ran.grandchildPid!, 0), "the owner's stop proved the detached grandchild stopped");
+    if (windows) assert.equal(await fakeGrandchildAlive(ran), false, "the owner's stop proved the detached grandchild stopped");
     } finally {
       // The host too, not only the run's binding: its Job host and fact probe keep pipes open, and on GitHub's Windows
       // image an unclosed host kept this file's process alive after its last test (CI run 44307474932).
