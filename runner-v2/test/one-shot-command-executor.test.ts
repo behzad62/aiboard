@@ -7,10 +7,13 @@ import test from "node:test";
 import { createExecutionGrantAuthority, type OpaqueExecutionGrant } from "../src/execution-grants.js";
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import {
+  createBoundedProcessOutputFactory,
   createRuntimeBackedOneShotCommandExecutor,
 } from "../src/one-shot-command-executor.js";
+import { ArtifactStore } from "../src/artifact-store.js";
+import { createProcessBackendRegistration, createProcessBackendRegistry, type ProcessBackend } from "../src/process-backend.js";
 import type { ExecutionIsolationSelection } from "../src/execution-isolation-provider.js";
-import type { SubprocessRuntime } from "../src/subprocess-runtime.js";
+import { createSubprocessRuntimeKernel, type SubprocessRuntime } from "../src/subprocess-runtime.js";
 import { ExecutionIsolationError } from "../src/execution-isolation-provider.js";
 
 test("shared executor selects isolation before launch and releases after verified cleanup", async () => {
@@ -302,6 +305,76 @@ for (const flag of ["requireCompleteCleanup", "knownUnavoidableDetachment"] as c
     }
   });
 }
+
+test("a call its caller gave up before the runtime's claim never launches: grant consumed, a stall, the abort, then the claim", async () => {
+  // The sequence a broker timeout leaves (CW6's third re-check): the executor consumed the execution grant, the
+  // isolation acquire stalled, the caller's signal was aborted (the broker stopped waiting), and only then did the call
+  // reach the real subprocess runtime's claim. Nothing may launch, and the claim is settled as never launched, so a
+  // stop proof that read the store before the claim saw nothing that can still run.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-one-shot-abort-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const backendCalls: string[] = [];
+  const refuse = (name: string) => async () => { backendCalls.push(name); throw new Error(`The backend's ${name} must not be called.`); };
+  const backend: ProcessBackend = {
+    probe: refuse("probe"), launch: refuse("launch"), observe: refuse("observe"), signal: refuse("signal"),
+    verifyEmpty: refuse("verifyEmpty"), reconcile: refuse("reconcile"), release: refuse("release"),
+  } as unknown as ProcessBackend;
+  const environments = createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error("unexpected credential"); } } });
+  const kernel = createSubprocessRuntimeKernel({
+    registry: createProcessBackendRegistry([createProcessBackendRegistration({
+      stableAdapterId: "fixture-adapter", backendId: "fixture", codeDigest: "1".repeat(64), configDigest: "2".repeat(64), backend,
+    })]),
+    state: { kind: "memory" },
+    stateKey: new Uint8Array(32).fill(7),
+    clock: { now: () => new Date(), sleep: async (milliseconds) => await new Promise<void>((resolve) => setTimeout(resolve, milliseconds)) },
+    environments,
+    outputs: createBoundedProcessOutputFactory({ spillRoot: join(root, "spill"), projectRoot: workspace, artifacts: new ArtifactStore(join(root, "artifacts")) }),
+  });
+  const authority = createExecutionGrantAuthority();
+  const grant = await authority.issue(grantRequest(workspace, "full", "call_aborted"));
+  const controller = new AbortController();
+  let stalled!: () => void;
+  const atIsolation = new Promise<void>((resolve) => { stalled = resolve; });
+  let resume!: () => void;
+  const isolationGate = new Promise<void>((resolve) => { resume = resolve; });
+  const executor = createRuntimeBackedOneShotCommandExecutor({
+    runtime: kernel.runtime,
+    runtimeGrants: kernel.grantsController,
+    executionGrants: authority,
+    isolation: {
+      acquire: async (input) => { stalled(); await isolationGate; return { ...strictSelection(input.intent.invocationId), enforcement: "unconfined_explicit_full", disclosure: "unconfined_explicit_full" } as ExecutionIsolationSelection; },
+      prepareExecution: async (_selection, intent) => ({ ...intent, requiredLifecycleScope: "process_group", requestedCapabilities: [] }),
+      release: async () => undefined,
+      recoverOwnedLeases: async () => [],
+      activeLeases: () => [],
+      enforcementState: async () => ({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] }),
+    },
+    permissionProfile: "full",
+    ambientEnvironment: { PATH: "safe" },
+    environments,
+  });
+  try {
+    const request = commandRequest(workspace, grant, "call_aborted");
+    const call = executor.execute({ ...request, context: { ...request.context, signal: controller.signal } });
+    await atIsolation;
+    controller.abort();
+    resume();
+    await assert.rejects(call, (error: unknown) => (error as { code?: unknown }).code === "launch_not_proven" &&
+      /cancelled before its launch; nothing was started/.test((error as Error).message));
+    assert.deepEqual(backendCalls, [], "no backend effect: no probe, no launch");
+    const records = kernel.readOnlyStore.listRowIds().map((id) => kernel.readOnlyStore.readByInvocation(id)!);
+    assert.equal(records.length, 1, "the claim was made after the abort");
+    assert.equal(records[0]!.state, "launch_not_proven");
+    assert.equal(records[0]!.backendBinding, undefined);
+    assert.deepEqual(records[0]!.cleanup, { state: "not_required" });
+    assert.deepEqual(records[0]!.pendingEffects, []);
+  } finally {
+    kernel.readOnlyStore.close();
+    await authority.revoke(grant, "cleanup").catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function grantRequest(workspace: string, permissionProfile: "project" | "full", callId: string) {
   return {
