@@ -1015,7 +1015,10 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
   // Registered before anything can throw (the worktree, the stores), so a failed setup still removes the folder.
   const closers: Array<() => void> = [];
-  t.after(() => {
+  const cleanup: { settleLauncher?: () => Promise<void> } = {};
+  t.after(async () => {
+    // The fake CLI has exited before its working folder (the worktree) is removed.
+    await cleanup.settleLauncher?.();
     for (const close of closers.reverse()) close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
@@ -1040,6 +1043,7 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const { structured = cliDoneResult(), working, stdoutFixture, ...rest } = scenario;
   const stdout = stdoutFixture ?? writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
   const launcher = new ChildCliLauncher(writeFakeCliScenario(fake, { cli: "claude-code", stdout, ...rest }));
+  cleanup.settleLauncher = () => launcher.settle();
   const cli: AgentRuntimeCandidate = { runtimeId: "claude-code:default", providerId: "claude-code", modelId: "sonnet", capabilities: ["code"], priority: 1, workerOnly: true };
   const api: AgentRuntimeCandidate = { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 2 };
   const health = new ProviderHealthRegistry();

@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
   BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
+  InteractiveInputRefusedError,
   type BackpressuredOutputAcknowledgement,
   type BackpressuredOutputMetadata,
   type BackpressuredOutputSettlement,
@@ -281,7 +282,9 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (snapshot.status !== "applied") return { status: "blocked", reason: "output_unaccounted" };
       if (this.channelFailure) return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
       const { terminal, output } = snapshot.value;
-      if (terminal && output.output.length === 0 && output.acknowledgements.length === 0 && this.outputTasks === 0) {
+      // Only output ACKs are output evidence. An input command's proof (`input-*`) that no wait consumed (it landed
+      // after its write's deadline or abandonment) stays until release; the snapshot still validates it.
+      if (terminal && !this.hasPendingOutput(output) && this.outputTasks === 0) {
         if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
           return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
         }
@@ -465,8 +468,9 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   // supervisor's own retirement effect, which is most of what held POSIX output to a fraction of a MiB/s.
   private outputIsIdle(): boolean {
     try {
-      const { output, acknowledgements } = this.readOutputSnapshot();
-      if (output.length === 0 && acknowledgements.length === 0) return true;
+      const snapshot = this.readOutputSnapshot();
+      const { output } = snapshot;
+      if (!this.hasPendingOutput(snapshot)) return true;
       return output.length > 0 && output.every((entry) =>
         this.deliveredOutput.has(entry.name) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata));
     } catch { return false; }
@@ -489,7 +493,12 @@ class PortableProcessChannel implements InteractiveProcessChannel {
 
   private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number, nextState: { nextCommand: number; nextWrite: number; inputClosed: boolean }, signal?: AbortSignal): Promise<void> {
     const name = `input-${String(sequence).padStart(12, "0")}.json`;
-    await this.authority.effect(body.type === "write" ? "write" : body.type === "close_input" ? "close" : "signal", () => {
+    const admission = await this.authority.effect(body.type === "write" ? "write" : body.type === "close_input" ? "close" : "signal", () => {
+      // The supervisor handles commands in order and retires each one's file only once it settles, so an earlier
+      // file still present is a command not yet settled, such as a write still waiting for its reader. A write is
+      // refused then, before anything is published: never queued behind it, and its sequence is not spent. Read
+      // under the fence lock, which the supervisor's settlement also takes.
+      if (body.type === "write" && this.hasUnsettledEarlierCommand(sequence)) return "refused" as const;
       this.persistInputState(nextState);
       writeAtomic(join(this.inputDirectory, name), JSON.stringify({
         nonce: this.authority.nonce,
@@ -498,7 +507,9 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         sequence,
         ...body,
       }));
+      return "admitted" as const;
     });
+    if (admission === "refused") throw new InteractiveInputRefusedError("An earlier portable input command is still unsettled: its reader has not drained it.");
     this.nextCommand = nextState.nextCommand;
     this.nextWrite = nextState.nextWrite;
     this.inputClosed = nextState.inputClosed;
@@ -520,14 +531,15 @@ class PortableProcessChannel implements InteractiveProcessChannel {
     const settleAcknowledgement = async (): Promise<boolean> => {
       const status = readAcknowledgement();
       if (status === undefined) return false;
-      if (status === "failed") throw new Error("Portable channel command failed.");
+      // A failed proof is consumed like an acknowledged one: the wait that observed it owns it.
       try {
         await this.authority.effect("ack_consume", () => { try { unlinkSync(ackPath); } catch {} });
       } catch (error) {
         // Delivery committed before takeover. If the prior owner can no longer
-        // consume its proof, accept only the same still-durable acknowledgement.
-        if (readAcknowledgement() !== "acknowledged") throw error;
+        // consume its proof, accept only the same still-durable proof.
+        if (readAcknowledgement() !== status) throw error;
       }
+      if (status === "failed") throw new Error("Portable channel command failed.");
       return true;
     };
     // A stopping session abandons the wait (signal): the same reconciliation as a passed deadline follows.
@@ -631,6 +643,22 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (error instanceof PortableOutputRetirementBlockedError) return undefined;
       throw error;
     }
+  }
+
+  /**
+   * An earlier command of this exact fence the supervisor has not settled yet. A prior owner's command is left out:
+   * it queues as before, since the supervisor retires it as stale unless it was admitted before the takeover. A file
+   * that cannot be read counts as unsettled, so in doubt the write is refused (nothing sent), never queued.
+   */
+  private hasUnsettledEarlierCommand(sequence: number): boolean {
+    return readdirSync(this.inputDirectory).some((entry) => {
+      const match = /^input-(\d{12})\.json$/.exec(entry);
+      if (match === null || Number(match[1]) >= sequence) return false;
+      try {
+        const command = JSON.parse(readFileSync(join(this.inputDirectory, entry), "utf8"));
+        return command.ownerId === this.authority.fence.ownerId && command.fencingToken === this.authority.fence.fencingToken;
+      } catch { return true; }
+    });
   }
 
   private hasPendingOutput(output: PortableOutputSnapshot): boolean {

@@ -448,8 +448,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         throw error;
       }
       // CW7: the API worker before a CLI is stopped first, so nothing of it writes in the worktree (or into the handoff
-      // read below) or holds a port while the CLI runs. A stop not proven starts no CLI; once the scheduler's retried
-      // stop proves it, the attempt runs again on this CLI.
+      // read below) or holds a port while the CLI runs. A stop not proven starts no CLI: the first Resume retries the
+      // stop and records the kept pause below, and the second runs the same attempt again on this CLI.
       if (cli && apiRan) {
         const failures = await stopProcesses();
         if (failures.length > 0) {
@@ -521,7 +521,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           config: cli.config,
           contextText: context.pack.text,
           ...(handoff ? { earlierWork: earlierWorkSection(handoff.handoff) } : {}),
-          freshRestartWork: async (relaunch) => earlierWorkSection(await freshRestartHandoff(handoffSources, relaunch)),
+          freshRestartWork: async (from) => earlierWorkSection(await freshRestartHandoff(handoffSources, from)),
           submission: workerSubmissionContext({
             ...(this.options.git ? { git: this.options.git } : {}),
             runId: assignment.runId,
@@ -1138,7 +1138,8 @@ export function workerSelectionPreference(
 
 /**
  * CW7: the kept outcome of an attempt whose API worker's processes were not proven stopped before a CLI took it over.
- * Once the stop is proven, the same attempt runs again on the CLI it was assigned to.
+ * As with cli_collect_pending, it takes two Resumes: the first retries the stop and, once it is proven, records this
+ * pause; the second runs the same attempt again on the CLI it was assigned to.
  */
 export const WORKER_HANDOFF_STOP_PENDING_PREFIX = "worker_handoff_stop_pending:";
 
