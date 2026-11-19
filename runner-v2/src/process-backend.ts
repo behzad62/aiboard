@@ -133,6 +133,11 @@ export interface ProcessLaunchRequest {
    */
   readonly signal?: AbortSignal;
 }
+/** How long a signal's own waits may run: the caller's absolute deadline (epoch ms) and its abort. */
+export interface ProcessSignalOptions {
+  readonly deadlineAt?: number;
+  readonly signal?: AbortSignal;
+}
 export interface ProcessBackend {
   probe(fence?: ProcessEffectFence): Promise<unknown>;
   launch(request: ProcessLaunchRequest): Promise<unknown>;
@@ -145,6 +150,7 @@ export interface ProcessBackend {
     binding: ProcessBackendBinding,
     action: ProcessEscalationAction,
     fence: ProcessEffectFence,
+    options?: ProcessSignalOptions,
   ): Promise<unknown>;
   verifyEmpty(
     binding: ProcessBackendBinding,

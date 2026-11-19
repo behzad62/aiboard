@@ -607,6 +607,50 @@ test("a late backend binding is kept only by blocked cleanup of the pending laun
   assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: released.revision, backendBinding: backendBinding(), at: late }), refused("stale_fence"));
 });
 
+test("a late binding needs an unresolved host duty, and a takeover can never stand in for a late reopening", () => {
+  const owner = { launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1 } as const;
+  const late = "2026-08-30T00:00:10.000Z", expired = "2026-08-30T00:02:00.000Z";
+  const failure = { code: "host_reconciliation_failed", message: "Host reconciliation failed." };
+  const refused = (code: string) => (error: unknown) => error instanceof StreamingSessionStoreError && error.code === code;
+  const blockedCleanup = (phase: "prepared" | "launching", failing: "host" | "isolation_lease") => {
+    const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+    writer.prepareLaunch(hostRecord());
+    if (phase === "launching") {
+      writer.transitionLaunch({ type: "bind_isolation", ...owner, expectedRevision: 0, lease: leaseBinding(), at: now });
+      writer.transitionLaunch({ type: "begin_launch", ...owner, expectedRevision: 1, at: now });
+    }
+    const record = writer.transitionLaunch({ type: "begin_cleanup", ...owner, expectedRevision: kernel.store.readHostLaunch("launch-1")!.revision, at: now });
+    const results = record.effects.find((effect) => effect.kind === "cleanup")!.resources!.map((fact) => ({ resource: fact.resource, identity: fact.identity, ownerId: fact.ownerId, fencingToken: fact.fencingToken, status: fact.resource === failing ? "failed" : "succeeded", ...(fact.resource === failing ? { failure } : {}) }));
+    return { kernel, writer, record: writer.transitionLaunch({ type: "settle_cleanup_blocked", ...owner, expectedRevision: record.revision, blocker: failure, results, at: now }) };
+  };
+
+  // Only the lease blocked: the host duty already settled without this backend, which it never quiesced or released.
+  const leaseOnly = blockedCleanup("launching", "isolation_lease");
+  assert.throws(() => leaseOnly.writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: leaseOnly.record.revision, backendBinding: backendBinding(), at: late }), refused("invalid_effect"));
+  assert.deepEqual(leaseOnly.kernel.store.readHostLaunch("launch-1"), leaseOnly.record);
+
+  // A takeover from blocked cleanup also steps cleanup_blocked -> cleanup_pending; a binding or lease forged at its
+  // time is refused (a real late bind is written before the owner's lease expires, a takeover only after).
+  const launching = blockedCleanup("launching", "host");
+  const takenOver = launching.writer.transitionLaunch({ type: "takeover_cleanup", ...owner, expectedRevision: launching.record.revision, newOwnerId: "recovery:1", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:03:00.000Z", at: expired });
+  assert.equal(takenOver.state, "cleanup_pending");
+  assert.throws(() => parseHostLaunchRecord({ ...takenOver, backendBinding: backendBinding(), effects: takenOver.effects.map((effect) => effect.kind === "launch" ? { ...effect, status: "acknowledged", acknowledgedAt: expired } : effect) }), refused("invalid_effect"));
+  const prepared = blockedCleanup("prepared", "host");
+  const preparedTakeover = prepared.writer.transitionLaunch({ type: "takeover_cleanup", ...owner, expectedRevision: prepared.record.revision, newOwnerId: "recovery:1", newFencingToken: 2, ownerExpiresAt: "2026-08-30T00:03:00.000Z", at: expired });
+  // A forged lease also needs its isolation_lease duty (the lease derives one), taken from the real launch record.
+  const leaseDuty = { ...takenOver.effects.find((effect) => effect.kind === "cleanup")!.resources!.find((fact) => fact.resource === "isolation_lease")!, status: "pending" as const, ownerId: "recovery:1", fencingToken: 2, attempts: 1 };
+  assert.throws(() => parseHostLaunchRecord({ ...preparedTakeover, leaseBinding: leaseBinding(), effects: preparedTakeover.effects.map((effect) =>
+    effect.kind === "isolate" ? { ...effect, status: "acknowledged", acknowledgedAt: expired }
+      : effect.kind === "cleanup" ? { ...effect, resources: [...effect.resources!, leaseDuty] } : effect) }), refused("invalid_effect"));
+
+  // The new owner's own late bind after that takeover (blocked again first) is a separate, accepted reopening.
+  const host = takenOver.effects.find((effect) => effect.kind === "cleanup")!.resources!.find((fact) => fact.resource === "host")!;
+  const reblocked = launching.writer.transitionLaunch({ type: "settle_cleanup_blocked", launchId: "launch-1", ownerId: "recovery:1", fencingToken: 2, expectedRevision: takenOver.revision, blocker: failure, results: [{ resource: "host", identity: host.identity, ownerId: host.ownerId, fencingToken: host.fencingToken, status: "failed", failure }], at: expired });
+  const bound = launching.writer.transitionLaunch({ type: "bind_cleanup_backend", launchId: "launch-1", ownerId: "recovery:1", fencingToken: 2, expectedRevision: reblocked.revision, backendBinding: backendBinding(), at: expired });
+  assert.equal(bound.state, "cleanup_pending"); assert.deepEqual(bound.backendBinding, backendBinding());
+  assert.deepEqual(parseHostLaunchRecord(structuredClone(bound)), bound);
+});
+
 function hostRecord() {
   return {
     recordKind: "runner.host-launch" as const, schemaVersion: HOST_LAUNCH_RECORD_VERSION,

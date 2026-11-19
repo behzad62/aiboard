@@ -14,6 +14,7 @@ import {
   type ProcessBackendBinding,
   type ProcessEffectFence,
   type ProcessLaunchRequest,
+  type ProcessSignalOptions,
 } from "./process-backend.js";
 import type { ExecutionLifecycleScope, ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
@@ -469,7 +470,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
   }
 
-  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence): Promise<unknown> {
+  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence, options?: ProcessSignalOptions): Promise<unknown> {
     const identity = this.identity(binding);
     await this.assertFence(identity, _fence);
     const validation = this.validate(identity);
@@ -507,7 +508,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const observedState = readState(identity.directory);
       let beforeSignal = observedState?.status === "outcome_unknown"
         ? this.windowsMembershipSnapshot(identity, true)
-        : await this.waitForWindowsSignalReadiness(identity);
+        : await this.waitForWindowsSignalReadiness(identity, options);
       if (typeof beforeSignal !== "string")
         beforeSignal = beforeSignal.state === "ready" ? beforeSignal.emptiness : beforeSignal.state;
       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
@@ -857,20 +858,41 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
   // "preparing" state) is on its way to the final state a signal needs; a launch cancelled after spawn hands its
   // identity to cleanup at exactly that point. The supervisor's own startup deadline ends that phase (a cold start
   // under load took 12-18 s on 16 cores), so the wait follows its progress up to the shared start ceiling instead of a
-  // fixed 2.5 s. Any other unknown keeps the short settle wait. Waiting decides nothing: the fenced effect re-attests
-  // the exact identity before any control is written.
-  private async waitForWindowsSignalReadiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+  // fixed 2.5 s. Any other unknown keeps the short settle wait. The caller's deadline and abort end it sooner, and its
+  // timer never holds the process open. Waiting decides nothing: the fenced effect re-attests the exact identity
+  // before any control is written.
+  private async waitForWindowsSignalReadiness(identity: Identity, options?: ProcessSignalOptions): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
     const started = Date.now();
     const settleDeadline = started + Math.max(500, this.pollIntervalMs * 100);
-    const ceiling = started + WINDOWS_PORTABLE_START_CEILING_MS;
-    let result = await this.emptiness(identity);
-    while (result === "outcome_unknown") {
-      const now = Date.now();
-      if (now >= ceiling || (now >= settleDeadline && !this.windowsSupervisorPreparing(identity))) break;
-      await delay(this.pollIntervalMs);
-      result = await this.emptiness(identity);
-    }
-    return result;
+    const stopAt = Math.min(started + WINDOWS_PORTABLE_START_CEILING_MS, options?.deadlineAt ?? Number.POSITIVE_INFINITY);
+    // The per-poll liveness probe is a PID check only. Once the wait outlasts the settle window, one asynchronous
+    // exact birth check (cancelled when the wait ends) catches a supervisor whose PID was reused: it ends the wait.
+    const inspection = new AbortController();
+    let birth: "pending" | "same" | "other" | "unknown" | undefined;
+    try {
+      let result = await this.emptiness(identity);
+      while (result === "outcome_unknown" && !options?.signal?.aborted) {
+        const now = Date.now();
+        if (now >= stopAt) break;
+        if (now >= settleDeadline) {
+          if (birth === "other" || !this.windowsSupervisorPreparing(identity)) break;
+          if (birth === undefined) {
+            birth = "pending";
+            void this.supervisorBirth(identity, inspection.signal).then((value) => { birth = value; }, () => { birth = "unknown"; });
+          }
+        }
+        await unrefDelay(Math.min(this.pollIntervalMs, Math.max(0, stopAt - now)), options?.signal);
+        result = await this.emptiness(identity);
+      }
+      return result;
+    } finally { inspection.abort(); }
+  }
+  private async supervisorBirth(identity: Identity, signal: AbortSignal): Promise<"same" | "other" | "unknown"> {
+    const inspection = this.operations.inspectProcessBirthAsync
+      ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
+      : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+    if (inspection.state === "unknown") return "unknown";
+    return inspection.state === "present" && sameProcessBirth(inspection.fingerprint, identity.supervisorBirth) ? "same" : "other";
   }
   private windowsSupervisorPreparing(identity: Identity): boolean {
     const state = readState(identity.directory);
@@ -1273,6 +1295,14 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+/** A poll delay that never holds the process open and ends early on the caller's abort. */
+function unrefDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, milliseconds); timer.unref?.();
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
 class PortableLaunchCancelledError extends Error {}
 function assertLaunchNotCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new PortableLaunchCancelledError("Portable process launch was cancelled before its supervisor proved the launch.");

@@ -447,7 +447,7 @@ export async function quiesceExactBackend(
     if (observed.state === "running" || observed.state === "outcome_unknown") {
       let gracefulRequested = false;
       try {
-        await selected.backend.signal(binding, "terminate", fence);
+        await selected.backend.signal(binding, "terminate", fence, { deadlineAt });
         gracefulRequested = true;
       } catch { /* force escalation below retains the same exact binding */ }
       await refreshExited();
@@ -464,7 +464,7 @@ export async function quiesceExactBackend(
       }
       while (!workloadExited && Date.now() < deadlineAt) {
         try {
-          await selected.backend.signal(binding, "force_terminate", fence);
+          await selected.backend.signal(binding, "force_terminate", fence, { deadlineAt });
         } catch { /* a just-exited exact tree is settled by the next reconciliation */ }
         await refreshExited();
         if (workloadExited) break;

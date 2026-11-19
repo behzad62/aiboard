@@ -1648,7 +1648,7 @@ test("Windows signal retries transient descendant inspection uncertainty without
   }
 });
 
-test("Windows signal follows a live supervisor that is still preparing, and gives up on any other unknown", { timeout: 10_000 }, async () => {
+test("Windows signal follows a live supervisor that is still preparing, and gives up on any other unknown or the caller's bound", { timeout: 10_000 }, async () => {
   // The supervisor's PID is this test process, so it is alive; its births come from the fake inspector.
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-signal-preparing-"));
   const operations: NativeProcessOperations = {
@@ -1660,6 +1660,10 @@ test("Windows signal follows a live supervisor that is still preparing, and give
   };
   // A 5 ms poll gives a 500 ms settle wait; the supervisor below stays in preparation more than twice that long.
   const backend = createWindowsProcessBackend({ stateDirectory: root, operations, pollIntervalMs: 5 });
+  // The signal's entry checks still see the supervisor; the wait's own birth check then finds its PID with another
+  // birth: a supervisor that died while preparing, its PID now someone else's.
+  const reused = createWindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 5, operations: { ...operations,
+    inspectProcessBirthAsync: async () => ({ state: "present", fingerprint: "replacement-birth" }) } });
   const writeState = (directory: string, state: Record<string, unknown>, supervisorPid = process.pid) => writeFileSync(join(directory, "state.json"), JSON.stringify({
     protocol: "aiboard-portable-process/v1", nonce: "windows-contract-nonce", supervisorPid, revision: 1, handledControl: 0,
     exitCode: null, signal: null, error: null, updatedAt: "2026-01-01T00:00:00.000Z", ...state,
@@ -1685,15 +1689,24 @@ test("Windows signal follows a live supervisor that is still preparing, and give
     }
     // A child of this test that has exited stands in for a supervisor that died while preparing.
     const exited = execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
-    for (const [name, state, supervisorPid] of [
-      ["unknown launch", { ...preparing, status: "running", launchEffect: "unknown" }, process.pid],
-      ["exited supervisor", preparing, Number(exited)],
+    const aborted = new AbortController();
+    for (const [name, state, supervisorPid, owner, options, within] of [
+      ["unknown launch", { ...preparing, status: "running", launchEffect: "unknown" }, process.pid, backend, undefined, 1_100],
+      ["exited supervisor", preparing, Number(exited), backend, undefined, 1_100],
+      ["reused supervisor PID", preparing, process.pid, reused, undefined, 1_100],
+      // A live preparing supervisor, but the caller's bound ends the wait before even the settle window.
+      ["caller deadline", preparing, process.pid, backend, undefined, 450],
+      ["caller abort", preparing, process.pid, backend, { signal: aborted.signal }, 450],
     ] as const) {
-      const stalled = join(root, name.replace(" ", "-")); mkdirSync(stalled);
+      const stalled = join(root, name.replaceAll(" ", "-")); mkdirSync(stalled);
       writeState(stalled, state, supervisorPid);
       const started = Date.now();
-      await assert.rejects(backend.signal(bindingAt(stalled, supervisorPid), "terminate", fence), /unavailable/i, name);
-      assert.ok(Date.now() - started < 1_100, `${name}: an unknown that is not live preparation keeps the short settle wait`);
+      const abort = name === "caller abort" ? setTimeout(() => aborted.abort(), 250) : undefined;
+      const bound = name === "caller deadline" ? { deadlineAt: Date.now() + 250 } : options;
+      try {
+        await assert.rejects(owner.signal(bindingAt(stalled, supervisorPid), "terminate", fence, bound), /unavailable/i, name);
+      } finally { clearTimeout(abort); }
+      assert.ok(Date.now() - started < within, `${name}: the wait ended after ${Date.now() - started} ms`);
       assert.equal(existsSync(join(stalled, "control.json")), false);
     }
   } finally {
