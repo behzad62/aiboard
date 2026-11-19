@@ -16,10 +16,12 @@ import type { ExecutionInvocationIntent } from "../src/execution-safety-contract
 import {
   createProcessBackendRegistration,
   createProcessBackendRegistry,
+  ProcessLaunchFailedWithIdentityError,
   ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessLaunchRequest,
+  type ProcessLaunchResult,
 } from "../src/process-backend.js";
 import {
   createSubprocessRuntimeKernel,
@@ -64,9 +66,13 @@ const grantValue = (
 class Clock implements SubprocessRuntimeClock {
   current = new Date("2026-01-01T00:00:00.000Z");
   readonly sleeps: number[] = [];
+  firstSleepGate?: Promise<void>;
   now = () => new Date(this.current);
   sleep = async (ms: number) => {
     this.sleeps.push(ms);
+    const gate = this.firstSleepGate;
+    this.firstSleepGate = undefined;
+    await gate;
     this.current = new Date(this.current.getTime() + ms);
   };
 }
@@ -205,9 +211,11 @@ class Backend implements ProcessBackend {
   onVerify?: () => void;
   onReconcile?: () => void;
   onRelease?: () => void;
+  onProbe?: () => void;
   probe = async (fence?: unknown) => {
     this.calls.push("probe");
     if (fence) this.fences.push(fence);
+    this.onProbe?.();
     return this.probeValue;
   };
   observe = async (
@@ -287,6 +295,18 @@ function deferred() {
   });
   return { promise, resolve };
 }
+// A deadline the fixture's clock reaches only once the backend's launch has started: the runtime refuses a launch
+// whose deadline already passed, so a test of the stop of a launched process lets it launch first.
+function deadlineAfterLaunch(f: { clock: Clock; backend: Backend }) {
+  const launched = deferred();
+  f.clock.firstSleepGate = launched.promise;
+  const onLaunch = f.backend.onLaunch;
+  f.backend.onLaunch = (request) => {
+    onLaunch?.(request);
+    launched.resolve();
+  };
+}
+
 function pendingEffectOf(record: unknown):
   | { family: string; phase: string; fencingToken: number }
   | undefined {
@@ -397,6 +417,8 @@ async function durableLaunchBlocker(
     readonly leaseDurationMs?: number;
     readonly leaseHeartbeatMs?: number;
   } = {},
+  // "identity": the launch failed naming the exact identity it created (no root pid), as a failed Windows Job start does.
+  failure: "cleanup_blocked" | "identity" = "cleanup_blocked",
 ) {
   const root = await mkdtemp(join(tmpdir(), `runner-v2-${suffix}-`));
   const path = join(root, "process.sqlite");
@@ -419,11 +441,14 @@ async function durableLaunchBlocker(
     await rm(root, { recursive: true, force: true });
   });
   const launchDetail = `owned descendant remains; evidence retained at ${root}`;
-  backend.launchError = Object.assign(new Error(launchDetail), {
-    code: "native_process_launch_cleanup_blocked",
-    evidenceDirectory: root,
-    launchResult: backend.launchValue,
-  });
+  const { rootPid: _rootPid, ...failedIdentity } = backend.launchValue as ProcessLaunchResult;
+  backend.launchError = failure === "identity"
+    ? new ProcessLaunchFailedWithIdentityError(launchDetail, failedIdentity)
+    : Object.assign(new Error(launchDetail), {
+      code: "native_process_launch_cleanup_blocked",
+      evidenceDirectory: root,
+      launchResult: backend.launchValue,
+    });
   backend.reconcileValue = { state: "running" };
   backend.verifyValue = { empty: false, detail: "owned descendant remains" };
   const result = await first.runtime.invoke({
@@ -722,8 +747,75 @@ test("durable claim and output owner exist before first await so immediate cance
     "cancelled",
   );
   gate.resolve();
-  const result = await operation;
-  assert.equal(result.outcome, "cancelled");
+  await assert.rejects(operation, (error: SubprocessRuntimeError) => error.code === "launch_not_proven");
+  assert.equal(f.backend.calls.includes("launch"), false, "a cancel before the launch means no launch");
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(record?.state, "launch_not_proven");
+  assert.equal(record?.backendBinding, undefined);
+  assert.deepEqual(record?.cleanup, { state: "not_required" });
+});
+
+test("an abort during the backend probe refuses the launch: the probe ran, the launch never did", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  f.backend.onProbe = () => controller.abort();
+  await assert.rejects(
+    f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {}, signal: controller.signal }),
+    (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+  );
+  assert.equal(f.backend.calls.includes("probe"), true, "the backend was probed");
+  assert.equal(f.backend.calls.includes("launch"), false, "nothing launched");
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(record?.state, "launch_not_proven");
+  assert.equal(record?.backendBinding, undefined);
+  assert.deepEqual(record?.cleanup, { state: "not_required" });
+  assert.deepEqual(pendingEffectsOf(record), []);
+});
+
+test("an abort or a cancel during the prepared environment's callback refuses the launch", async () => {
+  for (const how of ["signal", "cancel"] as const) {
+    const f = fixture();
+    const controller = new AbortController();
+    let observed = false;
+    await assert.rejects(
+      f.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+        signal: controller.signal,
+        onPreparedEnvironment: async () => {
+          observed = true;
+          if (how === "signal") controller.abort();
+          else assert.equal(await f.runtime.cancel("invoke-1"), true);
+        },
+      }),
+      (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+      how,
+    );
+    assert.equal(observed, true, how);
+    assert.equal(f.backend.calls.includes("probe"), true, how);
+    assert.equal(f.backend.calls.includes("launch"), false, `${how}: nothing launched`);
+    const record = f.store.readByInvocation("invoke-1");
+    assert.equal(record?.state, "launch_not_proven", how);
+    assert.equal(record?.backendBinding, undefined, how);
+    assert.deepEqual(record?.cleanup, { state: "not_required" }, how);
+    assert.deepEqual(pendingEffectsOf(record), [], how);
+  }
+});
+
+test("a deadline that passed before the launch refuses it", async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+      deadline: new Date("2026-01-01T00:00:00.000Z"),
+    }),
+    (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+  );
+  assert.equal(f.backend.calls.includes("launch"), false);
+  assert.equal(f.store.readByInvocation("invoke-1")?.state, "launch_not_proven");
 });
 
 test("crash-safe output intent precedes idempotent prepare and prepare failure is durable", async () => {
@@ -836,6 +928,69 @@ test("recoverable launch cleanup blocker binds identity and persists without pre
     liveTakeovers,
   );
   assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+});
+
+test("a launch that failed naming its exact identity is bound and blocked for cleanup, never 'nothing to clean up'", async () => {
+  const f = fixture();
+  const { rootPid: _rootPid, ...identity } = f.backend.launchValue as ProcessLaunchResult;
+  f.backend.launchError = new ProcessLaunchFailedWithIdentityError("Windows Job start failed.", identity);
+  f.backend.reconcileValue = { state: "exited" };
+  f.backend.verifyValue = { empty: false, detail: "Windows Job Object still contains active processes." };
+
+  const result = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} });
+
+  const record = f.store.readByInvocation("invoke-1");
+  assert.ok(record);
+  assert.equal(result.outcome, "cleanup_failed");
+  assert.equal(record.state, "cleanup_blocked");
+  assert.equal(record.backendBinding?.opaqueIdentity, "opaque-1");
+  assert.equal(record.backendBinding?.rootPid, undefined, "a failed start binds no root pid");
+  assert.notEqual(record.cleanup.state, "not_required");
+  assert.deepEqual(f.backend.calls.filter((call) => ["reconcile", "verify"].includes(call)), ["reconcile", "verify"]);
+  assert.equal(f.backend.calls.includes("observe"), false);
+  assert.equal(f.backend.calls.includes("release"), false, "nothing is released before emptiness is proven");
+});
+
+test("restart closes a failed start's exact record only after its emptiness is proven", async (t) => {
+  const f = await durableLaunchBlocker(t, "failed-start", {}, "identity");
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.reconcileValue = { state: "exited" };
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [{ invocationId: "invoke-1", state: "cleanup_blocked" }]);
+  assert.equal(f.backend.calls.includes("release"), false, "unproven emptiness releases nothing");
+  f.backend.verifyValue = { empty: true, proofArtifactId: "failed-start-proof" };
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [{ invocationId: "invoke-1", state: "cleaned" }]);
+  assert.equal(recovery.readOnlyStore.readByInvocation("invoke-1")?.cleanup.state, "verified_empty");
+  assert.ok(f.backend.calls.includes("release"));
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("a stop during a launch cancels the backend's start wait, and a start that then fails naming its identity is stopped through that binding", async () => {
+  const f = fixture();
+  let releaseLaunch!: () => void;
+  f.backend.launchGate = new Promise<void>((resolve) => { releaseLaunch = resolve; });
+  let launchSignal: AbortSignal | undefined;
+  f.backend.onLaunch = (request) => { launchSignal = request.signal; };
+  const { rootPid: _rootPid, ...identity } = f.backend.launchValue as ProcessLaunchResult;
+  f.backend.launchError = new ProcessLaunchFailedWithIdentityError("The launch was cancelled before its workload started.", identity);
+  f.backend.observeValue = { state: "exited", signal: "SIGINT" };
+  const cancel = new AbortController();
+  const running = f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {}, signal: cancel.signal });
+  for (let attempt = 0; attempt < 100 && !launchSignal; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(launchSignal, "the backend gets the launch's cancellation");
+  assert.equal(launchSignal.aborted, false);
+  cancel.abort();
+  for (let attempt = 0; attempt < 100 && !launchSignal.aborted; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(launchSignal.aborted, true, "the stop cancels the backend's start wait");
+  releaseLaunch();
+  const result = await running;
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(result.outcome, "cancelled", inspect({ result, calls: f.backend.calls }));
+  assert.equal(record?.backendBinding?.opaqueIdentity, "opaque-1");
+  assert.equal(record?.cleanup.state, "verified_empty");
+  assert.ok(f.backend.calls.includes("observe"));
+  assert.ok(f.backend.calls.includes("release"));
 });
 
 test("restart reattests a live launch blocker and retry never relaunches", async (t) => {
@@ -2906,7 +3061,9 @@ test("expired bound active observation blocks takeover reconciliation until its 
 });
 
 test("deadline is runtime-owned and persists interrupt terminate force escalation before effects", async () => {
-  const { runtime, store, backend } = fixture();
+  const f = fixture();
+  const { runtime, store, backend } = f;
+  deadlineAfterLaunch(f);
   backend.signalValues = [
     { state: "running" },
     { state: "running" },
@@ -2938,13 +3095,14 @@ test("cancellation during launch queues durable stop and signals only after iden
   const { runtime, store, backend } = fixture();
   const gate = deferred();
   backend.launchGate = gate.promise;
+  const launched = deferred();
+  backend.onLaunch = () => launched.resolve();
   const running = runtime.invoke({
     intent: intent(),
     grantId: "grant-invoke-1",
     ambientEnvironment: {},
   });
-  await Promise.resolve();
-  await Promise.resolve();
+  await launched.promise;
   const cancellation = runtime.cancel("invoke-1");
   assert.equal(
     backend.calls.some((call) => call.startsWith("signal:")),
@@ -3012,6 +3170,7 @@ test("fresh attestation mismatch blocks cancellation authority before signal", a
 
 test("restart preserves durable timeout precedence after observation loss", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   let rejectObservation!: (error: Error) => void;
   f.backend.observeGate = new Promise<void>((_resolve, reject) => {
     rejectObservation = reject;
@@ -3040,6 +3199,7 @@ test("restart preserves durable timeout precedence after observation loss", asyn
 
 test("backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   let rejectObservation!: (error: Error) => void;
   f.backend.observeGate = new Promise<void>((_resolve, reject) => {
     rejectObservation = reject;
@@ -3088,6 +3248,7 @@ test("grant controller authority is scoped to exactly one kernel", async () => {
 
 test("durable timeout and cancellation outrank later cleanup failure", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   f.backend.verifyValue = { empty: false, detail: "descendant remains" };
   const result = await f.runtime.invoke({
     intent: intent(),

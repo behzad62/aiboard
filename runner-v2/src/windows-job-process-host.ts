@@ -2,8 +2,8 @@
 import { WINDOWS_JOB_LAUNCH_REFUSAL_CODES } from "./windows-job-launch-refusal.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, watch, writeFileSync, writeSync } from "node:fs";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
+import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -16,7 +16,24 @@ import { assertUsableWorkingDirectory, windowsNativeFilePath } from "./windows-p
 import type { BackpressuredOutputMetadata } from "./interactive-process-channel.js";
 
 const PROTOCOL = "aiboard-managed-process/v1";
-const DEFAULT_START_DEADLINE_MS = 5_000;
+/** One HTTP request to a supervisor. */
+const SUPERVISOR_REQUEST_TIMEOUT_MS = 5_000;
+/**
+ * How long a launch waits for its supervisor and PowerShell Job host to report startup, while both stay alive and the
+ * call is live: a supervisor that exits, a host that exits before its started line (the supervisor then writes a
+ * terminal status at once) and the call's cancellation each end the wait at once. So this ceiling bounds only a host
+ * that stays alive and silent, never the expected time. PowerShell's start scales with the CPU it gets. Measured from
+ * launchOwned to the host's started line:
+ *   - 2026-11-18, a 16-core Windows 10 host: idle: cold 1.2 s, sequential max 0.65 s, four at once max 0.8 s;
+ *     20 busy loops: cold 6.9 s, sequential 4.0-5.1 s, four at once max 7.6 s;
+ *     40 busy loops: cold 32.9 s, sequential max 19.2 s, four at once median 27.6 s, max 41.3 s.
+ *   - The PR 240 review's host, 20 busy loops: cold 13.4 s, sequential 4.6-6.3 s, four at once 11.7-13.6 s: about
+ *     1.8 times the first host's worst at the same load, so about 75-85 s at 40 busy loops there.
+ * The former fixed 5 s failed real launches under load (PR CI, cli-worker-processes). 120 s is about three times the
+ * first host's worst start and about 1.4 times the second host's extrapolated worst; it is not raised further, since a
+ * host that dies or a call that is cancelled no longer waits for it.
+ */
+const DEFAULT_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS;
 /** keepWarm stops after this many consecutive background prestart failures, so a host that cannot start spares stops trying. */
 const KEEP_WARM_FAILURE_LIMIT = 3;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
@@ -49,6 +66,8 @@ export interface WindowsJobLaunchRequest extends WindowsJobOwnershipKey {
   readonly environment: Readonly<Record<string, string>>;
   readonly interactive?: boolean;
   readonly fence?: WindowsJobWriterFence;
+  /** Cancels the start wait: the start is aborted like one that failed, and its exact record goes back with the error. */
+  readonly signal?: AbortSignal;
 }
 export interface WindowsJobProcessSnapshot {
   readonly processId: string; readonly pid: number;
@@ -67,8 +86,6 @@ export interface WindowsJobMemberEvidenceEntry {
   readonly pid: number; readonly evidence: "packaged" | "unidentified"; readonly package: string | null; readonly detail: string;
 }
 export interface WindowsJobMemberEvidence { readonly count: number; readonly entries: readonly WindowsJobMemberEvidenceEntry[] }
-/** Faults a test can inject into the Job host. Each only makes it stricter: the first three refuse the launch before CreateProcess, membership_ignore_root_package reports every packaged member, the root's own package included, the member_emit_* ones fail member writes, and started_emit_unwritable leaves the host silent after it resumes the workload. */
-export type WindowsJobInjectedLaunchFault = "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" | "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable" | "started_emit_unwritable";
 export interface WindowsJobOutputRead {
   readonly stdout: Uint8Array; readonly stderr: Uint8Array;
   readonly next: { readonly stdout: number; readonly stderr: number };
@@ -83,7 +100,11 @@ export interface WindowsJobProcessHost {
   /** T1 read-only CPU evidence for an owned live Job. Never a lifecycle, release or fence fact. */
   usageOwned?(processId: string, owner: WindowsJobOwnershipKey): Promise<{ readonly cpuTimeMs: number; readonly sampledAt: string } | undefined>;
   attachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
-  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
+  /**
+   * `timeoutMs` bounds the whole write, admission and drain; without it the control deadline applies. `signal` ends
+   * the drain wait early (a stopping session); admission under the fence is never cancelled.
+   */
+  writeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array, timeoutMs?: number, signal?: AbortSignal): Promise<{ readonly acknowledged: true; readonly sequence: number }>;
   closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
   acknowledgeOwnedOutput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void>;
   claimOwnedFence?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
@@ -144,6 +165,21 @@ export interface WindowsJobChannelState {
   readonly retainedOutput?: readonly BackpressuredOutputMetadata[];
   readonly snapshot: WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean };
 }
+/**
+ * Faults a test can inject into the Job host. Each only makes it stricter: slow_start_late_close makes the host take
+ * longer to start than its launcher waits and delivers the host's close to its supervisor a second late, as on a
+ * loaded host; late_started_line runs the workload but writes its started line 30 s late; host_exit_after_create
+ * ends the host right after it created the root inside the Job, before it resumed it, and delivers the host's close
+ * to its supervisor 2 s late; assign_path_exit_after_create takes the Assign path (as an app execution alias does)
+ * and ends the host right after CreateProcess, before it reported the root's identity; assign_path_exit_before_assign
+ * takes the Assign path and ends the host after it reported that identity, before the Assign. desktop_policy_initialize,
+ * desktop_policy_update and membership_watch refuse the launch before CreateProcess; membership_ignore_root_package
+ * reports every packaged member, the root's own package included; the member_emit_* ones fail member writes; and
+ * started_emit_unwritable leaves the host silent after it resumes the workload.
+ */
+export type WindowsJobInjectedLaunchFault = "slow_start_late_close" | "late_started_line" | "host_exit_after_create" | "assign_path_exit_after_create" |
+  "assign_path_exit_before_assign" | "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" |
+  "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable" | "started_emit_unwritable";
 export interface WindowsJobProcessHostOptions {
   readonly stateDirectory: string; readonly platform?: NodeJS.Platform;
   readonly idFactory?: () => string; readonly clock?: () => string;
@@ -157,8 +193,6 @@ export interface WindowsJobProcessHostOptions {
   /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
   readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
-  /** Test seam (R2/R4): a fault the Job host injects at launch. It can only refuse a launch, never weaken one. */
-  readonly injectedLaunchFault?: WindowsJobInjectedLaunchFault;
   /**
    * CW3: what the once-only helper-fallback warning is keyed on (default: the state directory). Short-lived private
    * hosts (transient runs) share one key, so they warn once, not once per check.
@@ -168,6 +202,15 @@ export interface WindowsJobProcessHostOptions {
   readonly maxRecordScan?: number;
   /** Retention: how long one pass waits, for all its held records together, for their supervisors to exit. Test seam; default 15 s. */
   readonly retentionSupervisorExitMs?: number;
+  /** Test seam: a stricter-only fault the Job host injects into every launch (WindowsJobInjectedLaunchFault). */
+  readonly injectedLaunchFault?: WindowsJobInjectedLaunchFault;
+  /**
+   * Test seam, stricter-only: "query_fails" makes the supervisor's Assign-path root ender fail its query (the identity
+   * read, or the host's child list), which must leave the stop unproven.
+   */
+  readonly injectedRootEnderFault?: "query_fails";
+  /** Test seam: ends every start wait, as its ceiling would, once aborted (a test aborts it when the supervisor listens). */
+  readonly startWaitSignal?: AbortSignal;
 }
 
 /**
@@ -250,21 +293,46 @@ interface SupervisorStatus {
   memberEvidence?: WindowsJobMemberEvidence;
   /** R4/R2: a coded launch refusal the Job host raised before CreateProcess. */
   errorCode?: string;
+  /** A start stopped before its workload reported started dropped output nobody will read (its counts are then 0). */
+  outputDiscarded?: boolean;
+  /** The supervisor is ending an Assign-path root its dead host left outside the Job; the launcher's waits extend. */
+  rootEnding?: boolean;
+  /** Which identity named that root: the one its host reported, or only the host's intent. */
+  rootEndedBy?: "identity" | "intent";
 }
 
 export class WindowsJobHostError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = "WindowsJobHostError"; }
 }
 /**
- * R2: a failed start whose status still holds evidence: a member event (packaged, unidentified, or the host's
- * unsettled membership watch) or output that never settled. Its Job is not proven empty, so the start fails with the
- * exact record and the caller keeps it cleanup-blocked; it is never closed as "nothing was launched".
+ * A start that failed after its record existed (the host was aborted, or reported a failed start). The record names
+ * the exact Job host process, so the caller reconciles and releases it through the normal contract instead of
+ * assuming the failed start left nothing behind.
  */
-export class WindowsJobStartBlockedError extends WindowsJobHostError {
-  constructor(message: string, readonly startRecord: { readonly processId: string; readonly startedAt: string }) {
-    super("process_start_cleanup_blocked", message);
-    this.name = "WindowsJobStartBlockedError";
+export class WindowsJobStartFailedError extends WindowsJobHostError {
+  constructor(code: string, message: string, readonly startRecord: { readonly processId: string; readonly startedAt: string }, cause?: unknown) {
+    super(code, message);
+    this.name = "WindowsJobStartFailedError";
+    if (cause !== undefined) Object.defineProperty(this, "cause", { value: cause, writable: true, configurable: true, enumerable: false });
   }
+}
+/**
+ * A stdin write the supervisor admitted (its bytes went to the pipe once and its sequence is spent and persisted)
+ * whose drain was not acknowledged. Its outcome is unknown; the caller's next write uses the next sequence.
+ */
+export class WindowsJobInputUnacknowledgedError extends WindowsJobHostError {
+  constructor(message: string) { super("process_control_unavailable", message); this.name = "WindowsJobInputUnacknowledgedError"; }
+}
+/**
+ * A stdin write the supervisor refused before admission (HTTP 409: a previous write still drains, a stale sequence,
+ * input unavailable, an unclaimed spare). No byte went to the pipe and the sequence was not spent.
+ */
+export class WindowsJobInputRefusedError extends WindowsJobHostError {
+  constructor(message: string) { super("process_control_unavailable", message); this.name = "WindowsJobInputRefusedError"; }
+}
+/** A supervisor reply other than 200; the status says whether the supervisor refused before any effect (409). */
+class SupervisorHttpError extends Error {
+  constructor(readonly statusCode: number | undefined, message: string) { super(message); this.name = "SupervisorHttpError"; }
 }
 
 /** Digest-pin record for one compiled Job-host helper assembly. The digest lives
@@ -710,9 +778,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly clock: () => string;
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
+  private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
+  private readonly injectedRootEnderFault: "query_fails" | undefined;
+  private readonly startWaitSignal: AbortSignal | undefined;
   private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
-  private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
   private readonly maxRetainedOutputChunks: number;
   private readonly maxRetainedOutputBytes: number;
   private readonly maxRetainedOutputChunkBytes: number;
@@ -750,7 +820,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
-    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_DEADLINE_MS;
+    this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_CEILING_MS;
+    this.injectedLaunchFault = options.injectedLaunchFault;
+    this.injectedRootEnderFault = options.injectedRootEnderFault;
+    this.startWaitSignal = options.startWaitSignal;
     this.controlDeadlineMs = options.controlDeadlineMs ?? DEFAULT_CONTROL_DEADLINE_MS;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
     this.maxRetainedOutputChunks = options.maxRetainedOutputChunks ?? 16;
@@ -766,7 +839,6 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (!Number.isSafeInteger(this.recordScanLimit) || this.recordScanLimit < 1) throw new Error("Windows Job record scan limit must be positive.");
     this.retentionSupervisorExitMs = options.retentionSupervisorExitMs ?? DEFAULT_RETENTION_SUPERVISOR_EXIT_MS;
     if (!Number.isSafeInteger(this.retentionSupervisorExitMs) || this.retentionSupervisorExitMs < 0) throw new Error("Windows Job retention supervisor wait must not be negative.");
-    this.injectedLaunchFault = options.injectedLaunchFault;
     mkdirSync(this.stateDirectory, { recursive: true });
     // Bounded startup: the constructor reads at most recordScanLimit records, as before every record of a smaller
     // directory. The rest of a larger one gets the same crash recovery in bounded background batches, so no previous
@@ -931,17 +1003,39 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
+        ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
       }));
-      const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs);
+      const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher), this.startSignal(input));
       await this.applyStatus(record, status);
-      throwIfStartFailed(status, record);
+      throwIfStartFailed(status);
     } catch (error) {
-      await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
-      throw error;
+      // The abort waits for the host's exit, which records the start's stop; the error carries the exact record, so
+      // the caller settles it on that recorded proof (reconcile, verify-empty, release).
+      await abortStartingSupervisor(launcher, token, this.stopDeadlineMs, record.supervisor.statusPath).catch(() => undefined);
+      if (refusalCodeOf(error) && await this.releaseRefusedStart(record, input)) throw error;
+      throw new WindowsJobStartFailedError(error instanceof WindowsJobHostError ? error.code : "process_start_failed",
+        error instanceof Error ? error.message : "Windows Job start failed.", { processId, startedAt: record.startedAt }, error);
     }
     if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
     if (this.spareOptions.keepWarm === true && input.interactive === true) this.refreshSpareInBackground(input);
     return this.snapshot(record);
+  }
+
+  /**
+   * R4/R2: a launch the Job host refused before CreateProcess created nothing. Once its stop is recorded with the Job
+   * empty, its exact record is released here under the call's own fence (reconcile, then release, with every check a
+   * release has), so the refusal goes back with its own code and words and nothing is left to clean up. A stop that is
+   * not proven, or any failed step, returns false: the caller then fails the start with the exact record, as any other
+   * failed start.
+   */
+  private async releaseRefusedStart(record: Pick<HostRecord, "processId" | "startedAt">,
+    input: { readonly runId: string; readonly sessionId: string; readonly fence?: WindowsJobWriterFence }): Promise<boolean> {
+    const owner: WindowsJobOwnershipKey = { runId: input.runId, sessionId: input.sessionId };
+    try {
+      const reconciled = await this.reconcileOwned(record.processId, owner, input.fence);
+      if (reconciled.status !== "stopped") return false;
+      return (await this.releaseOwned(record.processId, owner, record.startedAt, input.fence)).ownershipReleased === true;
+    } catch { return false; }
   }
 
   /**
@@ -1083,10 +1177,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         maxInputBytes: this.maxInputBytes,
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
+        ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
         spare: true,
         ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
       }));
-      await waitForSpareReadyStatus(record.supervisor, processId, this.startDeadlineMs);
+      await waitForSpareReadyStatus(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher));
     } catch (error) {
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
       this.removeSpareFiles(processId);
@@ -1164,6 +1259,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       })();
       return null;
     };
+    let claimStatusPath: string | undefined;
     try {
       if (launcher.exitCode !== null || launcher.signalCode !== null || launcher.killed || !launcher.connected) return fail();
       let record: HostRecord | null = null;
@@ -1173,6 +1269,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         record = null;
       }
       if (!record || record.spare !== true || record.spareClaimed === true) return fail();
+      claimStatusPath = record.supervisor.statusPath;
       if (record.runId !== input.runId || record.sessionId !== input.sessionId) {
         // Another owner's spare: leave it for its owner; this call is no fallback of ours.
         if (!putBack()) void abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
@@ -1216,25 +1313,31 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.records.set(processId, claimed); await this.persist(claimed);
       if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
       try {
-        const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
+        const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher), this.startSignal(input));
         await this.applyStatus(claimed, live);
-        throwIfStartFailed(live, claimed);
+        throwIfStartFailed(live);
       } catch (error) {
         // PX-2c repair 1 (M2) + N7: the claim was acked, so the Job host holds
         // the call and may still start its child after any status read (a
-        // slow start), and the launcher is already disconnected, so an abort
-        // cannot reach that host. No fallback is ever proven here: the call
-        // fails exactly like the normal path, keeping the record. A coded
-        // launch refusal (R4/R2) keeps its code, as on the normal path.
-        await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
-        if (error instanceof WindowsJobStartBlockedError) throw error;
-        throw new WindowsJobHostError(refusalCodeOf(error) ?? "process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
+        // slow start). The launcher is already disconnected, so the start is
+        // stopped through the supervisor's authenticated /signal under the
+        // call's fence, which records the host's exit as the stop, exactly as
+        // the normal path's abort does; only a supervisor that cannot be
+        // reached is killed. The error carries the claimed record, so the
+        // caller settles it on that proof (reconcile, verify-empty, release).
+        await this.stopClaimedStart(claimed, launcher, entry.token).catch(() => undefined);
+        if (refusalCodeOf(error) && await this.releaseRefusedStart(claimed, input)) throw error;
+        throw new WindowsJobStartFailedError(error instanceof WindowsJobHostError ? error.code : "process_start_failed",
+          `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`,
+          { processId, startedAt: claimed.startedAt }, error);
       }
       this.spareCounts.claims += 1;
       return this.snapshot(claimed);
     } catch (error) {
       if (claimAcked) {
-        await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+        // A claimed start that failed was already stopped through its supervisor (above).
+        if (error instanceof WindowsJobStartFailedError) throw error;
+        await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs, claimStatusPath).catch(() => undefined);
         if (error instanceof WindowsJobHostError) throw error;
         throw new WindowsJobHostError("process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -1251,7 +1354,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
    */
   private async spareClaimProvablyUnlanded(launcher: ChildProcess, token: string, statusPath: string): Promise<boolean> {
     // abortStartingSupervisor already SIGKILLs a supervisor that does not acknowledge the abort.
-    await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
+    await abortStartingSupervisor(launcher, token, this.stopDeadlineMs, statusPath).catch(() => undefined);
     if (!(await waitForLauncherExit(launcher, this.stopDeadlineMs))) return false;
     // Strict, unlike readSupervisorStatus: a torn line could be the `claimed` one, so every line must
     // parse and none may show a claim or a child.
@@ -1762,19 +1865,42 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }, { allowFenceUpgrade: true });
   }
 
-  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
+  async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array, timeoutMs = this.controlDeadlineMs, signal?: AbortSignal): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
     if (payload.byteLength > this.maxInputBytes) throw new WindowsJobHostError("process_control_unavailable", `Windows Job input exceeds the ${this.maxInputBytes}-byte limit.`);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input timeout is invalid.");
     const record = this.ownedRecord(processId, owner); this.assertActive(record);
-    const acknowledged = await this.withFenceEffect(record, fence, "write", async (current) => {
+    const elapsed = elapsedClock(INPUT_DRAIN_POLL_MS + this.controlDeadlineMs + 500);
+    // Admission under the writer fence: the supervisor hands the bytes to the pipe exactly once and replies when the
+    // write settles or after a short wait. The sequence is spent from here on, whatever the drain's outcome.
+    const admitted = await this.withFenceEffect(record, fence, "write", async (current) => {
       this.assertActive(current);
       await this.authenticatedStatus(current);
       if (!current.interactive || current.inputClosed) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input is unavailable.");
       if (sequence !== (current.nextInputSequence ?? 1)) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input sequence is stale.");
-      const result = await supervisorRequest<{ acknowledged: true; sequence: number }>(current.supervisor, "/write", "POST", { sequence, payload: Buffer.from(payload).toString("base64"), fence }, this.controlDeadlineMs + 250);
-      if (result.acknowledged !== true || result.sequence !== sequence) throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
+      let result: { acknowledged: boolean; pending?: boolean; failed?: boolean; error?: string; sequence: number };
+      try {
+        result = await supervisorRequest<{ acknowledged: boolean; pending?: boolean; failed?: boolean; error?: string; sequence: number }>(current.supervisor, "/write", "POST",
+          { sequence, payload: Buffer.from(payload).toString("base64"), fence, ackWaitMs: Math.min(INPUT_ADMISSION_ACK_WAIT_MS, timeoutMs) }, this.controlDeadlineMs + 250);
+      } catch (error) {
+        // Every 409 the supervisor sends for /write comes before it touches the pipe: a certain refusal.
+        if (error instanceof SupervisorHttpError && error.statusCode === 409) throw new WindowsJobInputRefusedError(`Windows Job input was refused before admission: ${error.message}`);
+        throw error;
+      }
+      if (result.sequence !== sequence || !(result.acknowledged === true || (result.acknowledged === false && (result.pending === true || result.failed === true))))
+        throw new WindowsJobHostError("process_control_unavailable", "Windows Job input acknowledgement is invalid.");
       current.nextInputSequence = sequence + 1; current.updatedAt = this.clock(); await this.persist(current); this.records.set(processId, current); return result;
     });
-    return acknowledged;
+    if (admitted.acknowledged === true) return { acknowledged: true, sequence };
+    // Admitted, then failed within the admission wait: the sequence is spent, as for a drain that fails later.
+    if (admitted.failed === true) throw new WindowsJobInputUnacknowledgedError(`Windows Job input failed: ${admitted.error ?? "unknown"}`);
+    // The drain is waited for outside the fence, so a reader still starting never holds stop, output reads or
+    // output acknowledgements; each poll re-reads the owned record first.
+    await waitForAdmittedInput({ sequence, timeoutMs, elapsed, ...(signal ? { signal } : {}), observe: async (sliceMs) => {
+      const current = this.ownedRecord(processId, owner); this.assertActive(current);
+      return await supervisorRequest<{ sequence: number; state: string; error?: string }>(current.supervisor,
+        `/input-status?sequence=${sequence}&timeoutMs=${sliceMs}`, "GET", undefined, sliceMs + this.controlDeadlineMs + 250, signal);
+    } });
+    return { acknowledged: true, sequence };
   }
 
   async closeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void> {
@@ -1863,7 +1989,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // Only the fenced caller can validate exact current ACK offsets and
     // publish status; an outside observation alone cannot certify release.
     if (persistRecord) {
-      if (status.status === "stopped") this.assertJobOutputSettled(record, status);
+      if (status.status === "stopped") {
+        this.settleDiscardedOutput(record, status);
+        this.assertJobOutputSettled(record, status);
+      }
       await this.applyStatus(record, status);
     }
     return status;
@@ -1939,6 +2068,50 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     try { fsyncSync(renamed); } finally { closeSync(renamed); }
   }
   /** Takes a supervisor status into the record and persists it. */
+  /**
+   * A claimed spare's failed start: SIGKILL through the supervisor's authenticated /signal (the call's fence), then a
+   * bounded wait for its durable terminal status. The supervisor records the host's exit as the stop and exits; one
+   * that cannot be reached is killed (no stop is then recorded, and the record stays unproven).
+   */
+  /** The call's cancellation and the test seam's, together. */
+  private startSignal(input: WindowsJobLaunchRequest): AbortSignal | undefined {
+    const signals = [input.signal, this.startWaitSignal].filter((signal): signal is AbortSignal => signal !== undefined);
+    return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  }
+  private async stopClaimedStart(record: HostRecord, launcher: ChildProcess, token: string): Promise<void> {
+    const statusPath = record.supervisor.statusPath;
+    try {
+      await supervisorRequest<SupervisorStatus>(record.supervisor, "/signal", "POST",
+        { signal: "SIGKILL", deadlineMs: this.stopDeadlineMs, fence: record.currentFence }, this.stopDeadlineMs + 250);
+    } catch {
+      await abortStartingSupervisor(launcher, token, this.stopDeadlineMs, statusPath);
+      return;
+    }
+    // The same bound as the abort's, extended while the supervisor ends an Assign-path root (rootEnding).
+    const started = Date.now();
+    let deadline = started + this.stopDeadlineMs + ABORT_ACK_MARGIN_MS;
+    for (;;) {
+      const current = readSupervisorStatusQuiet(statusPath);
+      if (current?.status === "stopped" || !childAlive(launcher)) break;
+      if (current?.rootEnding === true) deadline = Math.max(deadline, Math.min(Date.now() + STARTUP_WATCH_TICK_MS, started + ROOT_ENDING_CEILING_MS));
+      if (Date.now() >= deadline) break;
+      await waitForFileActivity(dirname(statusPath), basename(statusPath), Math.min(STARTUP_WATCH_TICK_MS, Math.max(1, deadline - Date.now())));
+    }
+    // A supervisor that recorded its stop exits on its own; one still alive afterwards, or past the bound, is aborted
+    // (a recorded stop stays recorded, and an unrecorded one leaves the record unproven).
+    if (childAlive(launcher)) await abortStartingSupervisor(launcher, token, this.stopDeadlineMs, statusPath);
+  }
+  /**
+   * A stopped start whose supervisor dropped output nobody will read (outputDiscarded, with the Job proven empty and
+   * nothing retained) has no reader to acknowledge that output: its own output offsets are settled at the logs' lengths.
+   * Only the fenced status path calls this (authenticatedStatus with persistRecord, which then persists the record), so
+   * it holds after a Runner restart too. Anything short of that proof changes nothing.
+   */
+  private settleDiscardedOutput(record: HostRecord, status: SupervisorStatus): void {
+    if (status.status !== "stopped" || status.outputDiscarded !== true || status.jobEmptyProof !== true ||
+        status.retainedOutputChunks !== 0 || status.retainedOutputBytes !== 0 || !record.interactive) return;
+    record.outputOffsets = { stdout: statSync(record.stdoutPath).size, stderr: statSync(record.stderrPath).size };
+  }
   private async applyStatus(record: HostRecord, status: SupervisorStatus): Promise<void> {
     this.setStatusFields(record, status);
     await this.persist(record);
@@ -2113,22 +2286,6 @@ export function createWindowsJobProcessHost(options: WindowsJobProcessHostOption
 
 /** R4/R2: the Runner code of a launch the Job host refused before CreateProcess, when its status carries one. */
 const JOB_HOST_LAUNCH_REFUSAL_CODES = WINDOWS_JOB_LAUNCH_REFUSAL_CODES;
-/**
- * A start status that did not start its workload fails the launch. A terminal status (stopped or exited_unknown)
- * without the workload's pid is a failed start even with no error: the host ended before its started line. When that
- * status holds evidence (a member event, or output that never settled), the Job is not proven empty and the start is
- * cleanup-blocked with its exact record, never a plain "not launched".
- */
-function throwIfStartFailed(status: SupervisorStatus, record: Pick<HostRecord, "processId" | "startedAt">): void {
-  if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
-  const terminal = status.status === "stopped" || status.status === "exited_unknown";
-  if (!terminal || (!status.error && status.childPid > 0)) return;
-  if (status.status === "exited_unknown" && status.childPid > 0) return;
-  const message = status.error ?? "The Windows Job host ended before it reported that its workload started.";
-  if (status.memberEvidence || status.status === "exited_unknown")
-    throw new WindowsJobStartBlockedError(message, { processId: record.processId, startedAt: record.startedAt });
-  throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed", message);
-}
 function launchRefusalCode(status: SupervisorStatus): string | undefined {
   return typeof status.errorCode === "string" && JOB_HOST_LAUNCH_REFUSAL_CODES.has(status.errorCode) ? status.errorCode : undefined;
 }
@@ -2174,6 +2331,25 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 /**
+ * A start status that did not start its workload fails the launch: still starting, stopped with an error, or a
+ * terminal status (stopped or exited_unknown) without the workload's pid, which a host that ended before its started
+ * line leaves. The caller fails the start with its exact record (WindowsJobStartFailedError); one whose status holds
+ * member evidence or unsettled output is then never verified empty or released, so it stays cleanup-blocked.
+ */
+function throwIfStartFailed(status: SupervisorStatus): void {
+  if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
+  const terminal = status.status === "stopped" || status.status === "exited_unknown";
+  // A coded refusal the Job host raised before CreateProcess keeps its code (R4/R2).
+  if ((status.status === "stopped" && status.error) || (terminal && !status.childPid))
+    throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed",
+      status.error ?? "The Windows Job host ended before it reported that its workload started.");
+}
+/** A launcher (supervisor) child process that has neither exited nor been killed. */
+function childAlive(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+/**
  * PX-2b: event-driven supervisor-startup wait. The status file is re-read on
  * every directory event instead of every 25 ms; the start deadline stays
  * armed as the backstop; a watcher failure resolves via the bounded timer
@@ -2186,9 +2362,13 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
  * pipe buffer: either way the claim never blocks on boot). Fails fast when
  * the supervisor already died; throws at the same start deadline otherwise.
  * Exported for tests.
+ *
+ * `alive`: whether the supervisor process still runs. Once it does not, the status it last wrote is read once more and
+ * the wait ends: a start never waits out the ceiling for a supervisor that is already gone.
  */
-export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number, alive?: () => boolean): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
+  let lastLook = false;
   for (;;) {
     let wake!: () => void;
     const woke = new Promise<void>((resolve) => { wake = resolve; });
@@ -2203,6 +2383,8 @@ export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, proc
         if ((status.status === "stopped" || status.status === "exited_unknown") && status.spareReady !== true)
           throw new WindowsJobHostError("process_start_failed", `Windows Job spare supervisor failed before becoming ready: ${status.error ?? status.status}.`);
       }
+      if (lastLook) break;
+      if (alive && !alive()) { lastLook = true; continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
@@ -2210,7 +2392,7 @@ export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, proc
       try { watcher?.close(); } catch {}
     }
   }
-  throw new WindowsJobHostError("process_start_failed", "Windows Job spare supervisor did not become ready before the deadline.");
+  throw new WindowsJobHostError("process_start_failed", lastLook ? "Windows Job spare supervisor exited before it reported startup." : "Windows Job spare supervisor did not become ready before the deadline.");
 }
 
 /**
@@ -2238,12 +2420,15 @@ function armFileWatch(directory: string, filename: string, wake: () => void): { 
   }
 }
 
-export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number, alive?: () => boolean, signal?: AbortSignal): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
+  let lastLook = false;
   for (;;) {
+    if (signal?.aborted) throw new WindowsJobHostError("process_start_cancelled", "The launch was cancelled before its workload started.");
     let wake!: () => void;
     const woke = new Promise<void>((resolve) => { wake = resolve; });
     const watcher = armFileWatch(dirname(supervisor.statusPath), basename(supervisor.statusPath), wake);
+    signal?.addEventListener("abort", wake, { once: true });
     try {
       const status = readSupervisorStatus(supervisor.statusPath);
       if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid && status.port > 0) {
@@ -2251,7 +2436,7 @@ export async function waitForSupervisor(supervisor: SupervisorRecord, processId:
         if (status.status === "stopped" || status.status === "exited_unknown") return status;
         if (status.status === "running") {
           try {
-            return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
+            return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, Math.min(SUPERVISOR_REQUEST_TIMEOUT_MS + 250, deadline - Date.now())), signal);
           } catch (error) {
             // A short workload can finish between this read and the request landing: the supervisor
             // persists its terminal status, then closes its server and resets the queued connection
@@ -2264,14 +2449,17 @@ export async function waitForSupervisor(supervisor: SupervisorRecord, processId:
           }
         }
       }
+      if (lastLook) break;
+      if (alive && !alive()) { lastLook = true; continue; }
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
     } finally {
+      signal?.removeEventListener("abort", wake);
       try { watcher?.close(); } catch {}
     }
   }
-  throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
+  throw new WindowsJobHostError("process_start_failed", lastLook ? "Windows Job supervisor exited before it reported startup." : "Windows Job supervisor did not become ready before the deadline.");
 }
 
 /**
@@ -2323,7 +2511,7 @@ export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord
   return await supervisorRequest<SupervisorStatus>(supervisor, query, "GET", undefined, bounded + 250);
 }
 
-async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_START_DEADLINE_MS + 250): Promise<T> {
+async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = SUPERVISOR_REQUEST_TIMEOUT_MS + 250, signal?: AbortSignal): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {
     let settled = false;
@@ -2343,12 +2531,17 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
       response.once("end", () => {
         if (settled) return;
         const text = Buffer.concat(chunks).toString("utf8");
-        if (response.statusCode !== 200) { fail(new Error(`Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; }
+        if (response.statusCode !== 200) { fail(new SupervisorHttpError(response.statusCode, `Supervisor returned HTTP ${String(response.statusCode)}: ${text}`)); return; }
         try { const parsed = JSON.parse(text) as T; settled = true; resolvePromise(parsed); } catch (error) { fail(error); }
       });
     });
     const cancelDeadline = runnerTimeDeadline(timeoutMs, () => { if (!settled) call.destroy(new Error("Supervisor request timed out.")); });
     call.once("close", cancelDeadline);
+    // Only observation requests take a signal; a fenced effect's request is never cancelled mid-flight.
+    if (signal) {
+      const abort = () => { if (!settled) call.destroy(new Error("Supervisor request was abandoned: the session is stopping.")); };
+      if (signal.aborted) abort(); else { signal.addEventListener("abort", abort, { once: true }); call.once("close", () => signal.removeEventListener("abort", abort)); }
+    }
     call.once("error", fail);
     if (payload) call.write(payload);
     call.end();
@@ -2365,6 +2558,58 @@ async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRec
  * expiry waits one I/O turn so an already-received reply settles first.
  */
 const SUPERVISOR_DEADLINE_TICK_MS = 100;
+/**
+ * Stdin admission waits this long for the write to settle before replying `pending`. A write the pipe has room for
+ * settles at once (a whole managed write, with every round trip, measured 31-260 ms on a Windows PC), so the common
+ * case stays one fenced round trip. A poll setting, not a limit: a pending write is then waited for outside the fence.
+ */
+const INPUT_ADMISSION_ACK_WAIT_MS = 250;
+/** One /input-status park: it returns the moment the write settles; between parks the record's ownership is re-read. */
+const INPUT_DRAIN_POLL_MS = 1_000;
+/**
+ * Elapsed Runner time for a wait loop, like runnerTimeDeadline: each step credits at most `maxStepMs` (the longest
+ * one step's request can legitimately take), so a suspended Runner's resume never spends a write's whole bound at once.
+ */
+/**
+ * The drain wait for one admitted write. It observes only that write's outcome, in whole-millisecond slices of at most
+ * INPUT_DRAIN_POLL_MS (the supervisor parks only for an integer wait), and ends at the first of: acknowledged; failed
+ * (the reader closed its stdin or exited, or the tree was stopped); an invalid reply; `observe` throwing (the record
+ * released or not owned, the supervisor gone); `timeoutMs` spent; or `signal` (the session is stopping, or the caller
+ * cancelled). Every ending other than acknowledged throws WindowsJobInputUnacknowledgedError, never a guess.
+ */
+export async function waitForAdmittedInput(options: {
+  readonly sequence: number;
+  readonly timeoutMs: number;
+  readonly elapsed: () => number;
+  readonly signal?: AbortSignal;
+  readonly observe: (sliceMs: number) => Promise<{ sequence: number; state: string; error?: string }>;
+}): Promise<void> {
+  const { sequence, timeoutMs, elapsed, signal, observe } = options;
+  try {
+    for (;;) {
+      const remaining = timeoutMs - elapsed();
+      if (remaining <= 0) throw new Error(`Windows Job input was not drained by the reader within ${timeoutMs} ms.`);
+      if (signal?.aborted) throw new Error("Windows Job input was not drained before its wait was abandoned (stop or cancellation).");
+      // A fractional remainder (the clock is performance.now()) is rounded up: the supervisor would answer it at once.
+      const observed = await observe(Math.max(1, Math.ceil(Math.min(INPUT_DRAIN_POLL_MS, remaining))));
+      if (observed.sequence !== sequence) throw new Error("Windows Job input acknowledgement is invalid.");
+      if (observed.state === "acknowledged") return;
+      if (observed.state === "failed") throw new Error(`Windows Job input failed: ${observed.error ?? "unknown"}`);
+      if (observed.state !== "pending") throw new Error("Windows Job input acknowledgement is invalid.");
+    }
+  } catch (error) {
+    throw new WindowsJobInputUnacknowledgedError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function elapsedClock(maxStepMs: number): () => number {
+  let elapsed = 0, last = performance.now();
+  return () => {
+    const now = performance.now();
+    elapsed += Math.min(now - last, maxStepMs); last = now;
+    return elapsed;
+  };
+}
 function runnerTimeDeadline(timeoutMs: number, expire: () => void): () => void {
   let elapsed = 0, last = performance.now(), cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined, turn: ReturnType<typeof setImmediate> | undefined;
@@ -2547,12 +2792,28 @@ function waitForLauncherExit(launcher: ChildProcess, timeoutMs: number): Promise
     launcher.once("exit", onExit);
   });
 }
-async function abortStartingSupervisor(launcher: ChildProcess, token: string, deadlineMs: number): Promise<void> {
+/**
+ * The supervisor bounds its own abort by the same stop deadline (it waits for the host's exit and records it, then
+ * acknowledges). This margin only orders the two bounds, so a supervisor still recording its stop is not killed first;
+ * a supervisor that exits ends the wait at once.
+ */
+const ABORT_ACK_MARGIN_MS = 5_000;
+async function abortStartingSupervisor(launcher: ChildProcess, token: string, deadlineMs: number, statusPath?: string): Promise<void> {
   if (launcher.exitCode !== null || launcher.signalCode !== null) return;
+  const started = Date.now();
   const acknowledged = await new Promise<boolean>((resolvePromise) => {
-    let settled = false; const finish = (value: boolean) => { if (settled) return; settled = true; clearTimeout(timer); launcher.off("message", onMessage); launcher.off("exit", onExit); resolvePromise(value); };
+    let settled = false; let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: boolean) => { if (settled) return; settled = true; clearTimeout(timer); launcher.off("message", onMessage); launcher.off("exit", onExit); resolvePromise(value); };
     const onMessage = (message: unknown) => { if (message && typeof message === "object" && (message as { type?: unknown }).type === "abort_ack" && (message as { token?: unknown }).token === token) finish(true); };
-    const onExit = () => finish(true); const timer = setTimeout(() => finish(false), Math.max(250, deadlineMs));
+    const onExit = () => finish(true);
+    // The bound follows the supervisor: past it, the wait goes on only while the durable status says it is ending an
+    // Assign-path root, up to ROOT_ENDING_CEILING_MS.
+    const expire = () => {
+      if (statusPath && readSupervisorStatusQuiet(statusPath)?.rootEnding === true && Date.now() - started < ROOT_ENDING_CEILING_MS)
+        timer = setTimeout(expire, STARTUP_WATCH_TICK_MS);
+      else finish(false);
+    };
+    timer = setTimeout(expire, Math.max(250, deadlineMs) + ABORT_ACK_MARGIN_MS);
     launcher.on("message", onMessage); launcher.once("exit", onExit); if (!launcher.connected) finish(false); else launcher.send({ type: "abort", token }, (error) => { if (error) finish(false); });
   });
   if (!acknowledged && launcher.exitCode === null && launcher.signalCode === null) launcher.kill("SIGKILL");

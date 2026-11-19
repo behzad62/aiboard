@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { createRunGitExecutionContext, gitWorkingRootsForRun } from "../src/git-run-context.js";
+import { restoreWorkingTreeForRunner } from "../src/command-evidence-identity.js";
 import { createExecutionGrantAuthority, type ConsumedExecutionGrantClaims } from "../src/execution-grants.js";
 import type { ToolExecutionContext } from "../src/agent-contracts.js";
 import type { ArtifactStore } from "../src/artifact-store.js";
@@ -277,4 +278,12 @@ test("actual ToolBroker carries exact per-call Git authority without changing gu
   assert.equal(denied.isError, true); assert.equal(denied.error?.code, "approval_required");
   assert.equal(f.requests.length, 2);
   assert.throws(() => f.git.current(), /call|context|authority/i);
+}));
+
+test("CW6: each lifecycle runner carries the working-tree restore bound to its own private root; another runner has none", async (t) => use(t, async (f) => {
+  const tree = "a".repeat(40);
+  // Bound: it reaches the capture under the run's lifecycle authority (the synthetic executor reads no tree, so it stops there).
+  await assert.rejects(restoreWorkingTreeForRunner(f.git.lifecycle("verification").run, f.project, tree), /could not be read before their restore/);
+  assert.ok(f.claims.length > 0 && f.claims.every((claim) => claim.actor.id === "git:verification"));
+  await assert.rejects(restoreWorkingTreeForRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" }), f.project, tree), /restore is unavailable/);
 }));

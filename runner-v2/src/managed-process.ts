@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, MANAGED_START_CEILING_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import type { ToolExecutionContext } from "./agent-contracts.js";
-import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_TIMEOUT_MS, MANAGED_OUTPUT_READ_MAX_BYTES, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
+import { MANAGED_INPUT_HISTORY_LIMIT, MANAGED_INPUT_MAX_BYTES, MANAGED_INPUT_WRITE_CEILING_MS, MANAGED_OUTPUT_READ_MAX_BYTES, MANAGED_OUTPUT_WAIT_MAX_MS, MANAGED_UNTIL_IDLE_DEFAULT_MS, ManagedProcessError, type ManagedInputWriteRecord, type ManagedInputWriteRequest, type ManagedInputWriteResult, type ManagedInteractionState, type ManagedOutputCompletion, type ManagedOutputEvidence, type ManagedOutputStreamEvidence, type ManagedOutputUntil, type ManagedProcessObservation, type ManagedProcessRecord, type ManagedProcessSnapshot, type StartManagedProcessInput } from "./managed-process-contracts.js";
 import { createManagedWaitTracker } from "./managed-process-wait-tracker.js";
 import { exitProven, interactionState, terminalCompletion } from "./managed-process-wait.js";
 import { readOutputLines, searchOutput } from "./managed-process-search.js";
@@ -88,6 +88,8 @@ export interface ManagedProcessServiceOptions {
   maxPollBytes?: number;
   startDeadlineMs?: number;
   stopDeadlineMs?: number;
+  /** The ceiling on one stdin write's wait for its reader (MANAGED_INPUT_WRITE_CEILING_MS by default, never above it). */
+  inputWriteCeilingMs?: number;
   /** Legacy test configuration is no longer an execution route. */
   supervisorScriptPath?: string;
   runtime?: ManagedProcessRunRuntime;
@@ -117,6 +119,7 @@ export class ManagedProcessService {
   private readonly maxPollBytes: number;
   private readonly startDeadlineMs: number;
   private readonly stopDeadlineMs: number;
+  private readonly inputWriteCeilingMs: number;
   private closing = false;
   private closed = false;
   private closePromise?: Promise<void>;
@@ -127,8 +130,9 @@ export class ManagedProcessService {
     this.idFactory = options.idFactory ?? (() => randomUUID());
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = bound(options.maxPollBytes ?? MAX_MANAGED_OUTPUT_BYTES, 1, MAX_MANAGED_OUTPUT_BYTES);
-    this.startDeadlineMs = bound(options.startDeadlineMs ?? 30_000, 1, 120_000);
+    this.startDeadlineMs = bound(options.startDeadlineMs ?? MANAGED_START_CEILING_MS, 1, MANAGED_START_CEILING_MS);
     this.stopDeadlineMs = bound(options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, 1, 120_000);
+    this.inputWriteCeilingMs = bound(options.inputWriteCeilingMs ?? MANAGED_INPUT_WRITE_CEILING_MS, 1, MANAGED_INPUT_WRITE_CEILING_MS);
     mkdirSync(this.stateDirectory, { recursive: true, mode: 0o700 });
     const directory = lstatSync(this.stateDirectory);
     if (!directory.isDirectory() || directory.isSymbolicLink()) throw new ManagedProcessError("process_record_invalid", "Managed state directory identity is invalid.");
@@ -242,7 +246,7 @@ export class ManagedProcessService {
       this.save({ ...current, input: { ...input, writes: [...input.writes, pending].slice(-MANAGED_INPUT_HISTORY_LIMIT) } });
       let settled: ManagedInputWriteRecord, inputClosed = false;
       try {
-        inputClosed = (await runtime.writeInput!(current, exact, { bytes, closeInput, timeoutMs: MANAGED_INPUT_WRITE_TIMEOUT_MS })).inputClosed;
+        inputClosed = (await runtime.writeInput!(current, exact, { bytes, closeInput, timeoutMs: this.inputWriteCeilingMs })).inputClosed;
         settled = { ...pending, status: "acknowledged", settledAt: this.clock() };
       } catch (error) {
         const code = error instanceof ManagedProcessError ? error.code : "process_input_outcome_unknown";

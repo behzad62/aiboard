@@ -514,3 +514,34 @@ test("CW4 until a CLI driver is registered, CLI workers are never assigned: a mi
   const cliOnly = new RuntimeRouter({ candidates: [cli], health: new ProviderHealthRegistry() });
   assert.deepEqual(cliOnly.selectWorker(["code"]), { status: "unavailable", reason: "no_healthy_capability_match", requiredCapabilities: ["code"] });
 });
+
+test("CW7 every Codex worker cools down together: health is the CLI's provider, so a usage limit benches both models", () => {
+  let now = 1_000_000;
+  const health = new ProviderHealthRegistry({ clock: () => now });
+  const codexA: AgentRuntimeCandidate = { runtimeId: "codex-cli:gpt-a", providerId: "codex-cli", modelId: "gpt-a", capabilities: ["code"], priority: 0, workerOnly: true };
+  const codexB: AgentRuntimeCandidate = { runtimeId: "codex-cli:gpt-b", providerId: "codex-cli", modelId: "gpt-b", capabilities: ["code"], priority: 1, workerOnly: true };
+  const api: AgentRuntimeCandidate = { runtimeId: "openai:gpt-code", providerId: "openai", modelId: "gpt-code", capabilities: ["code"], priority: 2 };
+  const router = new RuntimeRouter({ candidates: [codexA, codexB, api], health, cliWorkerDriver: true });
+
+  // The driver's failOver path: the failure goes to the provider's health, then the router picks another runtime.
+  // The stated reset (Codex's "try again in 3 hours 12 minutes", CW2) sets the cooldown for every Codex runtime.
+  const stated = (3 * 60 + 12) * 60_000;
+  health.recordFailure(codexA.providerId, { kind: "usage_limit", message: "You've hit your usage limit.", retryAfterMs: stated });
+  const routed = router.selectWorker(["code"], new Set([codexA.runtimeId]));
+  assert.equal(routed.status, "assigned");
+  assert.equal(routed.runtime?.runtimeId, api.runtimeId, "the other Codex model is out of usage too: the API worker takes it");
+  assert.equal(health.get("codex-cli").cooldownUntil, now + stated);
+  assert.equal(router.selectWorker(["code"]).runtime?.runtimeId, api.runtimeId);
+
+  // With the API worker out too, nothing is left: the driver's all_worker_runtimes_unavailable pause.
+  health.recordFailure(api.providerId, { kind: "authentication", message: "invalid key" });
+  assert.equal(router.selectWorker(["code"], new Set([codexA.runtimeId])).status, "unavailable");
+
+  // No stated reset: the usage-limit default of one hour (§3.8), for both Codex runtimes again.
+  now += stated;
+  assert.equal(router.selectWorker(["code"], new Set([codexA.runtimeId])).runtime?.runtimeId, codexB.runtimeId);
+  health.recordFailure(codexB.providerId, { kind: "usage_limit", message: "You've hit your usage limit." });
+  assert.equal(health.get("codex-cli").cooldownUntil, now + 60 * 60 * 1_000);
+  assert.equal(health.isAvailable("codex-cli"), false);
+  assert.equal(router.selectWorker(["code"]).status, "unavailable");
+});

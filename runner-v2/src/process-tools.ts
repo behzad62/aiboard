@@ -258,7 +258,7 @@ async function executeProcess(
         ...(context.signal ? { signal: context.signal } : {}),
       },
     });
-    const failure = runFailure(result.process.outcome, timeoutMs);
+    const failure = runFailure(result.process.outcome, timeoutMs, result.process.cleanup);
     return await runResult(input, context, result, failure, retention, readTool);
   } catch (error) {
     // R4/R2: a launch the Windows Job host refused before anything started keeps its own code and words.
@@ -271,7 +271,11 @@ async function executeProcess(
   }
 }
 
-function runFailure(outcome: GenericProcessResult["outcome"], timeoutMs: number): { code: string; message: string } | undefined {
+function runFailure(outcome: GenericProcessResult["outcome"], timeoutMs: number, cleanup?: GenericProcessResult["cleanup"]): { code: string; message: string } | undefined {
+  // A launch that failed after its backend record existed (a command not found, a start the backend gave up on) is
+  // kept blocked for cleanup; the launch's own failure comes first, then why the record is kept.
+  if (outcome === "cleanup_failed" && cleanup && "code" in cleanup && cleanup.code === "launch_cleanup_blocked" && typeof cleanup.detail === "string" && cleanup.detail)
+    return { code: "process_cleanup_failed", message: `Process launch failed: ${cleanup.detail}` };
   switch (outcome) {
     case "launch_failed": return { code: "process_start_failed", message: "Process launch was not proven." };
     case "timed_out": return { code: "process_timeout", message: `Process exceeded ${timeoutMs} ms.` };

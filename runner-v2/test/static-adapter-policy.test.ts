@@ -186,12 +186,59 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
     ["CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW", "EXTENDED_STARTUPINFO_PRESENT"],
     "CreateProcess must not request CREATE_BREAKAWAY_FROM_JOB",
   );
-  // The only process attribute keeps a packaged root's descendants in the Job (DISABLE_PROCESS_TREE); never the
-  // breakaway-enabling values.
+  // Two process attributes, and only these: the desktop app policy keeps a packaged root's descendants in the Job
+  // (DISABLE_PROCESS_TREE; never the breakaway-enabling values), and the Job list creates the root inside the Job.
   assert.match(jobHost, /PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;/);
   assert.doesNotMatch(jobHost, /DESKTOP_APP_BREAKAWAY_ENABLE|DESKTOP_APP_BREAKAWAY_OVERRIDE/);
   assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteInt32\(policy, ([^)]+)\)/g)].map((match) => match[1]),
     ["PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE"]);
+  assert.match(jobHost, /PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;/);
+  assert.deepEqual([...jobHost.matchAll(/UpdateProcThreadAttribute\(attributeList, 0, new IntPtr\(([A-Z_]+)\)/g)].map((match) => match[1]),
+    ["PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY", "PROC_THREAD_ATTRIBUTE_JOB_LIST"]);
+  assert.deepEqual([...jobHost.matchAll(/Marshal\.WriteIntPtr\(jobs, ([^)]+)\)/g)].map((match) => match[1]), ["job"], "the Job list names this Job only");
+  // The Job list is left out only for an app execution alias or the program in a package's folder it names (Windows
+  // refuses it for a packaged program, and R3 pins that program as the root), or the stricter-only test fault that takes
+  // that Assign path; any other root (a plain symbolic link included) is created inside the Job.
+  assert.deepEqual([...jobHost.matchAll(/bool useJobList = ([^;]+);/g)].map((match) => match[1]),
+    ["!ForceAssignPath && !appExecLink && !packagedProgram"]);
+  assert.deepEqual([...jobHost.matchAll(/bool packagedProgram = ([^;]+);/g)].map((match) => match[1]),
+    ["launch.Application != null && InPackageFolder(launch.Application)"]);
+  // A package's folder is only one of the package roots Windows uses, never any folder named WindowsApps.
+  const packageFolder = /private static bool InPackageFolder\(string path\)\s*\{([\s\S]*?)\r?\n    \}\r?\n/.exec(jobHost)?.[1] ?? "";
+  assert.ok(packageFolder.includes(String.raw`root + @"\\program files\\windowsapps\\[^\\]+\\|" + root + @"\\windowsapps\\[^\\]+_[a-z0-9]{13}\\"`),
+    "anchored to <root>\\Program Files\\WindowsApps and a package folder on a volume's package root");
+  assert.ok(packageFolder.includes(String.raw`const string root = @"^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)?";`), "rooted at a drive, a share or the current drive");
+  // An alias is the tag check alone at its one call site, never widened there to any reparse point.
+  assert.deepEqual([...jobHost.matchAll(/bool appExecLink = ([^;]+);/g)].map((match) => match[1]),
+    ["launch.Application != null && IsAppExecLink(launch.Application)"]);
+  assert.equal([...jobHost.matchAll(/IsAppExecLink\(/g)].length, 2, "IsAppExecLink is defined once and called once");
+  assert.match(jobHost, /IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;/);
+  // Only that one reparse tag is an alias: any other reparse point (a plain symbolic link, a mount point) keeps the Job
+  // attribute. The check returns the tag comparison and nothing else that could say yes.
+  const aliasCheck = /private static bool IsAppExecLink\(string path\)\s*\{([\s\S]*?)\r?\n    \}\r?\n/.exec(jobHost)?.[1] ?? "";
+  assert.ok(aliasCheck, "IsAppExecLink is present");
+  assert.deepEqual([...aliasCheck.matchAll(/return ([^;]+);/g)].map((match) => match[1]),
+    ["false", "false", "unchecked((uint)Marshal.ReadInt32(buffer, 0)) == IO_REPARSE_TAG_APPEXECLINK", "false"]);
+  // Every create outside the Job is preceded by the host's written intent, and the non-interactive host (no event file)
+  // refuses such a create before it happens.
+  assert.match(jobHost, /if \(!useJobList\) EmitAssignIntent\(intentEventPath\);\s*if \(CreateSuspended\(launch,/);
+  assert.match(jobHost, /EmitAssignIntent\(intentEventPath\);\s*return CreateSuspended\(launch, [\s\S]*?job, false,/);
+  assert.match(jobHost, /environmentBlock, cwd, startup, job, null, injectedFault, out contained, out desktopPolicy, out processInfo\)/, "the non-interactive host passes no intent file");
+  assert.match(jobHost, /if \(String\.IsNullOrWhiteSpace\(eventPath\)\)\s*throw new InvalidOperationException\("The root would be created outside the Job/);
+  assert.deepEqual([...jobHost.matchAll(/ForceAssignPath = ([^;]+);/g)].map((match) => match[1]),
+    ["injectedFault == \"assign_path_exit_after_create\" || injectedFault == \"assign_path_exit_before_assign\""]);
+  // On the Assign path the suspended root's exact identity is written before the Assign.
+  const assignPath = /EmitAssignPending\(eventPath, processInfo\.dwProcessId, CreationTime\(processInfo\.hProcess\)\);[\s\S]*?AssignProcessToJobObject\(job, processInfo\.hProcess\)/;
+  assert.match(jobHost, assignPath);
+  assert.equal([...jobHost.matchAll(/AssignProcessToJobObject\(job, /g)].length, 1, "one Assign, after the exact identity");
+  // The supervisor's root ender. With only the intent, the window is bounded on both sides: created at or after the
+  // intent, and at or before the host's exit, narrowed to a reused pid's creation (a real pid reuse cannot be staged in
+  // a test). Each script stops on any error and answers "alive", never "gone".
+  const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
+  assert.match(supervisor, /if \(\$t -lt \$from -or \$t -gt \$to\) \{ continue \}; /);
+  assert.match(supervisor, /if \(\$t -lt \$to\) \{ \$to = \$t \}/);
+  assert.equal([...supervisor.matchAll(/\$ErrorActionPreference = 'Stop'; try \{ /g)].length, 2);
+  assert.equal([...supervisor.matchAll(/\} catch \{ 'alive: ' \+ \$_\.Exception\.Message; exit 0 \}/g)].length, 2);
   // 0x1000 is also JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK's value: here it is only an OpenProcess access right.
   assert.deepEqual([...jobHost.matchAll(/\b0x1000\b/g)].length, 1);
   assert.match(jobHost, /private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;/);
@@ -206,14 +253,14 @@ test("R4: the Job host refuses a launch it cannot give the desktop app policy, b
   // A Windows checkout may have CRLF line endings; every pin here reads the source normalized.
   const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n");
   const start = jobHost.indexOf("private static bool StartSuspended(");
-  const end = jobHost.indexOf("return CreateProcess(", start);
-  assert.ok(start > 0 && end > start, "StartSuspended ends in its CreateProcess call");
+  const end = jobHost.indexOf("bool created = CreateProcess(", start);
+  assert.ok(start > 0 && end > start, "StartSuspended's CreateSuspended ends in its CreateProcess call");
   const body = jobHost.slice(start, end);
   assert.match(jobHost, /DESKTOP_APP_POLICY_MIN_BUILD = 15063;/);
   assert.match(jobHost, /public const string DesktopPolicyRefusalCode = "windows_job_desktop_policy_unavailable";/);
   assert.match(body, /bool policyRequired = DesktopAppPolicyExpected\(\);/);
   // Both failure paths (initialize and update) throw the coded refusal when the policy is required, before CreateProcess.
-  assert.equal([...body.matchAll(/if \(policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
+  assert.equal([...body.matchAll(/if \(!withPolicy && policyRequired\)\s+\{\s+failure = Marshal\.GetLastWin32Error\(\);\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
   assert.equal([...body.matchAll(/if \(attributeList == IntPtr\.Zero && policyRequired\)\s+throw new LaunchRefusedException\(DesktopPolicyRefusalCode,/g)].length, 1);
   assert.doesNotMatch(body, /CreateProcess\(/, "nothing is created before the policy is settled");
   // An unknown version (RtlGetVersion failing) expects the policy: fail closed. The structure is the Unicode one
@@ -225,12 +272,14 @@ test("R4: the Job host refuses a launch it cannot give the desktop app policy, b
   const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
   assert.match(supervisor, /backendFailure\.code = event\.code;/);
   assert.match(supervisor, /status\.errorCode = error\.code;/);
-  assert.match(supervisor, /if \(backendFailure && status\.status === "starting"\) \{\s+startupFailed\(backendFailure\);/);
+  assert.match(supervisor, /if \(backendFailure && !reportedStarted\) \{\s+startupFailed\(backendFailure\);/);
+  // The host's exit before its started line is answered with the host's own reported failure and code.
+  assert.match(supervisor, /if \(typeof backendFailure\?\.code === "string"\) status\.errorCode = backendFailure\.code;/);
   const tsHost = readFileSync(join(sourceRoot, "windows-job-process-host.ts"), "utf8");
-  assert.match(tsHost, /throw new WindowsJobHostError\(launchRefusalCode\(status\) \?\? "process_start_failed", message\)/);
-  // A failed start that holds evidence (a member event, or output that never settled) is cleanup-blocked with its exact
-  // record instead (fourth review, item 1).
-  assert.match(tsHost, /if \(status\.memberEvidence \|\| status\.status === "exited_unknown"\)\s+throw new WindowsJobStartBlockedError\(/);
+  assert.match(tsHost, /throw new WindowsJobHostError\(launchRefusalCode\(status\) \?\? "process_start_failed",/);
+  // A refused start is released on its proven stop and goes back with its code; every other failed start (one holding
+  // evidence included) fails with its exact record, which is never verified empty or released while evidence stands.
+  assert.equal([...tsHost.matchAll(/if \(refusalCodeOf\(error\) && await this\.releaseRefusedStart\((?:record|claimed), input\)\) throw error;\s+throw new WindowsJobStartFailedError\(/g)].length, 2);
 });
 
 // R2: the Job's own membership messages, never a host census (DECISION 2026-09-19 §8.1, §14.1).
@@ -241,7 +290,9 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   // Both launches watch from before the root joins: the port is associated right after the Job is made, and the root
   // is named before AssignProcessToJobObject.
   assert.equal([...jobHost.matchAll(/SetKillOnClose\(job\);\s+watch = MembershipWatch\.Start\(job, /g)].length, 2);
-  assert.equal([...jobHost.matchAll(/watch\.SetRoot\([^;]+;\s+if \(!AssignProcessToJobObject\(job, processInfo\.hProcess\)\)/g)].length, 2);
+  assert.equal([...jobHost.matchAll(/watch\.SetRoot\(processInfo\.dwProcessId, /g)].length, 2);
+  assert.match(jobHost, /watch\.SetRoot\([^;]+;\s+if \(!contained\)\s+\{\s+\/\/ The Assign path[\s\S]*?AssignProcessToJobObject\(job, processInfo\.hProcess\)/);
+  assert.match(jobHost, /watch\.SetRoot\([^;]+;\s+\/\/ Only the interactive host[^\n]*\n[^\n]*\n\s+if \(!contained\)\s+throw/);
   // Every terminal event the host writes itself comes after the watch has settled.
   assert.equal([...jobHost.matchAll(/watch\.Settle\(\);\s+(?:Emit|EmitLsp)\((?:eventPath, )?"natural_stopped"/g)].length, 2);
   assert.match(jobHost, /TerminateAndProve\(job, deadline\);\s+watch\.Settle\(\);\s+Emit\("stopped"/);
@@ -264,8 +315,8 @@ test("R2: the Job host watches the Job's membership messages and a packaged memb
   // An interactive host that ended with neither a natural stop (the only settle) nor a stop the Runner requested never
   // settled its watch: evidence, on both ways the supervisor records the end. Before its started line too, unless it was
   // never sent its workload or reported that no process was created ("launched": false, written only then).
-  assert.match(supervisor, /if \(!config\?\.interactive \|\| naturalStopSeen \|\| interactiveTerminationRequested \|\| unsettledWatchRecorded\) return;\s+if \(!workloadStarted && \(!workloadDelivered \|\| launchNotCreated\)\) return;\s+unsettledWatchRecorded = true;\s+recordMemberEvidence\(/);
-  assert.match(supervisor, /if \(config\?\.interactive && status\.status === "starting" && workloadDelivered && !interactiveTerminationRequested\) \{\s+startupFailed\(/);
+  assert.match(supervisor, /if \(!config\?\.interactive \|\| naturalStopSeen \|\| interactiveTerminationRequested \|\| unsettledWatchRecorded\) return;\s+if \(!reportedStarted && \(!workloadDelivered \|\| launchNotCreated\)\) return;\s+unsettledWatchRecorded = true;\s+recordMemberEvidence\(/);
+  assert.match(supervisor, /if \(config\?\.interactive && !reportedStarted && workloadDelivered && !interactiveTerminationRequested\) \{\s+startupFailed\(/);
   assert.equal([...supervisor.matchAll(/^\s+workloadDelivered = true;$/gm)].length, 2);
   assert.match(jobHost, /if \(processInfo\.hProcess == IntPtr\.Zero\) line = line\.Substring\(0, line\.Length - 1\) \+ ",\\"launched\\":false\}";/);
   assert.match(jobHost, /\$launchedField = if \(\$runInteractiveEntered\) \{ '' \} else \{ ',"launched":false' \}/);

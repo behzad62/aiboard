@@ -194,6 +194,18 @@ export class SqliteEvidenceStore implements ExtendedEvidenceStore {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new Error("Evidence limit must be from 1 to 1000.");
     }
+    if (input.taskId && input.attempt !== undefined) {
+      // A store opened before the attempt column existed has no record of any attempt.
+      if (!this.hasAttemptColumn()) return [];
+      const newest = this.database
+        .prepare(
+          `SELECT ${this.selectColumns()}
+           FROM evidence_records WHERE run_id = ? AND task_id = ? AND attempt = ?
+           ORDER BY sequence DESC LIMIT ?`
+        )
+        .all(input.runId, input.taskId, input.attempt, limit) as unknown as EvidenceRow[];
+      return newest.reverse().map(decode);
+    }
     const rows = input.taskId
       ? this.database
           .prepare(

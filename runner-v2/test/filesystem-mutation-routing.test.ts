@@ -22,7 +22,7 @@ const privateOwners = new Set([
   // with an empty work/ folder, writes the fixed result.schema.json beside work/, and removes that one Test folder after
   // a verified stop (kept after an unverified one). Every name is Runner-built; none is model- or caller-selected.
   "cli-worker-detection.ts",
-  "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "command-evidence-identity.ts", // private GIT_INDEX_FILE snapshots under attested run root outside cwd; separate index per capture, cleans only created tmp.
+  "artifact-store.ts", "bounded-output-spool.ts", "browser-tools.ts", "cli.ts", "command-evidence-identity.ts", // private GIT_INDEX_FILE snapshots under attested run root outside cwd; separate index per capture, cleans only created tmp. CW6 (filesystem-owner-review-2026-11-18-cw6.md): the same private index for restoring a worktree to a captured tree after a CLI re-run; the worktree itself is written only by Git.
   "durable-process-store.ts",
   // Reviewed again 2026-11-17 (docs/runner-v2/filesystem-owner-review-2026-11-17-cw1.md): besides its envelope it now
   // replaces the fixed sibling cli-worker-configs.json (plain JSON, no secret) through the same exclusive 0600
@@ -87,7 +87,9 @@ const privateOwners = new Set([
   "playwright-cli.ts",
   // Reviewed 2026-11-18 (docs/runner-v2/filesystem-owner-review-2026-11-18-cw5.md): a CLI worker session's folder
   // state/cli-workers/<run>/<session> from Runner ids, holding the result schema, Codex's -o file (removed before each
-  // launch) and the Runner's exclusive (wx) digested result record of each CLI run.
+  // launch) and the Runner's exclusive (wx) digested result record of each CLI run. CW6 (…-2026-11-18-cw6.md): plus
+  // fix-round.json (the attempt's pending fix round) and reruns-pending.json (the tree the CLI left, while its re-runs
+  // run), in the same folder.
   "cli-worker-runtime.ts",
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.

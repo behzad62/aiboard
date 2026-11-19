@@ -385,6 +385,8 @@ test("CW5: a CLI worker's owner gets AIBOARD_MCP_DEPTH at the local limit; other
   const cli = read("cli", { AIBOARD_MCP_DEPTH: "0" });
   assert.equal(cli.AIBOARD_MCP_DEPTH, String(LOCAL_MCP_DEPTH_LIMIT), "Runner authority wins over a caller's value");
   assert.equal(cli.PLAYWRIGHT_CLI_SESSION, "t-cli", "the Playwright CLI values stay beside the depth");
+  assert.equal(cli.AIBOARD_CLI_WORKER, "1", "CW8: the guard's marker for a CLI worker's processes");
+  assert.equal(read("api").AIBOARD_CLI_WORKER, undefined);
   assert.equal((cli.PATH ?? cli.Path)!.split(process.platform === "win32" ? ";" : ":")[0], "/pw/bin");
   assert.equal(read("api").AIBOARD_MCP_DEPTH, "1");
   owners.release({ runId: "r", sessionId: "cli" });

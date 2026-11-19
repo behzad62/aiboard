@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
 
 import {
+  failedLaunchIdentity,
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   type ProcessBackend,
@@ -118,6 +119,11 @@ for (const fault of ["desktop_policy_initialize", "desktop_policy_update", "memb
     // CreateProcess never ran: the workload left no trace, and the leftover guard (after) finds no live host or child.
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(existsSync(marker), false, "the refused workload must never have started");
+    // Every terminal status of the refused start carries the refusal's code, the one written at the host's exit
+    // included: a launcher that acts on the first terminal status it reads keeps the code, not a generic start failure.
+    const terminal = supervisorStatusLines(join(root, "job-host")).filter((line) => line.status === "exited_unknown" || line.status === "stopped");
+    assert.ok(terminal.some((line) => line.status === "exited_unknown"), `the host's exit was recorded: ${JSON.stringify(terminal)}`);
+    assert.ok(terminal.every((line) => line.errorCode === code), `every terminal status keeps ${code}: ${JSON.stringify(terminal)}`);
   });
 }
 
@@ -296,12 +302,13 @@ test("R2: a host that ends without settling its watch leaves the Job unverified 
 // The started line cannot be written either (started_emit_unwritable, stricter only): the host resumes the workload,
 // fails to write started for the write's retry window, and ends with no line at all. It ended before reporting that its
 // workload started, with no stop request and no report that it created no process, so the launch fails and the
-// supervisor keeps the unsettled watch as evidence; never a clean, releasable stop. The failure is the launch blocker
-// shape with the exact record (no root pid), so the durable runtimes keep it cleanup-blocked.
+// supervisor keeps the unsettled watch as evidence; never a clean, releasable stop. The failure is a failed start with
+// its exact record (no root pid): the record is never verified empty or released while its evidence stands, so the
+// durable runtimes keep it cleanup-blocked.
 const blockedStart = (message: RegExp) => (error: unknown) => {
-  const blocked = error as { code?: unknown; launchResult?: { opaqueIdentity?: unknown; rootPid?: unknown } };
-  return blocked.code === "native_process_launch_cleanup_blocked" && typeof blocked.launchResult?.opaqueIdentity === "string" &&
-    blocked.launchResult.rootPid === undefined && message.test((error as Error).message);
+  const identity = failedLaunchIdentity(error);
+  return (error as { code?: unknown }).code === "process_launch_failed_with_identity" && typeof identity?.opaqueIdentity === "string" &&
+    identity.rootPid === undefined && message.test((error as Error).message);
 };
 test("R2: a host that ends before its started line fails the launch and keeps evidence", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
   const { root, launch } = setup("started-unwritable", "started_emit_unwritable");

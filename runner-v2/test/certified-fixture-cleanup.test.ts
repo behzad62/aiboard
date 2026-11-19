@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
+import { finalizeExpectingUnverifiedCleanup as finalizeCertifiedFixture } from "./support/certified-fixture-cleanup.js";
 
 const settle = (promise: Promise<void>) => promise.then(
   () => ({ rejected: false as const }), (reason: unknown) => ({ rejected: true as const, reason }),

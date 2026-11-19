@@ -20,7 +20,8 @@ export function createStreamingRequestOperation(input: Readonly<{
   executionState?: { active: boolean };
   retainOwnership?(timeoutMs: number): void;
   assert(authorization: SessionOperationAuthorization, expected: OperationAuthorizationAssertion): void;
-  write(payload: Uint8Array, timeoutMs: number, assertCurrent: () => void): Promise<void>;
+  /** `signal` (the request's own cancellation or deadline) ends the write's drain wait, never its admission. */
+  write(payload: Uint8Array, timeoutMs: number, assertCurrent: () => void, signal?: AbortSignal): Promise<void>;
   waitForOutput(signal: AbortSignal): Promise<boolean>;
   deliver(authorization: SessionOperationAuthorization, expected: OperationAuthorizationAssertion,
     deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>, assertCurrent: () => void): Promise<boolean>;
@@ -79,7 +80,7 @@ export function createStreamingRequestOperation(input: Readonly<{
           writes++;
           if (operation === "request") mcpCancellation = mcpCancellationFor(payload);
         }
-        await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent));
+        await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent, combined));
         assertCurrent();
         if (!cancellation) requestAcknowledged = true;
       },

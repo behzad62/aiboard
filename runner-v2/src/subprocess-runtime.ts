@@ -38,6 +38,7 @@ import {
   adoptProcessBackendAfterRestart,
   assertProcessBackendRegistryAuthority,
   parseProcessEmptyVerification,
+  failedLaunchIdentity,
   parseProcessLaunchResult,
   parseProcessObservation,
   parseProcessReconciliation,
@@ -653,6 +654,17 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
       throw error;
     }
+    // A caller that gave the invocation up before its claim (a tool call the broker stopped waiting for while it was
+    // still on its way here, a cancelled attempt) never gets a launch, so nothing may start after the caller's stop
+    // proof read this invocation as absent: the claim is settled as never launched, before any backend effect. The
+    // launch callback checks again right before backend.launch, for a stop during the awaits in between.
+    if (request.signal?.aborted) {
+      await this.failBeforeLaunch(record, output, "Cancelled before launch: the caller's signal was aborted.");
+      throw new SubprocessRuntimeError(
+        "launch_not_proven",
+        "The invocation was cancelled before its launch; nothing was started.",
+      );
+    }
     let preparedEnvironment;
     try {
       preparedEnvironment = this.options.environments.prepare({
@@ -717,6 +729,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     const reuseMarker = Symbol("no-launch-evidence-reuse");
     const stopPromise = this.stopTrigger(request);
+    // A stop that lands while the backend still waits for its workload to start cancels that wait.
+    const launchCancel = new AbortController();
     const launchPromise = this.fencedEffect(record.invocationId, (fence) =>
       this.options.environments.withChildEnvironment(
         preparedEnvironment.capability,
@@ -730,16 +744,22 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
             request.assertReuseAuthority?.();
             this.assertFence(record.invocationId, fence);
             if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) throw new Error("Exact reuse/execution authority lost before backend launch.");
+          } else if (request.signal?.aborted || this.current(record.invocationId).stopIntent || (request.deadline && this.options.clock.now().getTime() >= request.deadline.getTime()) || (grant.expiresAt && this.options.clock.now().getTime() >= Date.parse(grant.expiresAt))) {
+            // A fresh launch the caller gave up during the awaits since the claim (the backend probe, the prepared
+            // environment's callback) never starts: the stop race would only stop it after it ran. Settled as never
+            // launched below.
+            throw new Error("Cancelled, stopped or expired before backend launch; nothing was started.");
           }
-          return await selected.backend.launch(
-            deepFreeze({
+          return await selected.backend.launch(Object.freeze({
+            ...deepFreeze({
               intent: request.intent,
               grant,
               environment: snapshotChildEnvironment(environment),
               outputOwnerId: record.outputOwnerId,
               fence,
             }),
-          );
+            signal: launchCancel.signal,
+          }));
         },
       ),
     );
@@ -791,6 +811,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     if (first.kind === "stop") {
       record = this.requestStopLatest(record.invocationId, first.stop.reason);
+      launchCancel.abort();
       try {
         rawLaunch = await launchPromise;
         if (isReuse(rawLaunch)) {
@@ -798,6 +819,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           return resultFromRecord(this.current(record.invocationId));
         }
       } catch (error) {
+        // A start this stop cancelled that names the exact identity it created: the stop goes on with that identity
+        // (bound, observed, verified empty and released) like any stopped process, never "nothing was launched".
+        const identity = failedLaunchIdentity(error);
+        if (identity) rawLaunch = identity;
+        else {
         const blocked = recoverableLaunchBlocker(error);
         if (blocked)
           return await this.persistLaunchCleanupBlocker(record, output, selected, blocked);
@@ -811,6 +837,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           "Process launch was not proven.",
           { cause: error },
         );
+        }
       }
     } else rawLaunch = first.value;
     let launch;
@@ -2549,8 +2576,11 @@ function recoverableLaunchBlocker(error: unknown): {
   const code = descriptors.code;
   const launchResult = descriptors.launchResult;
   const message = descriptors.message;
+  // A failed launch that names the exact identity it created (process_launch_failed_with_identity) is kept the same
+  // way: bound, reconciled and verified, never closed as "nothing was launched".
   if (
-    !code || !("value" in code) || code.value !== "native_process_launch_cleanup_blocked" ||
+    !code || !("value" in code) ||
+    (code.value !== "native_process_launch_cleanup_blocked" && code.value !== "process_launch_failed_with_identity") ||
     !launchResult || !("value" in launchResult)
   ) return undefined;
   const launch = parseProcessLaunchResult(launchResult.value);

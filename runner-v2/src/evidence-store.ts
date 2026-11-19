@@ -40,7 +40,15 @@ export interface CommandEvidenceFact {
    * and on commands that named no outputs.
    */
   outputs?: import("./command-output-files.js").CommandOutputCapture;
+  /**
+   * CW6: who asked for the run, when it was not the actor's own call. `runner_rerun_of_cli_claim`: the Runner re-ran
+   * a check a CLI worker reported, as that worker (CLI workers plan §3.6). Absent on every other command.
+   */
+  source?: CommandEvidenceSource;
 }
+
+export const RUNNER_RERUN_OF_CLI_CLAIM = "runner_rerun_of_cli_claim";
+export type CommandEvidenceSource = typeof RUNNER_RERUN_OF_CLI_CLAIM;
 
 export interface BrowserSnapshotEvidenceFact {
   kind: "browser_snapshot";
@@ -99,7 +107,7 @@ export function evidenceFactSummary(fact: EvidenceFact): string {
       // T10 (M7): name the check (label), the argv, and the true outcome so
       // the Architect can tell a test run from a lint run without
       // re-inspection. Timeouts and signals are not "exited null".
-      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}${commandOutputsSummary(fact)}`;
+      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}${commandOutputsSummary(fact)}${fact.source === RUNNER_RERUN_OF_CLI_CLAIM ? "; the Runner's re-run of a CLI worker's check" : ""}`;
     case "browser_snapshot":
       return `browser snapshot "${fact.title}" at ${fact.url}`;
     case "browser_screenshot":
@@ -149,6 +157,11 @@ export interface RecordEvidenceInput {
 export interface ListEvidenceInput {
   runId: string;
   taskId?: string;
+  /**
+   * With `taskId`: only that attempt's records, and the newest `limit` of them (still oldest first), so a long task
+   * never pushes its latest attempt's records past the limit.
+   */
+  attempt?: number;
   limit?: number;
 }
 

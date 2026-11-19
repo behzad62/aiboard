@@ -9,6 +9,8 @@ export async function withInspectionFixture(input: Readonly<{
   cleanupWorkloads(): Promise<void>;
   certifyWorkloads(): Promise<void>;
   removeRoot(): void | Promise<void>;
+  /** Passed to finalizeCertifiedFixture: the test makes this cleanup fail on purpose and asserts it. */
+  expectUnverifiedCleanup?: boolean;
 }>): Promise<void> {
   let inspection: ((absoluteDeadline: number) => Promise<void>) | undefined;
   input.registerCleanup(cleanup => {
@@ -31,5 +33,6 @@ export async function withInspectionFixture(input: Readonly<{
     },
     certify: async () => undefined,
     removeRoot: input.removeRoot,
+    ...(input.expectUnverifiedCleanup === true ? { expectUnverifiedCleanup: true } : {}),
   });
 }

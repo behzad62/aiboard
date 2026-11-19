@@ -21,6 +21,15 @@ public static class ManagedProcessJobHost
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
     private const int PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY = 0x00020012;
+    private const int PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D;
+    private const uint IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;
+    private const uint FSCTL_GET_REPARSE_POINT = 0x000900A8;
+    private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
+    private const uint FILE_SHARE_DELETE_FOR_REPARSE = 0x00000004;
+    // Stricter-only test fault (assign_path_exit_after_create): the launch takes the Assign path, as an app execution
+    // alias does. One launch per host, so a static is enough.
+    private static bool ForceAssignPath;
     private const int PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE = 0x00000002;
     private const uint STARTF_USESTDHANDLES = 0x00000100;
     private const uint FILE_APPEND_DATA = 0x00000004;
@@ -242,6 +251,29 @@ public static class ManagedProcessJobHost
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr OpenReparsePoint(
+        string name,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flags,
+        IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(IntPtr device, uint code, IntPtr inBuffer, uint inSize,
+        IntPtr outBuffer, uint outSize, out uint returned, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint ResumeThread(IntPtr thread);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -293,6 +325,7 @@ public static class ManagedProcessJobHost
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
         MembershipWatch watch = null;
         bool desktopPolicy = false;
+        bool contained = false;
         try
         {
             job = CreateJobObject(IntPtr.Zero, null);
@@ -326,13 +359,21 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
+            // No intent event file: a root that would be created outside the Job is refused before it is created.
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, injectedFault, out desktopPolicy, out processInfo))
+                environmentBlock, cwd, startup, job, null, injectedFault, out contained, out desktopPolicy, out processInfo))
                 ThrowWin32("CreateProcess");
+            // The watch learns the root right after its create, before any Assign. Inside the Job (JOB_LIST) the root's
+            // membership message may be handled first: the root is then identified like any member, which reports nothing
+            // for an unpackaged root. Windows refuses the Job attribute for a packaged root (measured with Store pwsh, both
+            // through its alias and at its target), so such a root takes the Assign path, where this runs before it joins;
+            // were a packaged root ever created inside the Job, it would be reported as evidence (the stop fails closed).
             int rootPackageResult;
             watch.SetRoot(processInfo.dwProcessId, PackageFullNameOf(processInfo.hProcess, out rootPackageResult), desktopPolicy, injectedFault);
-            if (!AssignProcessToJobObject(job, processInfo.hProcess))
-                ThrowWin32("AssignProcessToJobObject");
+            // Only the interactive host (every production launch) takes the Assign path (StartSuspended refuses it
+            // above); this stays as a second check, and the finally terminates such a root.
+            if (!contained)
+                throw new InvalidOperationException("The root was created outside the Job; only the interactive host assigns such a root.");
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
@@ -412,6 +453,9 @@ public static class ManagedProcessJobHost
         }
         finally
         {
+            // A root created outside the Job (only where JOB_LIST is unavailable) that never got into it: it is still
+            // suspended, so it has run nothing; it is ended here rather than left behind.
+            if (processInfo.hProcess != IntPtr.Zero && !contained) TerminateProcess(processInfo.hProcess, 1);
             if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
             if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
             if (stdin != new IntPtr(-1)) CloseHandle(stdin);
@@ -423,7 +467,10 @@ public static class ManagedProcessJobHost
         }
     }
 
-    // Creates the root suspended (it joins the Job before it runs). A packaged (Microsoft Store) program, such as the
+    // Creates the root suspended and inside the Job (PROC_THREAD_ATTRIBUTE_JOB_LIST, Windows 10+), so it is in the Job
+    // from its first moment: a host killed at any point after CreateProcess leaves nothing behind (kill-on-close).
+    // Where that attribute is unavailable, inJob is false and the caller assigns it before it runs, and ends it on
+    // any failure first. A packaged (Microsoft Store) program, such as the
     // Store's pwsh, has its children created by default outside the desktop app environment, by a broker, so they leave
     // this Job and outlive a stop. The desktop app policy keeps the root's process tree inside: measured 2026-11-10 with
     // Store pwsh 7.6.9 starting node, node stayed in the Job and died with it. It does not reach a packaged program a
@@ -440,22 +487,120 @@ public static class ManagedProcessJobHost
         IntPtr environmentBlock,
         string cwd,
         STARTUPINFO startup,
+        IntPtr job,
+        string intentEventPath,
         string injectedFault,
+        out bool inJob,
+        out bool desktopPolicy,
+        out PROCESS_INFORMATION processInfo)
+    {
+        // An app execution alias (IO_REPARSE_TAG_APPEXECLINK, such as python3.exe or pwsh.exe under WindowsApps) names a
+        // packaged program, and Windows refuses the Job attribute for it (ERROR_ACCESS_DENIED), both through the alias
+        // and at the program the alias names (measured 2026-11-19 with Store pwsh 7.7.0). After that refusal the Job
+        // refuses the retried root as well. So such a root takes the Assign path: created suspended, its exact identity
+        // reported, then assigned. The program the alias names (the one R3 pins as the root, in a package's folder) takes
+        // it too. Any other reparse point (a plain symbolic link) keeps the Job attribute.
+        bool appExecLink = launch.Application != null && IsAppExecLink(launch.Application);
+        bool packagedProgram = launch.Application != null && InPackageFolder(launch.Application);
+        bool useJobList = !ForceAssignPath && !appExecLink && !packagedProgram;
+        bool triedJobList;
+        // A root created outside the Job lives there until it is assigned. Before such a create, the host's intent (its
+        // own pid and creation time, and the time now) is written, so that if this host dies before it reports the
+        // root's identity, its supervisor can end exactly the host's child created after that time.
+        if (!useJobList) EmitAssignIntent(intentEventPath);
+        if (CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
+            job, useJobList, injectedFault, out triedJobList, out inJob, out desktopPolicy, out processInfo))
+            return true;
+        if (!triedJobList) return false;
+        // Any other refusal with the root inside the Job: created as before. If the Job then refuses the root, the
+        // launch fails and the suspended root is terminated (the callers' finally), never left outside the Job.
+        EmitAssignIntent(intentEventPath);
+        return CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
+            job, false, injectedFault, out triedJobList, out inJob, out desktopPolicy, out processInfo);
+    }
+
+    // Whether the path is a program in a Microsoft Store package's folder, anchored to the package roots Windows uses, as
+    // the Runner's PATH filter is (child-environment.ts, isWindowsAppsPathEntry): <root>\Program Files\WindowsApps\..., and
+    // a package's folder on another volume's package root, <root>\WindowsApps\<Name>_..._<PublisherId>\.... A packaged
+    // program anywhere else keeps the Job attribute, which Windows refuses, so its launch fails closed.
+    private static bool InPackageFolder(string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception) { return false; }
+        if (full.StartsWith(@"\\?\", StringComparison.Ordinal)) full = full.Substring(4);
+        const string root = @"^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)?";
+        return System.Text.RegularExpressions.Regex.IsMatch(full,
+            root + @"\\program files\\windowsapps\\[^\\]+\\|" + root + @"\\windowsapps\\[^\\]+_[a-z0-9]{13}\\",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    }
+
+    // Whether the path is an app execution alias: its reparse tag is IO_REPARSE_TAG_APPEXECLINK. A path whose reparse
+    // data cannot be read is not treated as one (its create with the Job attribute is then refused and fails closed).
+    private static bool IsAppExecLink(string path)
+    {
+        IntPtr handle = OpenReparsePoint(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE_FOR_REPARSE,
+            IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return false;
+        const int size = 16 * 1024;
+        IntPtr buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            uint returned;
+            if (!DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, IntPtr.Zero, 0, buffer, (uint)size, out returned, IntPtr.Zero) ||
+                returned < 8)
+                return false;
+            return unchecked((uint)Marshal.ReadInt32(buffer, 0)) == IO_REPARSE_TAG_APPEXECLINK;
+        }
+        catch (Exception) { return false; }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+            CloseHandle(handle);
+        }
+    }
+
+    // A created process's creation time (FILETIME ticks): with its pid, the exact identity of that process.
+    private static long CreationTime(IntPtr process)
+    {
+        long creation, exit, kernel, user;
+        if (!GetProcessTimes(process, out creation, out exit, out kernel, out user)) ThrowWin32("GetProcessTimes");
+        return creation;
+    }
+
+    private static bool CreateSuspended(
+        LaunchSpec launch,
+        StringBuilder commandLine,
+        ref SECURITY_ATTRIBUTES processAttributes,
+        ref SECURITY_ATTRIBUTES threadAttributes,
+        IntPtr environmentBlock,
+        string cwd,
+        STARTUPINFO startup,
+        IntPtr job,
+        bool useJobList,
+        string injectedFault,
+        out bool withJob,
+        out bool inJob,
         out bool desktopPolicy,
         out PROCESS_INFORMATION processInfo)
     {
         IntPtr attributeList = IntPtr.Zero;
         IntPtr policy = IntPtr.Zero;
+        IntPtr jobs = IntPtr.Zero;
+        inJob = false;
+        withJob = false;
+        desktopPolicy = false;
         try
         {
             bool policyRequired = DesktopAppPolicyExpected();
             IntPtr size = IntPtr.Zero;
-            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+            int attributeCount = useJobList ? 2 : 1;
+            InitializeProcThreadAttributeList(IntPtr.Zero, attributeCount, 0, ref size);
             int failure = Marshal.GetLastWin32Error();
             if (size != IntPtr.Zero && injectedFault != "desktop_policy_initialize")
             {
                 attributeList = Marshal.AllocHGlobal(size);
-                if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
+                if (!InitializeProcThreadAttributeList(attributeList, attributeCount, 0, ref size))
                 {
                     failure = Marshal.GetLastWin32Error();
                     Marshal.FreeHGlobal(attributeList);
@@ -466,26 +611,42 @@ public static class ManagedProcessJobHost
                 throw new LaunchRefusedException(DesktopPolicyRefusalCode,
                     "The Windows Job host could not build the process attribute list for the desktop app policy (Win32 " +
                     failure + "), so it refused the launch: without the policy a packaged program's children would leave the Job.");
+            bool withPolicy = false;
             if (attributeList != IntPtr.Zero)
             {
                 policy = Marshal.AllocHGlobal(4);
                 Marshal.WriteInt32(policy, PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE);
-                bool updated = injectedFault != "desktop_policy_update" &&
+                withPolicy = injectedFault != "desktop_policy_update" &&
                     UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
                         policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero);
-                if (!updated)
+                // R4: on a Windows that has the policy, a launch without it is refused before CreateProcess, whether or
+                // not the Job attribute is set (the finally frees the list).
+                if (!withPolicy && policyRequired)
                 {
                     failure = Marshal.GetLastWin32Error();
+                    throw new LaunchRefusedException(DesktopPolicyRefusalCode,
+                        "The Windows Job host could not set the desktop app policy (Win32 " + failure +
+                        "), so it refused the launch: without the policy a packaged program's children would leave the Job.");
+                }
+                // The root is created inside the Job (Windows 10+), so no moment exists in which it lives outside it:
+                // a host killed between CreateProcess and an AssignProcessToJobObject call would otherwise leave a
+                // suspended root behind, outside every Job.
+                if (useJobList)
+                {
+                    jobs = Marshal.AllocHGlobal(IntPtr.Size);
+                    Marshal.WriteIntPtr(jobs, job);
+                    withJob = UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_JOB_LIST),
+                        jobs, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero);
+                }
+                if (!withPolicy && !withJob)
+                {
+                    // Neither attribute was set (a Windows without the policy, on the Assign path): no list.
                     DeleteProcThreadAttributeList(attributeList);
                     Marshal.FreeHGlobal(attributeList);
                     attributeList = IntPtr.Zero;
-                    if (policyRequired)
-                        throw new LaunchRefusedException(DesktopPolicyRefusalCode,
-                            "The Windows Job host could not set the desktop app policy (Win32 " + failure +
-                            "), so it refused the launch: without the policy a packaged program's children would leave the Job.");
                 }
             }
-            desktopPolicy = attributeList != IntPtr.Zero;
+            desktopPolicy = withPolicy;
             STARTUPINFOEX extended = new STARTUPINFOEX();
             extended.StartupInfo = startup;
             uint creationFlags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
@@ -495,10 +656,12 @@ public static class ManagedProcessJobHost
                 extended.lpAttributeList = attributeList;
                 creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
             }
-            return CreateProcess(launch.Application, commandLine,
+            bool created = CreateProcess(launch.Application, commandLine,
                 ref processAttributes, ref threadAttributes,
                 true, creationFlags,
                 environmentBlock, cwd, ref extended, out processInfo);
+            inJob = created && withJob;
+            return created;
         }
         finally
         {
@@ -508,6 +671,7 @@ public static class ManagedProcessJobHost
                 Marshal.FreeHGlobal(attributeList);
             }
             if (policy != IntPtr.Zero) Marshal.FreeHGlobal(policy);
+            if (jobs != IntPtr.Zero) Marshal.FreeHGlobal(jobs);
         }
     }
 
@@ -849,8 +1013,12 @@ public static class ManagedProcessJobHost
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
         MembershipWatch watch = null;
         bool desktopPolicy = false;
+        bool contained = false;
         try
         {
+            // Stricter-only test fault: a host that takes longer to start than its launcher waits (a loaded host).
+            if (injectedFault == "slow_start_late_close") Thread.Sleep(30000);
+            ForceAssignPath = injectedFault == "assign_path_exit_after_create" || injectedFault == "assign_path_exit_before_assign";
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
@@ -882,17 +1050,60 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
+            // Stricter-only test fault (assign_path_exit_after_create): another child of this host, created before the
+            // intent, outside the Job, that stays alive 60 s; the supervisor must leave it alone. It is started through
+            // the shell, so it inherits none of this host's handles (its pipes stay the host's own).
+            if (injectedFault == "assign_path_exit_after_create")
+            {
+                System.Diagnostics.ProcessStartInfo sentinelStart = new System.Diagnostics.ProcessStartInfo(
+                    Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+                    "-NoLogo -NoProfile -NonInteractive -Command Start-Sleep 60");
+                sentinelStart.UseShellExecute = true;
+                sentinelStart.WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden;
+                System.Diagnostics.Process sentinel = System.Diagnostics.Process.Start(sentinelStart);
+                EmitLsp(eventPath, "fault_sentinel", (uint)sentinel.Id, null, 0, null);
+            }
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, injectedFault, out desktopPolicy, out processInfo))
+                environmentBlock, cwd, startup, job, eventPath, injectedFault, out contained, out desktopPolicy, out processInfo))
                 ThrowWin32("CreateProcess");
+            // Stricter-only test faults: the host dies right after CreateProcess, before resume, as a kill of the host
+            // would. Inside the Job (JOB_LIST) the Job's kill-on-close ends the root; on the Assign path the supervisor
+            // ends the host's child created after the written intent.
+            if (injectedFault == "host_exit_after_create" || (injectedFault == "assign_path_exit_after_create" && !contained))
+            {
+                EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
+                System.Diagnostics.Process.GetCurrentProcess().Kill();
+            }
+            // The watch learns the root right after its create, before any Assign. Inside the Job (JOB_LIST) the root's
+            // membership message may be handled first: the root is then identified like any member, which reports nothing
+            // for an unpackaged root. Windows refuses the Job attribute for a packaged root (measured with Store pwsh, both
+            // through its alias and at its target), so such a root takes the Assign path, where this runs before it joins;
+            // were a packaged root ever created inside the Job, it would be reported as evidence (the stop fails closed).
             int rootPackageResult;
             watch.SetRoot(processInfo.dwProcessId, PackageFullNameOf(processInfo.hProcess, out rootPackageResult), desktopPolicy, injectedFault);
-            if (!AssignProcessToJobObject(job, processInfo.hProcess))
-                ThrowWin32("AssignProcessToJobObject");
+            if (!contained)
+            {
+                // The Assign path: the suspended root lives outside the Job until it is assigned. Its exact identity
+                // (pid and creation time) is written first, so the supervisor can end exactly that process if this
+                // host dies before the Assign (a write that fails throws, and the finally terminates the root).
+                EmitAssignPending(eventPath, processInfo.dwProcessId, CreationTime(processInfo.hProcess));
+                // Stricter-only test fault: the host dies after it reported the root's identity, before the Assign.
+                if (injectedFault == "assign_path_exit_before_assign")
+                {
+                    EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
+                    System.Diagnostics.Process.GetCurrentProcess().Kill();
+                }
+                if (!AssignProcessToJobObject(job, processInfo.hProcess))
+                    ThrowWin32("AssignProcessToJobObject");
+                contained = true;
+            }
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
                 ThrowWin32("ResumeThread");
             CloseHandle(processInfo.hThread);
             processInfo.hThread = IntPtr.Zero;
+            // Stricter-only test fault: the workload runs (and may write output) while its started line is late, as on a
+            // loaded host; a launcher that gives up meanwhile aborts a start whose workload already ran.
+            if (injectedFault == "late_started_line") Thread.Sleep(30000);
             // Stricter-only test fault: the started line cannot be written. The workload runs for the write's retry
             // window (about a second, EmitLspLine) before the failure is thrown, and no later line is written either.
             if (injectedFault == "started_emit_unwritable")
@@ -986,6 +1197,9 @@ public static class ManagedProcessJobHost
         }
         finally
         {
+            // A root created outside the Job (only where JOB_LIST is unavailable) that never got into it: it is still
+            // suspended, so it has run nothing; it is ended here rather than left behind.
+            if (processInfo.hProcess != IntPtr.Zero && !contained) TerminateProcess(processInfo.hProcess, 1);
             if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
             if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
@@ -1300,6 +1514,28 @@ public static class ManagedProcessJobHost
             Console.Out.WriteLine(line);
             Console.Out.Flush();
         }
+    }
+
+    // The Assign path's intent, written before the root is created outside the Job: this host's pid and creation time,
+    // and the time now (FILETIME ticks, as strings: they exceed the integers a JSON reader keeps exactly). Without an
+    // event file (the non-interactive host) a root outside the Job is refused before it is created.
+    private static void EmitAssignIntent(string eventPath)
+    {
+        if (String.IsNullOrWhiteSpace(eventPath))
+            throw new InvalidOperationException("The root would be created outside the Job; only the interactive host assigns such a root.");
+        long hostCreation = CreationTime(GetCurrentProcess());
+        long now = DateTime.UtcNow.ToFileTimeUtc();
+        File.AppendAllText(eventPath, "{\"type\":\"assign_intent\",\"hostPid\":" + System.Diagnostics.Process.GetCurrentProcess().Id +
+            ",\"hostCreationTime\":\"" + hostCreation + "\",\"at\":\"" + now + "\"}" + Environment.NewLine, new UTF8Encoding(false));
+    }
+
+    // The Assign path's exact identity of the suspended root. The creation time is a string: FILETIME ticks exceed the
+    // integers a JSON reader keeps exactly.
+    private static void EmitAssignPending(string eventPath, uint pid, long creationTime)
+    {
+        if (String.IsNullOrWhiteSpace(eventPath)) throw new InvalidOperationException("The Assign path needs an event file.");
+        File.AppendAllText(eventPath, "{\"type\":\"assign_pending\",\"pid\":" + pid + ",\"creationTime\":\"" + creationTime + "\"}" +
+            Environment.NewLine, new UTF8Encoding(false));
     }
 
     private static void EmitLsp(string eventPath, string type, uint pid, uint? exitCode, uint active, string error)

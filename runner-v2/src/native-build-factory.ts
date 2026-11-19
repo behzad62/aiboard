@@ -2,7 +2,7 @@ import { createExtensionManagementTools } from "./extension-management-tools.js"
 import { wrapModelWithToolVisuals } from "./tool-visual-input.js";
 import { RunActivityBoard } from "./run-activity.js";
 import { projectTaskDecompositionObservability } from "./task-decomposition-observability.js";
-import { workingTreeForRunner } from "./command-evidence-identity.js";
+import { restoreWorkingTreeForRunner, workingTreeForRunner } from "./command-evidence-identity.js";
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
 import { openProvenSnapshotLinks } from "./proven-snapshot-links.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
@@ -95,7 +95,7 @@ import {
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
 import { checkToolLookupFor, createCheckToolLookup, mandatoryProjectCheckTools, type MandatoryCheckTools } from "./check-tool-lookup.js";
-import { isPlaywrightCliBrowser } from "./playwright-cli.js";
+import { isPlaywrightCliBrowser, playwrightCliSkillPath } from "./playwright-cli.js";
 import {
   collectEnvironmentInventory,
   inventoryCheckCommands,
@@ -258,6 +258,8 @@ import { composeRunnerProcessEnvironments, createChildEnvironmentFactory } from 
 import { resolveCliExecutable } from "./cli-worker-adapters.js";
 import { cliAttemptLimitMinutes, CLI_DEFAULT_MODEL_ID, isCliWorkerProviderId, type CliWorkerProviderId, type HomeCliWorkersV1 } from "./cli-worker-config.js";
 import { CliWorkerOwners, createManagedCliProcessLauncher, type CliWorkerRuntimeConfig } from "./cli-worker-runtime.js";
+import { createCliCheckRerunner, createCliOneShotSettlement } from "./cli-worker-evidence.js";
+import { createManagedCliBrowserSessions } from "./cli-worker-browser.js";
 import {
   createExecutionGrantAuthority,
   type ExecutionGrantAuthority,
@@ -1382,13 +1384,39 @@ export class NativeBuildFactory {
                 host: await this.cliWorkerLaunchHost(),
                 stateDirectory: this.options.stateDirectory,
                 captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
+                restoreTree: (cwd: string, treeId: string) => restoreWorkingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd, treeId),
+                // CW6 (§3.6): the Runner's re-runs of the checks a CLI reported, as that worker, through run_evidence_command.
+                rerunChecks: createCliCheckRerunner({
+                  git: gitContext,
+                  evidenceStore,
+                  artifacts: this.artifacts,
+                  execution: commandExecution,
+                  executionGrants,
+                  ledger,
+                  permissionProfile: spec.permissionProfile,
+                  ...(budgetLedger ? { budgetLedger } : {}),
+                  // VF2/VF4b: the lookup a final check makes, on the PATH the owner's launch searches.
+                  toolLookup: createCheckToolLookup({
+                    environment: () => this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment(),
+                    ...(this.options.executionHost && this.options.playwrightCli ? { processEnvironment: this.options.playwrightCli.environmentFor } : {}),
+                  }),
+                  captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
+                  restoreTree: (cwd: string, treeId: string) => restoreWorkingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd, treeId),
+                  ...(spec.benchmark ? { allowedCommands: spec.benchmark.allowedCommands, hiddenPaths: spec.benchmark.hiddenPaths } : {}),
+                  oneShotCommands: createCliOneShotSettlement(processRecoveryRuntime),
+                }),
+                // §3.6: a re-run is a one-shot command the owner's managed stop does not cover; a CLI attempt's stop proof
+                // requires the owner's one-shot commands settled in the run's subprocess store.
+                oneShotCommands: createCliOneShotSettlement(processRecoveryRuntime),
                 owners: cliWorkerOwners,
                 ...(budgetLedger ? { budgetLedger } : {}),
+                // CW8 (§3.10): the owner's Playwright CLI session, started before the CLI when the inventory recorded a
+                // browser, stopped with the owner, and its owner folder checked afresh after that stop.
                 ...(this.options.playwrightCli
-                  ? { browser: {
-                      checkAfterStop: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.checkOwnerBrowsers(owner),
-                      escapedPids: (owner: { runId: string; sessionId: string }) => this.options.playwrightCli!.knownEscapePids(owner),
-                    } }
+                  ? { browser: createManagedCliBrowserSessions({
+                      managedProcesses, executionGrants, permissionProfile: spec.permissionProfile,
+                      runs: this.options.playwrightCli, skillPath: playwrightCliSkillPath(),
+                    }) }
                   : {}),
               },
             },

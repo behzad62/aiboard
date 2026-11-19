@@ -12,7 +12,7 @@ import { boundedConverge } from "./support/qualification-harness.js";
 import { withWindowsInspectionQualification } from "./support/qualification-process-fixture.js";
 import { WindowsProcessBackend } from "../src/windows-process-backend.js";
 import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBackendBinding, type ProcessEffectFence } from "../src/process-backend.js";
-import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
+import { InteractiveInputRefusedError, type BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
 import { createPortableProcessChannelProvider, type PortableChannelAuthority } from "../src/portable-process-channel.js";
 import { retirePortableOutputAcknowledgement, runPortableFenceEffectSync, runPortableFenceSnapshot } from "../src/portable-process-protocol.mjs";
 import { OwnedFenceContentionError, OwnedFenceLockUnavailableError } from "../src/owned-fence-lock.mjs";
@@ -1063,6 +1063,168 @@ for (const outcome of ["acknowledged", "takeover", "takeover-absent", "failed", 
     }
   });
 }
+
+for (const settledFirst of [false, true]) {
+  test(`portable write stops waiting for its acknowledgement when the session stops${settledFirst ? ", keeping one that already landed" : ""}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "aiboard-portable-abandon-ack-"));
+    for (const directory of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, directory), { recursive: true });
+    writeOutputCheckpoint(root);
+    const effects: string[] = [];
+    const ackPath = join(root, "channel/ack/input-000000000001.json");
+    const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 5, clock: () => Date.now(),
+      authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live",
+        effect: async (kind, effect) => { effects.push(kind); return effect(); },
+        snapshot: immediateSnapshot,
+      }),
+    });
+    let channel: Awaited<ReturnType<typeof provider.acquire>> | undefined;
+    try {
+      channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+      const payload = Buffer.from("sent");
+      const stopping = new AbortController();
+      const startedAt = performance.now();
+      // The reader never drains, so no acknowledgement arrives before the 60 s bound: only the stop ends the wait.
+      const write = channel.write({ sequence: 1, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 60_000, signal: stopping.signal }, payload);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The supervisor's acknowledgement can land in the same instant: the final reconciliation still reports it.
+      if (settledFirst) writeFileSync(ackPath, JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, sequence: 1, status: "acknowledged" }));
+      stopping.abort();
+      if (settledFirst) assert.deepEqual(await write, { acknowledged: true, sequence: 1 });
+      else await assert.rejects(write, /acknowledgement was abandoned: the session is stopping/);
+      assert.ok(performance.now() - startedAt < 30_000, "the stop ended the wait, not the bound");
+      assert.equal(effects.filter((kind) => kind === "write").length, 1, "the write was admitted once and never re-sent");
+    } finally {
+      await channel?.detach();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+/** A fake supervisor-less channel: every effect runs, and `onEffect` sees each one after it ran. */
+async function inputAckFixture(label: string, onEffect: (kind: string, root: string) => void = () => {}) {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-portable-${label}-`));
+  for (const directory of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, directory), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  const effects: string[] = [];
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live",
+      effect: async (kind, effect) => { effects.push(kind); const result = effect(); onEffect(kind, root); return result; },
+      snapshot: immediateSnapshot,
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const write = (sequence: number, text: string, timeoutMs = 2_000, signal?: AbortSignal) => {
+    const payload = Buffer.from(text);
+    return channel.write({ sequence, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs, ...(signal ? { signal } : {}) }, payload);
+  };
+  const inputAck = (sequence: number, status: "acknowledged" | "failed", owner: ProcessEffectFence = fence) =>
+    writeFileSync(join(root, `channel/ack/input-${String(sequence).padStart(12, "0")}.json`),
+      JSON.stringify({ nonce: "nonce", ownerId: owner.ownerId, fencingToken: owner.fencingToken, sequence, status }));
+  /** What the supervisor does when it settles a command: it publishes the proof and retires the command file. */
+  const settle = (sequence: number, status: "acknowledged" | "failed") => {
+    inputAck(sequence, status);
+    unlinkSync(join(root, `channel/input/input-${String(sequence).padStart(12, "0")}.json`));
+  };
+  return { root, channel, effects, write, inputAck, settle,
+    close: async () => { await channel.detach(); rmSync(root, { recursive: true, force: true }); } };
+}
+
+test("portable write consumes a failed input acknowledgement before it reports the failure", async () => {
+  const fixture = await inputAckFixture("failed-ack", (kind) => { if (kind === "write") fixture.settle(1, "failed"); });
+  try {
+    await assert.rejects(fixture.write(1, "sent"), /command failed/);
+    assert.deepEqual(fixture.effects, ["attach", "write", "ack_consume"]);
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), [], "the wait that observed the failed proof consumed it");
+  } finally { await fixture.close(); }
+});
+
+test("portable write is refused before admission while an earlier write of this fence is unsettled, and works once it settles", async () => {
+  const fixture = await inputAckFixture("unsettled-refusal");
+  try {
+    // The reader never drains the first write: its wait ends at the deadline, the command file stays.
+    await assert.rejects(fixture.write(1, "first", 50), /acknowledgement timed out/);
+    await assert.rejects(fixture.write(2, "retry"), (error: unknown) => error instanceof InteractiveInputRefusedError);
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/input")), ["input-000000000001.json"], "the refused write published nothing");
+    assert.equal(fixture.channel.nextWriteSequence(), 2, "a refused write spends no sequence");
+    assert.deepEqual(JSON.parse(readFileSync(join(fixture.root, "channel/client-state.json"), "utf8")),
+      { nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 2, nextWrite: 2, inputClosed: false });
+    // The reader drains it later: the late proof lands, no wait is left to consume it, and the next write is admitted.
+    fixture.settle(1, "acknowledged");
+    const next = fixture.write(2, "next");
+    await waitFor(() => existsSync(join(fixture.root, "channel/input/input-000000000002.json")));
+    fixture.settle(2, "acknowledged");
+    assert.deepEqual(await next, { acknowledged: true, sequence: 2 });
+    assert.deepEqual(readdirSync(join(fixture.root, "channel/ack")), ["input-000000000001.json"]);
+  } finally { await fixture.close(); }
+});
+
+test("portable write queues behind a prior owner's unsettled command, which the supervisor retires as stale", async () => {
+  const fixture = await inputAckFixture("prior-owner-command");
+  try {
+    const prior = { ownerId: "prior-owner", fencingToken: fence.fencingToken - 1 };
+    writeFileSync(join(fixture.root, "channel/input/input-000000000001.json"), JSON.stringify({ nonce: "nonce", ...prior, sequence: 1, type: "write" }));
+    writeFileSync(join(fixture.root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ...prior, nextCommand: 2, nextWrite: 2, inputClosed: false }));
+    const recovered = await (async () => {
+      await fixture.channel.detach();
+      const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+        authority: () => ({ directory: fixture.root, nonce: "nonce", fence, reattest: () => "live", effect: async (_kind, effect) => effect(), snapshot: immediateSnapshot }) });
+      return await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+    })();
+    try {
+      const payload = Buffer.from("fresh");
+      const write = recovered.write({ sequence: 2, byteLength: payload.length, digest: createHash("sha256").update(payload).digest("hex"), timeoutMs: 2_000 }, payload);
+      await waitFor(() => existsSync(join(fixture.root, "channel/input/input-000000000002.json")));
+      unlinkSync(join(fixture.root, "channel/input/input-000000000001.json"));
+      fixture.settle(2, "acknowledged");
+      assert.deepEqual(await write, { acknowledged: true, sequence: 2 });
+    } finally { await recovered.detach(); }
+  } finally { await fixture.close(); }
+});
+
+test("portable output settlement is not held by an input acknowledgement no wait consumed", async () => {
+  const fixture = await inputAckFixture("late-input-ack");
+  const unsubscribe = fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  try {
+    // A write's proof that landed after its wait ended, as after its deadline or a stop's abandonment.
+    fixture.inputAck(1, "acknowledged");
+    fixture.inputAck(2, "failed");
+    writeFileSync(join(fixture.root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 }));
+    const startedAt = performance.now();
+    assert.deepEqual(await fixture.channel.settleBackpressuredOutput(Date.now() + 5_000), { status: "settled" });
+    assert.ok(performance.now() - startedAt < 2_500, "settled at once, not at the deadline");
+  } finally { unsubscribe(); await fixture.close(); }
+});
+
+test("portable output settlement still waits for an output chunk the supervisor has not retired", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  try {
+    await fixture.atAck;
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    fixture.stop();
+    // The fixture clock stands at 1 000: this deadline is 300 ms of wall time away.
+    assert.deepEqual(await fixture.channel.settleBackpressuredOutput(1_300), { status: "blocked", reason: "deadline" });
+  } finally { await fixture.close(); }
+});
+
+test("portable output settlement still fails closed on a malformed input acknowledgement", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  try {
+    await fixture.atAck;
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata: fixture.metadata });
+    // Its sequence does not match its name: not evidence of anything, so settlement must not pass over it.
+    writeFileSync(join(fixture.root, "channel/ack/input-000000000001.json"),
+      JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, sequence: 2, status: "acknowledged" }));
+    fixture.stop();
+    assert.deepEqual(await fixture.channel.settleBackpressuredOutput(2_000), { status: "blocked", reason: "output_unaccounted" });
+  } finally { await fixture.close(); }
+});
 
 test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));

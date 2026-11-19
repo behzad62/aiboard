@@ -60,6 +60,14 @@ export type InteractiveProcessChannelErrorCode =
   | "session_released"
   | "input_unavailable";
 
+/**
+ * A stdin write refused before anything was admitted: no byte reached the process and no sequence was spent. Callers
+ * may report it as a certain refusal (never an unknown outcome), and the next write reuses the same sequence.
+ */
+export class InteractiveInputRefusedError extends Error {
+  constructor(message: string) { super(message); this.name = "InteractiveInputRefusedError"; }
+}
+
 export class InteractiveProcessChannelError extends Error {
   constructor(readonly code: InteractiveProcessChannelErrorCode, message: string) {
     super(message);
@@ -72,6 +80,12 @@ export interface InteractiveProcessWrite {
   readonly byteLength: number;
   readonly digest: string;
   readonly timeoutMs: number;
+  /**
+   * Ends the wait for the reader to drain this write early, as if its timeout had passed: the write then fails
+   * with an unknown outcome, never a guess. The session's stop aborts it so cleanup never waits for a slow reader.
+   * Admission itself is not cancelled. Channels that do not wait for a drain may ignore it.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface InteractiveProcessChannel {
