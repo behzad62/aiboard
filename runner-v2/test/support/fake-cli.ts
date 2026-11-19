@@ -69,12 +69,16 @@ export async function fakeGrandchildAlive(record: FakeCliRecord): Promise<boolea
   }
   if (process.platform !== "win32") return true;
   if (!record.grandchildToken) throw new Error("The fake recorded no grandchild token.");
-  // Async, so a slow query never blocks the event loop and node:test's own timeout still applies.
-  const { stdout: commandLine } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-    `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop).CommandLine`], { encoding: "utf8", windowsHide: true });
-  if (commandLine.includes(record.grandchildToken)) return true;
-  // Which of the two it was (a later process on the ID, or the grandchild gone between the calls), for the CI log.
-  console.error(`fakeGrandchildAlive: ID ${pid} answered without the grandchild's token; it now runs: ${commandLine.trim() ? JSON.stringify(commandLine.trim()) : "(no process)"}`);
+  // Async, so a slow query never blocks the event loop.
+  const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    `Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop | Select-Object Name, CommandLine | ConvertTo-Json -Compress`],
+  { encoding: "utf8", windowsHide: true });
+  const found = stdout.trim() ? JSON.parse(stdout) as { Name?: string | null; CommandLine?: string | null } : undefined;
+  if (found?.CommandLine?.includes(record.grandchildToken)) return true;
+  // Which of the two it was (a later process on the ID, or the grandchild gone between the calls), for the CI log. Only
+  // the name: another process's command line may hold anything.
+  const holder = !found ? "no process" : `${JSON.stringify(found.Name ?? "an unnamed process")}${found.CommandLine ? "" : " (command line unreadable)"}`;
+  console.error(`fakeGrandchildAlive: ID ${pid} answered without the grandchild's token; it now holds ${holder}`);
   return false;
 }
 

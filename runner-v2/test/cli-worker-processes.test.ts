@@ -39,7 +39,8 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
         async start(spec) {
           const began = Date.now();
           const started = await session.start(spec);
-          const name = `${input.purpose} ${spec.args.slice(2).join(" ")}`;
+          // The CLI's own argv, after the wrapper and the scenario; long arguments (the Test's schema) cut short.
+          const name = `${input.purpose} ${spec.args.slice(2).map((arg) => (arg.length > 40 ? `${arg.slice(0, 40)}…` : arg)).join(" ")}`;
           const startedAt = Date.now();
           running.set(name, startedAt);
           let stdoutChars = 0;
@@ -114,8 +115,10 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), windowsJobHost: sharedJobHost, ...PROCESS_HOST_FACTS });
   const notes: string[] = [];
   const trace = () => `\nprocesses:\n  ${notes.join("\n  ")}`;
-  // A step at its bound can outlast the test's own timeout; node:test then aborts this signal, and the trace still prints.
-  t.signal.addEventListener("abort", () => console.error(`the test was aborted${trace()}`), { once: true });
+  // A step at its bound can outlast the test's own timeout. node:test aborts this signal then, while the body is still
+  // pending, and also once any test ends, so it prints only while the body has not reached its finally.
+  let settled = false;
+  t.signal.addEventListener("abort", () => { if (!settled) console.error(`the test was aborted${trace()}`); }, { once: true });
   let bodyFailed = false;
   try {
     // The passing Test ends on its result event, so its deadline is only a bound; the hanging one waits it out.
@@ -186,6 +189,7 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     console.error(`the test failed${trace()}`);
     throw error;
   } finally {
+    settled = true;
     let closed = false;
     try {
       await host.close();
