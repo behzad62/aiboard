@@ -1160,6 +1160,47 @@ test("CW6 §3.6: a re-run whose stop is unproven holds the attempt; after retryS
   assert.equal(fixture.launcher.starts.length, 1, "no CLI is started again");
 });
 
+test("CW6 §3.6 B2: a held re-run whose one-shot command stays unsettled stays held across Resumes; once it settles, the attempt re-enters", async (t) => {
+  const fixture = await cliDriverFixture(t, "reruns-oneshot", { actions: [{ write: "value.txt", content: "two\n" }] });
+  // The subprocess store's record of the first re-run: cleanup_blocked from that re-run until the runtime's
+  // reconciliation settles it.
+  let blocked = false;
+  let checks = 0;
+  let entries = 0;
+  const driver = fixture.driver({
+    restoreTree: fixture.restoreTree,
+    oneShotCommands: async (owner) => {
+      checks += 1;
+      assert.deepEqual(owner, { runId: "run_1", sessionId: "worker:run_1:task_a:1", actor: { role: "worker", id: "worker_task_a_1" } });
+      return blocked ? "1 command(s) the Runner ran for this attempt are not proven stopped: inv-1 (cleanup_blocked, cleanup failed)" : undefined;
+    },
+    rerunChecks: async (input) => {
+      entries += 1;
+      if (entries > 1) return await fixture.runtime.rerunChecks!(input);
+      // A re-run whose terminate failed: the broker reports backend_unavailable, and the store holds it cleanup_blocked.
+      blocked = true;
+      throw Object.assign(new Error("The re-run of node --test ended without a record that its processes stopped (backend_unavailable)."), { code: "process_cleanup_unverified" });
+    },
+  });
+  const held = await driver.run(fixture.assignment);
+  assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+  assert.deepEqual((held as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_reruns_pending:task_a" });
+  assert.match((held as { reason: string }).reason, /inv-1 \(cleanup_blocked/, "the driver's own stop names the unsettled command");
+  // Each Resume retries the stop, and the unsettled command keeps it unproven: nothing re-enters.
+  for (let resume = 0; resume < 2; resume += 1) {
+    await assert.rejects(driver.retryStop(fixture.assignment), /not proven stopped: inv-1 \(cleanup_blocked/);
+  }
+  assert.equal(entries, 1);
+  blocked = false;
+  await driver.retryStop(fixture.assignment);
+  const resumed = await driver.run(fixture.assignment);
+  assert.equal(resumed.type, "submitted", JSON.stringify(resumed));
+  assert.equal(entries, 2);
+  assert.equal(readFileSync(join(fixture.assignment.workspacePath, "value.txt"), "utf8"), "two\n");
+  assert.equal(fixture.launcher.starts.length, 1, "no CLI is started again");
+  assert.ok(checks >= 4);
+});
+
 test("CW6 with CW8: a re-run browser session whose stop is unproven holds the attempt through the same re-entry", async (t) => {
   const fixture = await cliDriverFixture(t, "reruns-session-held", {
     actions: [{ write: "value.txt", content: "two\n" }],

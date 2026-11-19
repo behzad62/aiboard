@@ -280,6 +280,77 @@ describe("CW6 loop: re-runs, the fix round and its failures", { concurrency: CLI
     assert.deepEqual(records(h).map((record) => record.outcome), ["done", "failure", "done"]);
   });
 
+  test("a hold's wait is not the CLI's time: a fix round decided after a long hold runs inside what was left of the run's deadline", async (t) => {
+    const h = await harness(t, "evidence-held-deadline");
+    let offset = 0;
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "three\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] }),
+    ]);
+    const real = realRerunner(t, h, true);
+    let entries = 0;
+    const rerunChecks: CliCheckRerunner = async (input) => {
+      entries += 1;
+      if (entries === 1) throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+      return await real(input);
+    };
+    const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(h.state, "tree-index"), policyGit, treeId);
+    const deps = h.deps(launcher, { rerunChecks, restoreTree, now: () => Date.now() + offset });
+    const held = await runCliWorkerAttempt(deps, h.input());
+    assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+    // The owner's wait before the Resume: ten minutes, well past the run's 60 s limit (the harness's attemptLimitMs).
+    offset += 600_000;
+    const result = await runCliWorkerAttempt(deps, h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(launcher.starts.length, 2, "the fix round ran, not cli_attempt_deadline");
+  });
+
+  test("a criterion its re-run still cannot finish after the fix round is submitted with a Not verified concern, linked to its timed-out record", async (t) => {
+    const h = await harness(t, "evidence-not-verified");
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), actions: [{ write: "value.txt", content: "two\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])) }),
+    ]);
+    let evidenceId = "";
+    // Both entries' re-runs time out under the spent budget: the record exists, and it is a timeout, not a pass.
+    const cutShort: CliCheckRerunner = async (input) => {
+      const recorded = (await h.rerun(input)).criterionEvidenceLinks[0]!;
+      evidenceId = recorded.evidenceId;
+      return {
+        criterionEvidenceLinks: [], notRun: [{ what: "value check", why: "not finished: the task's validation budget left it 60 s" }],
+        reruns: [{
+          label: "value check", command: "node -e …", criterionIds: ["value"], status: "not_run", notRunReason: "validation_budget_spent",
+          detail: "not finished: the task's validation budget left it 60 s, and it timed out; not a failure",
+          evidenceId: recorded.evidenceId, artifactHashes: [...recorded.artifactHashes],
+        }],
+      };
+    };
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: cutShort }), h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(launcher.starts.length, 2, "the criterion got its fix round first");
+    if (result.type !== "submitted") return;
+    assert.ok(result.changeSet.unresolvedConcerns.some((concern) =>
+      concern.startsWith("Not verified by the Runner: criterion value (") && concern.includes(`evidence ${evidenceId}) is a timeout, not a pass.`)),
+    JSON.stringify(result.changeSet.unresolvedConcerns));
+    assert.deepEqual(result.changeSet.criterionEvidenceLinks?.map((link) => [link.criterionId, link.evidenceId]), [["value", evidenceId]]);
+  });
+
+  test("CW7's handoff goes to the call's first run only: the fix round resumes the session that already has it", async (t) => {
+    const h = await harness(t, "evidence-handoff-once");
+    const first = join(h.root, "fake", "handoff-first.json");
+    const second = join(h.root, "fake", "handoff-second.json");
+    const launcher = new SequenceLauncher([
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), record: first, actions: [{ write: "value.txt", content: "three\n" }] }),
+      h.launcher({ cli: "claude-code", stdout: claudeStream(h, doneWith([valueCheck("two")])), record: second, actions: [{ write: "value.txt", content: "two\n" }] }),
+    ]);
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: realRerunner(t, h, true) }),
+      h.input({ earlierWork: "The API worker changed value.txt to three." }));
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.match(stdinOf(first), /Earlier work on this task[\s\S]*The API worker changed value\.txt to three\./);
+    assert.ok(argvOf(second).includes("--resume"));
+    assert.doesNotMatch(stdinOf(second), /Earlier work on this task/);
+  });
+
   test("a Runner that stops before the fix round's launch runs it on its next entry, resuming the CLI's session with the fix round", async (t) => {
     const h = await harness(t, "evidence-fix-restart");
     const fixed = join(h.root, "fake", "fixed.json");

@@ -15,8 +15,10 @@
  *   fix round, and after it is submitted as not verified by the Runner, linked to the timed-out record.
  * - Files a re-run changed are restored right after it, so every check runs on, and the Runner submits, the tree the
  *   CLI left. A pass supports a criterion only when its record proves it ran on that tree.
- * - A re-run whose processes are not proven gone (its cleanup not verified, or a broker `tool_timeout`) throws a
- *   classified error (process-stop-proof.ts), never a result; the CLI loop holds the attempt (`cli_reruns_pending`).
+ * - A re-run whose processes are not proven gone throws a classified error (process-stop-proof.ts), never a result: a
+ *   cleanup not verified, any tool error but those that mean nothing started, or no evidence record. The CLI loop holds
+ *   the attempt (`cli_reruns_pending`), and its stop proof requires the owner's one-shot commands settled
+ *   (`createCliOneShotSettlement`).
  *
  * Which gaps send the CLI into its one fix round (CWD-3), and which fail the attempt, is `cliCheckDecision`, which the
  * CLI loop (cli-worker-runtime.ts) applies.
@@ -30,7 +32,7 @@ import type { ToolResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import type { CheckToolLookup } from "./check-tool-lookup.js";
-import type { CliCheckRerunner } from "./cli-worker-runtime.js";
+import type { CliCheckRerunner, CliWorkerOwner } from "./cli-worker-runtime.js";
 import type { CliWorkerCheckV1 } from "./cli-worker-result.js";
 import type { WorkingTreeIdentity } from "./command-evidence-identity.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -39,7 +41,7 @@ import { createEvidenceTools } from "./evidence-tools.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
-import { PLAYWRIGHT_CLI_OUTPUT_FOLDER } from "./playwright-cli.js";
+import type { ProcessRecoveryRuntime, RecoveryTarget } from "./process-recovery.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
@@ -107,6 +109,12 @@ export interface CliCheckRerunnerOptions {
   restoreTree: (cwd: string, treeId: string) => Promise<string[]>;
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
+  /**
+   * Why the owner's one-shot commands are not settled, or undefined (createCliOneShotSettlement). A re-run that ends in
+   * a tool error that does not mean "nothing started" is a refusal only when this proves nothing of it runs; without
+   * it, or when it does not, the re-run holds the attempt.
+   */
+  oneShotCommands?: (owner: Pick<CliWorkerOwner, "runId" | "sessionId">) => Promise<string | undefined>;
   clock?: () => string;
 }
 
@@ -220,7 +228,21 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
       });
       // A re-run whose processes are not proven gone throws before anything is restored: they may still write, and the
       // scheduler keeps the claim and pauses (#220); the next entry restores the tree the loop persisted.
-      const rerun = rerunFromResult(base, output, options.evidenceStore, owner.runId, taskId, timeoutMs, before, notRun);
+      let rerun: CliCheckRerun;
+      try {
+        rerun = rerunFromResult(base, output, options.evidenceStore, owner.runId, taskId, timeoutMs, before, notRun);
+      } catch (error) {
+        if (!(error instanceof CliRerunUnrecordedError)) throw error;
+        let unsettled: string | undefined;
+        try {
+          unsettled = options.oneShotCommands ? await options.oneShotCommands(owner) : "the Runner cannot check the commands it ran";
+        } catch (checkError) {
+          unsettled = `the commands the Runner ran could not be checked: ${bounded(checkError instanceof Error ? checkError.message : String(checkError))}`;
+        }
+        if (unsettled) throw new CliRerunStopUnprovenError(`${error.message} ${unsettled}`);
+        rerun = notRun(error.toolCode === "tool_cancelled" ? "cancelled" : "refused",
+          `not re-run: ${error.toolCode ?? "no evidence record"}: ${error.detail}`);
+      }
       // Every check runs on the tree the CLI left: files a re-run changed are put back before the next one runs.
       const after = await options.captureTree(workspace.path);
       if (after.status !== "known") throw new CliCheckRerunError(`The worktree's files could not be read after the re-run of ${base.label}, so the next check could not be proven to run on the tree the CLI left.`);
@@ -231,18 +253,12 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
         } catch (error) {
           throw new CliCheckRerunError(`The re-run of ${base.label} changed the worktree's files and they could not be restored: ${error instanceof Error ? error.message : String(error)}`);
         }
-        // CW8's browser output folder holds what a browser check keeps (a screenshot named in its `outputs`, already an
-        // artifact): restored like any file, but not a change to the CLI's work.
-        const work = paths.filter((path) => !isBrowserOutputPath(path));
-        for (const path of work) restored.add(path);
-        if (work.length > 0) {
-          rerun.changedFiles = work;
-          rerun.supports = false;
-          if (rerun.status === "passed") rerun.detail = `passed, but it changed ${work.length} file(s), so it supports nothing`;
-        } else if (rerun.status === "passed" && rerun.evidenceId && ranOnTreeBesideOutputs(options.evidenceStore, owner.runId, taskId, rerun.evidenceId, before)) {
-          rerun.supports = true;
-          rerun.detail = "exit 0";
-        }
+        // CW8's browser output folder (.aiboard-browser/) ignores itself, so what a browser check keeps there is never a
+        // change to the tree.
+        for (const path of paths) restored.add(path);
+        rerun.changedFiles = paths;
+        rerun.supports = false;
+        if (rerun.status === "passed") rerun.detail = `passed, but it changed ${paths.length} file(s), so it supports nothing`;
       }
       reruns.push(rerun);
     }
@@ -255,26 +271,54 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
   };
 }
 
-/** A path in the Playwright CLI output folder (CW8, playwright-cli.ts), as Git names it. */
-function isBrowserOutputPath(path: string): boolean {
-  return path === PLAYWRIGHT_CLI_OUTPUT_FOLDER || path.startsWith(`${PLAYWRIGHT_CLI_OUTPUT_FOLDER}/`);
-}
+/**
+ * The tool error codes that mean no process was started: the broker or the evidence tool refused the call before the
+ * execution (an approval or permission denial, a path denial, invalid arguments, no workspace, a WorkBench allowlist,
+ * no process runtime, no execution grant, no isolation for it, the tool budget). Only these are "not re-run: refused".
+ * Every other code, an unknown one included, may leave a process running (a broker `tool_timeout` stopped waiting for
+ * it, `backend_unavailable` and `identity_mismatch` could not observe or signal it, `tool_execution_failed` or
+ * `evidence_command_failed` threw around it, a `tool_cancelled` may come mid-run), so it holds the attempt (§3.6).
+ */
+const NOT_STARTED_CODES = new Set([
+  "approval_required", "permission_denied", "path_denied", "outside_only_here", "invalid_arguments", "invalid_arguments_json",
+  "workspace_required", "benchmark_command_denied", "process_runtime_unavailable", "execution_grant_unavailable",
+  "isolation_capability_unavailable", "budget_exhausted",
+]);
 
 /**
- * A re-run whose only change was to the browser output folder: its record proves it began on the tree the CLI left
- * (the tree changed during the command, from that tree), and the restore proved nothing else changed.
+ * §3.6: the owner's one-shot commands (the Runner's re-runs) whose subprocess records are not settled. A re-run is a
+ * one-shot command of the shared subprocess runtime, which the owner's `closeAgent` does not cover, so a stop proof of
+ * a CLI attempt (proveCliStop) also requires each of them settled: cleaned with its cleanup verified empty, or never
+ * launched, with no effect pending (the rule assertSubprocessCleanupSettled applies at run teardown). Read-only: the
+ * runtime's own reconciliation (a Runner restart) or the owner's process recovery settles a record; Resume checks again.
  */
-function ranOnTreeBesideOutputs(store: EvidenceStore, runId: string, taskId: string, evidenceId: string, treeBefore: string): boolean {
-  const fact = store.getByIds({ runId, taskId, ids: [evidenceId] })[0]?.fact;
-  const identity = fact?.kind === "command" ? fact.workingTreeIdentity : undefined;
-  return identity?.status === "unknown" && identity.reason === "tree_changed_during_command" && identity.capturedTreeId === treeBefore;
+export function createCliOneShotSettlement(
+  recovery: Pick<ProcessRecoveryRuntime, "list" | "listGradually">,
+): (owner: Pick<CliWorkerOwner, "runId" | "sessionId">) => Promise<string | undefined> {
+  return async (owner) => {
+    // listGradually shares a scan already in flight, which may have listed the rows before a re-run's record existed:
+    // the first call lets it finish, and the second is a scan that began after this check did.
+    let targets: readonly RecoveryTarget[] | undefined;
+    if (recovery.listGradually) {
+      await recovery.listGradually();
+      targets = await recovery.listGradually();
+    } else {
+      targets = recovery.list?.();
+    }
+    if (!targets) return "the Runner cannot list the commands it ran for this attempt, so their stop is not proven";
+    const open = targets.filter((target) => target.scope.kind === "subprocess" && target.scope.runId === owner.runId &&
+      target.scope.sessionId === owner.sessionId && !settledOneShot(target));
+    if (open.length === 0) return undefined;
+    const named = open.slice(0, 4).map((target) => `${target.scope.invocationId} (${target.scope.state}, cleanup ${target.cleanup.state})`).join(", ");
+    return `${open.length} command(s) the Runner ran for this attempt are not proven stopped: ${named}${open.length > 4 ? ", …" : ""}. A Runner restart reconciles them, or stop them with Process recovery; Resume checks again`;
+  };
 }
 
-/**
- * The tool error codes that leave a command's processes unproven gone (stableExecutionErrorCode, evidence-tools.ts),
- * and the broker's `tool_timeout`: the broker stopped waiting for the execution, which may still be running.
- */
-const STOP_UNPROVEN_CODES = new Set(["process_cleanup_unverified", "outcome_unknown", "cleanup_blocked", "tool_timeout"]);
+function settledOneShot(target: RecoveryTarget): boolean {
+  if (target.pendingEffects) return false;
+  if (target.scope.state === "cleaned") return target.cleanup.state === "verified_empty";
+  return !target.backend && (target.scope.state === "reused" || target.scope.state === "launch_not_proven") && target.cleanup.state === "not_required";
+}
 
 /** A re-run whose processes are not proven gone: classified as an unproven stop (process-stop-proof.ts). */
 export class CliRerunStopUnprovenError extends Error {
@@ -283,6 +327,22 @@ export class CliRerunStopUnprovenError extends Error {
     super(message);
     this.name = "CliRerunStopUnprovenError";
   }
+}
+
+/**
+ * A re-run that ended with no record of how its processes stopped: a tool error that does not mean nothing started, or
+ * no evidence record. Classified as an unproven stop wherever it escapes; the re-runner makes it a refusal only once the
+ * owner's one-shot commands are proven settled.
+ */
+class CliRerunUnrecordedError extends CliRerunStopUnprovenError {
+  constructor(label: string, readonly toolCode: string | undefined, readonly detail: string) {
+    super(`The re-run of ${label} ended without a record that its processes stopped (${toolCode ?? "no evidence record"}: ${detail}).`);
+  }
+}
+
+/** Whether a re-run's tool error code means no process was started (exported for its table test). */
+export function cliRerunNothingStarted(code: string | undefined): boolean {
+  return code !== undefined && NOT_STARTED_CODES.has(code);
 }
 
 function rerunFromResult(
@@ -297,16 +357,16 @@ function rerunFromResult(
 ): CliCheckRerun {
   if (output.isError) {
     const code = output.error?.code;
-    if (code && STOP_UNPROVEN_CODES.has(code)) {
-      throw new CliRerunStopUnprovenError(`The re-run of ${base.label} did not prove its processes stopped (${code}): ${bounded(output.error?.message ?? "")}`);
+    if (code && NOT_STARTED_CODES.has(code)) {
+      return notRun("refused", `not re-run: ${code}: ${output.error?.message ?? "the Runner refused the command"}`);
     }
-    if (code === "tool_cancelled") return notRun("cancelled", "not re-run: the attempt was cancelled");
-    return notRun("refused", `not re-run: ${code ?? "refused"}: ${output.error?.message ?? "the Runner refused the command"}`);
+    throw new CliRerunUnrecordedError(base.label, code, bounded(output.error?.message ?? "the Runner refused the command"));
   }
   const view = output.content.find((block) => block.type === "json")?.value as { id?: unknown } | undefined;
   const id = typeof view?.id === "string" ? view.id : undefined;
   const record: EvidenceRecord | undefined = id ? store.getByIds({ runId, taskId, ids: [id] }).find((candidate) => candidate.id === id) : undefined;
-  if (!record || record.fact.kind !== "command") return notRun("refused", "not re-run: the Runner recorded no evidence for the command");
+  // A command that ran leaves a record of how it stopped; without one, nothing proves it did.
+  if (!record || record.fact.kind !== "command") throw new CliRerunUnrecordedError(base.label, undefined, "the Runner recorded no evidence for the command");
   const fact = record.fact;
   // Only a cleanup the executor verified empty ends a re-run (as command-evidence-reuse.ts requires for a reuse).
   if (fact.cleanup?.state !== "verified_empty") {
@@ -530,8 +590,31 @@ const SHELL_OPERATOR = /^(?:&&|\|\||\||;|&|>|>>|<|<<|<<<|[12]>|[12]>>|2>&1|1>&2|
 const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"]);
 /** Programs that always run what they are given through a shell. */
 const SHELL_RUNNERS = new Set(["wsl"]);
-/** Programs that run their arguments as another program: the check is judged by that program. */
-const WRAPPERS = new Set(["env", "busybox"]);
+/**
+ * Programs that run their arguments as another program: the check is judged by that program. `values`: the options
+ * that take the next argument as their value; `leading`: positional arguments before the program (timeout's duration).
+ */
+const WRAPPERS: Readonly<Record<string, { values: readonly string[]; leading?: number }>> = {
+  env: { values: ["-u", "--unset", "-C", "--chdir"] },
+  busybox: { values: [] },
+  timeout: { values: ["-s", "--signal", "-k", "--kill-after"], leading: 1 },
+  nohup: { values: [] },
+  nice: { values: ["-n", "--adjustment"] },
+  sudo: { values: ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"] },
+  doas: { values: ["-u", "-C"] },
+  xargs: { values: ["-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"] },
+  stdbuf: { values: ["-i", "-o", "-e"] },
+  time: { values: ["-f", "--format", "-o", "--output"] },
+  command: { values: [] },
+};
+/** Package runners whose option runs a command string through a shell: npx and npm exec `-c`/`--call`, pnpm's shell mode. */
+function packageRunnerShell(program: string, args: readonly string[]): boolean {
+  const call = (arg: string) => arg === "-c" || /^--call(?:=|$)/.test(arg);
+  if (program === "npx") return args.some(call);
+  if (program === "npm") return (args.includes("exec") || args.includes("x")) && args.some(call);
+  if (program === "pnpm" || program === "pnpx") return args.some((arg) => arg === "-c" || /^--shell-mode(?:=|$)/.test(arg));
+  return false;
+}
 /**
  * PowerShell's parameters that take a value, by the names and prefixes PowerShell accepts without ambiguity
  * (`powershell -?`, `pwsh -?`). An ambiguous short prefix (`-i` is Interactive in pwsh) is not listed, so its next
@@ -542,8 +625,9 @@ const POWERSHELL_VALUE_PARAMETERS = ["executionpolicy", "ep", "ex", "version", "
 
 /**
  * Why a reported check is a shell line, which the Runner does not run (§3.6): its executable holds a command line, an
- * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string, also through
- * `env`, `busybox` or `wsl`. Undefined when the check is one program and its arguments.
+ * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string, also through a
+ * wrapper (`env`, `timeout`, `nohup`, `sudo`, `xargs`, …), `wsl`, or a package runner's shell option (`npx -c`, `npm exec
+ * --call`, `pnpm --shell-mode`). Undefined when the check is one program and its arguments.
  */
 export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "args">, depth = 0): string | undefined {
   const executable = check.executable.trim();
@@ -558,14 +642,24 @@ export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "
   const program = programName(executable);
   const given = `${program} is given a command string`;
   if (SHELL_RUNNERS.has(program)) return `${program} runs its arguments through a shell`;
-  if (WRAPPERS.has(program)) {
-    // env's options and NAME=value assignments, then the program it runs; `env -S` splits a string itself.
+  const wrapper = WRAPPERS[program];
+  if (wrapper) {
+    // The wrapper's options (and env's NAME=value assignments), then the program it runs; `env -S` splits a string itself.
     const args = check.args.map((arg) => arg.trim());
     if (program === "env" && args.some((arg) => /^-[a-zA-Z]*S|^--split-string/.test(arg))) return "env splits a command string";
-    const inner = args.findIndex((arg) => !arg.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
-    if (inner < 0 || depth >= 4) return undefined;
-    return cliCheckShellLine({ executable: args[inner]!, args: args.slice(inner + 1) }, depth + 1);
+    let index = 0;
+    while (index < args.length) {
+      const arg = args[index]!;
+      if (arg === "--") { index += 1; break; }
+      if (arg.startsWith("-") && arg.length > 1) { index += wrapper.values.includes(arg) ? 2 : 1; continue; }
+      if (program === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) { index += 1; continue; }
+      break;
+    }
+    index += wrapper.leading ?? 0;
+    if (index >= args.length || depth >= 4) return undefined;
+    return cliCheckShellLine({ executable: args[index]!, args: args.slice(index + 1) }, depth + 1);
   }
+  if (packageRunnerShell(program, check.args.map((arg) => arg.trim()))) return given;
   if (program === "cmd") return check.args.some((arg) => /^\/[ck]/i.test(arg.trim())) ? given : undefined;
   if (program === "powershell" || program === "pwsh") return powershellCommand(program, check.args) ? given : undefined;
   if (POSIX_SHELLS.has(program)) {

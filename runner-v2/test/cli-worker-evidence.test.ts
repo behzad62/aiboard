@@ -25,7 +25,9 @@ import {
   cliCheckEvidenceLinks,
   cliCheckShellLine,
   cliFixRoundPrompt,
+  cliRerunNothingStarted,
   createCliCheckRerunner,
+  createCliOneShotSettlement,
   type CliCheckRerun,
   type CliCheckRerunnerOptions,
 } from "../src/cli-worker-evidence.js";
@@ -44,6 +46,7 @@ import type { TaskWorkspace } from "../src/workspace-manager.js";
 import { policyGit } from "./support/cli-worker-fixture.js";
 import { CLI_RUNTIME_TEST_CONCURRENCY } from "./support/cli-worker-runtime-harness.js";
 import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
+import type { RecoveryTarget } from "../src/process-recovery.js";
 
 const OWNER: CliWorkerOwner = Object.freeze({ runId: "run_e", sessionId: "worker:run_e:task_e:1", actor: Object.freeze({ role: "worker" as const, id: "worker_e" }) });
 const CRITERIA = [{ id: "value", text: "value.txt holds two." }, { id: "docs", text: "The README names the value." }];
@@ -293,6 +296,12 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["pwsh", ["-i", "-c", "x"]], ["pwsh", ["-ConfigurationFile", "f.pssc", "-c", "x"]], ["csh", ["-c", "x"]], ["tcsh", ["-fc", "x"]],
       ["env", ["bash", "-c", "x"]], ["env", ["-i", "FOO=1", "sh", "-c", "x"]], ["env", ["-S", "npm test"]], ["/usr/bin/env", ["zsh", "-c", "x"]],
       ["busybox", ["sh", "-c", "x"]], ["wsl", ["npm", "test"]], ["wsl.exe", ["-e", "npm", "test"]],
+      // The second re-check's misses: option values before the program, more wrappers, package runners' shell options.
+      ["env", ["-u", "NAME", "sh", "-c", "x"]], ["env", ["-C", "dir", "bash", "-c", "x"]], ["env", ["--unset=NAME", "sh", "-c", "x"]],
+      ["timeout", ["60", "bash", "-c", "x"]], ["timeout", ["-s", "KILL", "60", "sh", "-c", "x"]], ["nohup", ["sh", "-c", "x"]],
+      ["sudo", ["sh", "-c", "x"]], ["sudo", ["-u", "build", "bash", "-c", "x"]], ["xargs", ["sh", "-c", "x"]], ["xargs", ["-n", "1", "sh", "-c", "x"]],
+      ["nice", ["-n", "10", "bash", "-c", "x"]], ["env", ["timeout", "60", "sh", "-c", "x"]],
+      ["npx", ["-c", "a && b"]], ["npx", ["--call=a && b"]], ["npm", ["exec", "--call", "a && b"]], ["npm", ["x", "-c", "a"]], ["pnpm", ["--shell-mode", "exec", "a"]],
     ] as Array<[string, string[]]>) {
       assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
     }
@@ -303,6 +312,8 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       // pwsh's first positional argument is a script file, not a command string.
       ["pwsh", ["check.ps1"]], ["env", ["FOO=1", "node", "--test"]], ["busybox", ["ls", "-la"]],
       ["npx", ["tsx", "--test", "test/a.test.ts"]], ["git", ["diff", "--stat"]],
+      ["timeout", ["60", "node", "--test"]], ["env", ["-u", "NAME", "node", "--test"]], ["sudo", ["-u", "build", "npm", "test"]],
+      ["npm", ["exec", "tsx", "--", "--test"]], ["npm", ["run", "lint"]], ["xargs", ["-n", "1", "node"]],
       [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
     ] as Array<[string, string[]]>) {
       assert.equal(cliCheckShellLine({ executable, args }), undefined, `${executable} ${JSON.stringify(args)}`);
@@ -312,7 +323,8 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
   test("browser checks are not run when the CLI ran without a browser; a refused command is not run, never a pass", async (t) => {
     const r = await repo(t);
     const execution = scriptedExecution([{ exitCode: 0 }]);
-    const rerunner = createCliCheckRerunner(r.options(execution));
+    // The re-check's B1: a failure before any execution is a refusal once the owner's commands are proven settled.
+    const rerunner = createCliCheckRerunner(r.options(execution, { oneShotCommands: async () => undefined }));
     const out = await rerun(r, rerunner, [
       check("playwright-cli", ["screenshot"], { criterionIds: ["value"] }),
       check("node", ["--test"], { cwd: "../outside", criterionIds: ["docs"] }),
@@ -432,10 +444,72 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       await assert.rejects(rerun(r, rerunner, [check("node", ["--test"], { criterionIds: ["value"] })]),
         (error: unknown) => isProcessStopUnprovenError(error) && !(error instanceof CliCheckRerunError), what);
     }
-    // Any other executor failure is a refusal: not run, and no pass.
-    const refused = await rerun(r, createCliCheckRerunner(r.options(scriptedExecution([{ throws: Object.assign(new Error("no backend"), { code: "backend_unavailable" }) }]))),
-      [check("node", ["--test"], { criterionIds: ["value"] })]);
-    assert.deepEqual(refused.reruns?.map((entry) => entry.notRunReason), ["refused"]);
+    // The re-check's B1: a tool error that does not mean "nothing started" holds the attempt, unless the owner's one-shot
+    // commands are proven settled. backend_unavailable (the runtime could not observe or stop it) and identity_mismatch
+    // (it could not signal it) may leave the process running.
+    for (const code of ["backend_unavailable", "identity_mismatch"]) {
+      const scripted = (): Scripted => ({ throws: Object.assign(new Error(`${code} while stopping`), { code }) });
+      const value = [check("node", ["--test"], { criterionIds: ["value"] })];
+      await assert.rejects(rerun(r, createCliCheckRerunner(r.options(scriptedExecution([scripted()]))), value),
+        (error: unknown) => isProcessStopUnprovenError(error) && new RegExp(code).test((error as Error).message), `${code}, no settlement check`);
+      await assert.rejects(rerun(r, createCliCheckRerunner(r.options(scriptedExecution([scripted()]), { oneShotCommands: async () => "1 command(s) are not proven stopped" })), value),
+        (error: unknown) => isProcessStopUnprovenError(error) && /not proven stopped/.test((error as Error).message), `${code}, unsettled`);
+      const settled = await rerun(r, createCliCheckRerunner(r.options(scriptedExecution([scripted()]), { oneShotCommands: async () => undefined })), value);
+      assert.deepEqual(settled.reruns?.map((entry) => [entry.notRunReason, entry.supports]), [["refused", undefined]], `${code}, settled`);
+      assert.deepEqual(settled.criterionEvidenceLinks, []);
+    }
+    // A settlement check that fails proves nothing.
+    await assert.rejects(rerun(r, createCliCheckRerunner(r.options(scriptedExecution([{ throws: Object.assign(new Error("no backend"), { code: "backend_unavailable" }) }]),
+      { oneShotCommands: async () => { throw new Error("the store is closed"); } })), [check("node", ["--test"])]),
+    (error: unknown) => isProcessStopUnprovenError(error) && /could not be checked: the store is closed/.test((error as Error).message));
+  });
+
+  test("only the codes that mean nothing started are refusals; every other code, an unknown one included, holds", () => {
+    for (const code of ["approval_required", "permission_denied", "path_denied", "outside_only_here", "invalid_arguments", "invalid_arguments_json",
+      "workspace_required", "benchmark_command_denied", "process_runtime_unavailable", "execution_grant_unavailable",
+      "isolation_capability_unavailable", "budget_exhausted"]) {
+      assert.equal(cliRerunNothingStarted(code), true, code);
+    }
+    // The broker's tool_timeout stopped waiting for a command that may still run; tool_execution_failed and
+    // evidence_command_failed threw around it; a tool_cancelled may come mid-run.
+    for (const code of [undefined, "tool_timeout", "tool_execution_failed", "tool_cancelled", "evidence_command_failed", "backend_unavailable",
+      "identity_mismatch", "outcome_unknown", "cleanup_blocked", "launch_not_proven", "reconciliation_required", "idempotency_conflict", "a_code_added_later"]) {
+      assert.equal(cliRerunNothingStarted(code), false, String(code));
+    }
+  });
+
+  test("the stop proof's one-shot check: an owner's re-run that is not cleaned with its cleanup verified, or never launched, is unsettled", async () => {
+    const target = (invocationId: string, state: string, cleanup: string, extra: Partial<{ sessionId: string; runId: string; backend: boolean; pendingEffects: boolean; kind: "subprocess" | "streaming" }> = {}) => ({
+      scope: { kind: extra.kind ?? "subprocess", runId: extra.runId ?? OWNER.runId, invocationId, logicalProcessId: invocationId, sessionId: extra.sessionId ?? OWNER.sessionId,
+        revision: 1, ownerId: "o", fencingToken: 1, state, backendIdentity: "", birthFingerprint: "" },
+      owned: false, pendingEffects: extra.pendingEffects ?? false,
+      capabilities: { tree_termination: "verified", crash_cleanup: "verified", verified_emptiness: "verified", write_confinement: "unverified" },
+      cleanup: { state: cleanup },
+      ...(extra.backend === false ? {} : { backend: { backendId: "b", implementationDigest: "d" } }),
+    }) as unknown as RecoveryTarget;
+    let listed: RecoveryTarget[] = [];
+    let scans = 0;
+    const check = createCliOneShotSettlement({ listGradually: async () => { scans += 1; return listed; } });
+    listed = [
+      target("inv-cleaned", "cleaned", "verified_empty"),
+      target("inv-never", "launch_not_proven", "not_required", { backend: false }),
+      target("inv-other-session", "cleanup_blocked", "failed", { sessionId: "worker:other" }),
+      target("inv-other-run", "running", "pending", { runId: "run_other" }),
+      target("inv-streaming", "running", "pending", { kind: "streaming" }),
+    ];
+    assert.equal(await check(OWNER), undefined);
+    assert.equal(scans, 2, "a scan already in flight is let finish, and a fresh one is read");
+    for (const open of [
+      target("inv-blocked", "cleanup_blocked", "failed"),
+      target("inv-running", "running", "pending"),
+      target("inv-backend", "backend_unavailable", "pending"),
+      target("inv-effect", "cleaned", "verified_empty", { pendingEffects: true }),
+      target("inv-cleaned-failed", "cleaned", "failed"),
+    ]) {
+      listed = [target("inv-cleaned", "cleaned", "verified_empty"), open];
+      assert.match(await check(OWNER) ?? "", new RegExp(`1 command\\(s\\) the Runner ran for this attempt are not proven stopped: ${open.scope.invocationId}`), open.scope.invocationId);
+    }
+    assert.match(await createCliOneShotSettlement({}).call(undefined, OWNER) ?? "", /cannot list/);
   });
 
   test("re-runs start only on the tree the loop persisted for them", async (t) => {

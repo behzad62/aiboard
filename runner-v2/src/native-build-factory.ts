@@ -258,7 +258,7 @@ import { composeRunnerProcessEnvironments, createChildEnvironmentFactory } from 
 import { resolveCliExecutable } from "./cli-worker-adapters.js";
 import { cliAttemptLimitMinutes, CLI_DEFAULT_MODEL_ID, isCliWorkerProviderId, type CliWorkerProviderId, type HomeCliWorkersV1 } from "./cli-worker-config.js";
 import { CliWorkerOwners, createManagedCliProcessLauncher, type CliWorkerRuntimeConfig } from "./cli-worker-runtime.js";
-import { createCliCheckRerunner } from "./cli-worker-evidence.js";
+import { createCliCheckRerunner, createCliOneShotSettlement } from "./cli-worker-evidence.js";
 import { createManagedCliBrowserSessions } from "./cli-worker-browser.js";
 import {
   createExecutionGrantAuthority,
@@ -1403,7 +1403,11 @@ export class NativeBuildFactory {
                   captureTree: (cwd: string) => workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd),
                   restoreTree: (cwd: string, treeId: string) => restoreWorkingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd, treeId),
                   ...(spec.benchmark ? { allowedCommands: spec.benchmark.allowedCommands, hiddenPaths: spec.benchmark.hiddenPaths } : {}),
+                  oneShotCommands: createCliOneShotSettlement(processRecoveryRuntime),
                 }),
+                // §3.6: a re-run is a one-shot command the owner's managed stop does not cover; a CLI attempt's stop proof
+                // requires the owner's one-shot commands settled in the run's subprocess store.
+                oneShotCommands: createCliOneShotSettlement(processRecoveryRuntime),
                 owners: cliWorkerOwners,
                 ...(budgetLedger ? { budgetLedger } : {}),
                 // CW8 (§3.10): the owner's Playwright CLI session, started before the CLI when the inventory recorded a
