@@ -25,6 +25,7 @@ import {
   cliCheckEvidenceLinks,
   cliCheckShellLine,
   cliFixRoundPrompt,
+  cliRerunAlwaysHolds,
   cliRerunNothingStarted,
   createCliCheckRerunner,
   createCliOneShotSettlement,
@@ -46,7 +47,7 @@ import type { TaskWorkspace } from "../src/workspace-manager.js";
 import { policyGit } from "./support/cli-worker-fixture.js";
 import { CLI_RUNTIME_TEST_CONCURRENCY } from "./support/cli-worker-runtime-harness.js";
 import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
-import type { RecoveryTarget } from "../src/process-recovery.js";
+import { createSubprocessProcessRecoveryRuntime, type RecoveryTarget } from "../src/process-recovery.js";
 
 const OWNER: CliWorkerOwner = Object.freeze({ runId: "run_e", sessionId: "worker:run_e:task_e:1", actor: Object.freeze({ role: "worker" as const, id: "worker_e" }) });
 const CRITERIA = [{ id: "value", text: "value.txt holds two." }, { id: "docs", text: "The README names the value." }];
@@ -302,6 +303,11 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["sudo", ["sh", "-c", "x"]], ["sudo", ["-u", "build", "bash", "-c", "x"]], ["xargs", ["sh", "-c", "x"]], ["xargs", ["-n", "1", "sh", "-c", "x"]],
       ["nice", ["-n", "10", "bash", "-c", "x"]], ["env", ["timeout", "60", "sh", "-c", "x"]],
       ["npx", ["-c", "a && b"]], ["npx", ["--call=a && b"]], ["npm", ["exec", "--call", "a && b"]], ["npm", ["x", "-c", "a"]], ["pnpm", ["--shell-mode", "exec", "a"]],
+      // The third re-check's misses.
+      ["setsid", ["sh", "-c", "x"]], ["flock", ["/tmp/lock", "sh", "-c", "x"]], ["flock", ["-w", "5", "/tmp/lock", "-c", "a && b"]],
+      ["ionice", ["-c", "3", "bash", "-c", "x"]], ["su", ["-c", "make test", "build"]], ["script", ["-qc", "npm test", "/dev/null"]],
+      ["yarn", ["exec", "sh", "-c", "x"]], ["bunx", ["sh", "-c", "x"]], ["bun", ["x", "sh", "-c", "x"]], ["npx", ["sh", "-c", "x"]],
+      ["pnpm", ["dlx", "-p", "pkg", "bash", "-c", "x"]],
     ] as Array<[string, string[]]>) {
       assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
     }
@@ -314,6 +320,8 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["npx", ["tsx", "--test", "test/a.test.ts"]], ["git", ["diff", "--stat"]],
       ["timeout", ["60", "node", "--test"]], ["env", ["-u", "NAME", "node", "--test"]], ["sudo", ["-u", "build", "npm", "test"]],
       ["npm", ["exec", "tsx", "--", "--test"]], ["npm", ["run", "lint"]], ["xargs", ["-n", "1", "node"]],
+      ["ionice", ["-c", "3", "node", "--test"]], ["yarn", ["exec", "tsx", "--test"]], ["yarn", ["test"]], ["bunx", ["vitest", "run"]],
+      ["bun", ["test"]], ["flock", ["/tmp/lock", "node", "--test"]], ["setsid", ["node", "--test"]],
       [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
     ] as Array<[string, string[]]>) {
       assert.equal(cliCheckShellLine({ executable, args }), undefined, `${executable} ${JSON.stringify(args)}`);
@@ -443,7 +451,27 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       const rerunner = createCliCheckRerunner(r.options(scriptedExecution([scripted])));
       await assert.rejects(rerun(r, rerunner, [check("node", ["--test"], { criterionIds: ["value"] })]),
         (error: unknown) => isProcessStopUnprovenError(error) && !(error instanceof CliCheckRerunError), what);
+      // The third re-check: the executor's own word that the stop is unproven always holds, even when the owner's
+      // one-shot commands read settled (a managed cleanup is not in that store).
+      const settled = createCliCheckRerunner(r.options(scriptedExecution([scripted]), { oneShotCommands: async () => undefined }));
+      await assert.rejects(rerun(r, settled, [check("node", ["--test"], { criterionIds: ["value"] })]),
+        (error: unknown) => isProcessStopUnprovenError(error), `${what}, the store settled`);
     }
+    for (const code of ["outcome_unknown", "cleanup_blocked"]) {
+      const settled = createCliCheckRerunner(r.options(scriptedExecution([{ throws: Object.assign(new Error(code), { code }) }]), { oneShotCommands: async () => undefined }));
+      await assert.rejects(rerun(r, settled, [check("node", ["--test"])]),
+        (error: unknown) => isProcessStopUnprovenError(error) && new RegExp(`\\(${code}\\)`).test((error as Error).message), `${code}, the store settled`);
+    }
+    // tool_execution_failed (a throw out of the broker's call, here its Git call scope) holds unless the store proves
+    // nothing of the owner runs.
+    const throwingScope = (execution: OneShotCommandExecutor): RunGitExecutionContext =>
+      ({ ...gitWithTrees(execution, r.indexRoot), withCall: () => { throw new Error("the call's Git scope could not be entered"); } });
+    const failedExecution = scriptedExecution([{ exitCode: 0 }]);
+    await assert.rejects(rerun(r, createCliCheckRerunner(r.options(failedExecution, { git: throwingScope(failedExecution), oneShotCommands: async () => "1 command(s) are not proven stopped" })),
+      [check("node", ["--test"], { criterionIds: ["value"] })]),
+    (error: unknown) => isProcessStopUnprovenError(error) && /tool_execution_failed/.test((error as Error).message) && /not proven stopped/.test((error as Error).message));
+    await assert.rejects(rerun(r, createCliCheckRerunner(r.options(failedExecution, { git: throwingScope(failedExecution) })), [check("node", ["--test"])]),
+      (error: unknown) => isProcessStopUnprovenError(error) && /tool_execution_failed/.test((error as Error).message));
     // The re-check's B1: a tool error that does not mean "nothing started" holds the attempt, unless the owner's one-shot
     // commands are proven settled. backend_unavailable (the runtime could not observe or stop it) and identity_mismatch
     // (it could not signal it) may leave the process running.
@@ -466,12 +494,14 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
 
   test("only the codes that mean nothing started are refusals; every other code, an unknown one included, holds", () => {
     for (const code of ["approval_required", "permission_denied", "path_denied", "outside_only_here", "invalid_arguments", "invalid_arguments_json",
-      "workspace_required", "benchmark_command_denied", "process_runtime_unavailable", "execution_grant_unavailable",
+      "workspace_required", "benchmark_command_denied", "process_runtime_unavailable",
       "isolation_capability_unavailable", "budget_exhausted"]) {
       assert.equal(cliRerunNothingStarted(code), true, code);
     }
     // The broker's tool_timeout stopped waiting for a command that may still run; tool_execution_failed and
     // evidence_command_failed threw around it; a tool_cancelled may come mid-run.
+    for (const code of ["tool_timeout", "process_cleanup_unverified", "outcome_unknown", "cleanup_blocked"]) assert.equal(cliRerunAlwaysHolds(code), true, code);
+    for (const code of ["tool_execution_failed", "backend_unavailable", "tool_cancelled", undefined]) assert.equal(cliRerunAlwaysHolds(code), false, String(code));
     for (const code of [undefined, "tool_timeout", "tool_execution_failed", "tool_cancelled", "evidence_command_failed", "backend_unavailable",
       "identity_mismatch", "outcome_unknown", "cleanup_blocked", "launch_not_proven", "reconciliation_required", "idempotency_conflict", "a_code_added_later"]) {
       assert.equal(cliRerunNothingStarted(code), false, String(code));
@@ -510,6 +540,13 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       assert.match(await check(OWNER) ?? "", new RegExp(`1 command\\(s\\) the Runner ran for this attempt are not proven stopped: ${open.scope.invocationId}`), open.scope.invocationId);
     }
     assert.match(await createCliOneShotSettlement({}).call(undefined, OWNER) ?? "", /cannot list/);
+    // A store that cannot list its records never lists none: the production recovery view throws, and the stop proof
+    // that calls this check counts the throw as unproven (proveCliStop).
+    const unlisted = createSubprocessProcessRecoveryRuntime({
+      runtime: { recoverExceptional: async () => { throw new Error("not used"); } }, canRecoverExceptional: () => false,
+      store: { readByInvocation: () => undefined }, executionGrants: {} as never, permissionProfile: "full", workspacePath: tmpdir(),
+    });
+    await assert.rejects(createCliOneShotSettlement(unlisted)(OWNER), /cannot list its records/);
   });
 
   test("re-runs start only on the tree the loop persisted for them", async (t) => {
@@ -593,4 +630,22 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
     assert.match(first.type === "fix_round" ? cliFixRoundPrompt({ name: "Claude Code", gaps: first.gaps, reruns: out.reruns ?? [] }) : "",
       /cut short supports nothing: report a narrower check/);
   });
+});
+
+// Outside the concurrent group: it mocks setTimeout, which the other tests' broker calls would share.
+test("a re-run the broker timed out always holds, even when the owner's one-shot commands read settled: the call may still launch", async (t) => {
+  const r = await repo(t);
+  // A command that never returns: the broker stops waiting at its timeout and does not await it.
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
+  const requests: OneShotCommandRequest[] = [];
+  const hanging: OneShotCommandExecutor = { execute: async (request) => { requests.push(request); started(); return await new Promise<never>(() => undefined); } };
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const settled = createCliCheckRerunner(r.options(hanging, { oneShotCommands: async () => undefined }));
+  const out = rerun(r, settled, [check("node", ["--test", "hangs.test.js"], { criterionIds: ["value"] })]);
+  await running;
+  // Past the broker's wait for the re-run (its timeout plus the broker's own bound), never reached by the command.
+  t.mock.timers.tick(CLI_RERUN_TIMEOUT_CAP_MS + 300_000);
+  await assert.rejects(out, (error: unknown) => isProcessStopUnprovenError(error) && /\(tool_timeout\)/.test((error as Error).message));
+  assert.equal(requests.length, 1);
 });

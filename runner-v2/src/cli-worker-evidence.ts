@@ -274,16 +274,25 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
 /**
  * The tool error codes that mean no process was started: the broker or the evidence tool refused the call before the
  * execution (an approval or permission denial, a path denial, invalid arguments, no workspace, a WorkBench allowlist,
- * no process runtime, no execution grant, no isolation for it, the tool budget). Only these are "not re-run: refused".
+ * no process runtime, no isolation for it, the tool budget). Only these are "not re-run: refused". (A missing execution
+ * grant reaches a re-run as `evidence_command_failed`: evidence-tools.ts keeps no code for it.)
  * Every other code, an unknown one included, may leave a process running (a broker `tool_timeout` stopped waiting for
  * it, `backend_unavailable` and `identity_mismatch` could not observe or signal it, `tool_execution_failed` or
  * `evidence_command_failed` threw around it, a `tool_cancelled` may come mid-run), so it holds the attempt (§3.6).
  */
 const NOT_STARTED_CODES = new Set([
   "approval_required", "permission_denied", "path_denied", "outside_only_here", "invalid_arguments", "invalid_arguments_json",
-  "workspace_required", "benchmark_command_denied", "process_runtime_unavailable", "execution_grant_unavailable",
+  "workspace_required", "benchmark_command_denied", "process_runtime_unavailable",
   "isolation_capability_unavailable", "budget_exhausted",
 ]);
+
+/**
+ * The tool error codes that always hold the attempt, whatever the subprocess store shows. `tool_timeout`: the broker
+ * stopped waiting without awaiting the call, which may still be on its way to a launch, so no read of the store can
+ * prove it will not run. `process_cleanup_unverified`, `outcome_unknown`, `cleanup_blocked`: the executor's own word
+ * that the stop is unproven, the first of a managed cleanup the one-shot store does not cover.
+ */
+const ALWAYS_HOLD_CODES = new Set(["tool_timeout", "process_cleanup_unverified", "outcome_unknown", "cleanup_blocked"]);
 
 /**
  * §3.6: the owner's one-shot commands (the Runner's re-runs) whose subprocess records are not settled. A re-run is a
@@ -345,6 +354,11 @@ export function cliRerunNothingStarted(code: string | undefined): boolean {
   return code !== undefined && NOT_STARTED_CODES.has(code);
 }
 
+/** Whether a re-run's tool error code holds the attempt even when the owner's one-shot commands read settled. */
+export function cliRerunAlwaysHolds(code: string | undefined): boolean {
+  return code !== undefined && ALWAYS_HOLD_CODES.has(code);
+}
+
 function rerunFromResult(
   base: Pick<CliCheckRerun, "label" | "command" | "criterionIds">,
   output: ToolResult,
@@ -359,6 +373,9 @@ function rerunFromResult(
     const code = output.error?.code;
     if (code && NOT_STARTED_CODES.has(code)) {
       return notRun("refused", `not re-run: ${code}: ${output.error?.message ?? "the Runner refused the command"}`);
+    }
+    if (code && ALWAYS_HOLD_CODES.has(code)) {
+      throw new CliRerunStopUnprovenError(`The re-run of ${base.label} did not prove its processes stopped (${code}): ${bounded(output.error?.message ?? "")}`);
     }
     throw new CliRerunUnrecordedError(base.label, code, bounded(output.error?.message ?? "the Runner refused the command"));
   }
@@ -606,6 +623,18 @@ const WRAPPERS: Readonly<Record<string, { values: readonly string[]; leading?: n
   stdbuf: { values: ["-i", "-o", "-e"] },
   time: { values: ["-f", "--format", "-o", "--output"] },
   command: { values: [] },
+  setsid: { values: [] },
+  ionice: { values: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"] },
+  flock: { values: ["-w", "--wait", "--timeout", "-E", "--conflict-exit-code"], leading: 1 },
+  npx: { values: ["-p", "--package"] },
+  pnpx: { values: ["-p", "--package"] },
+  bunx: { values: ["-p", "--package"] },
+};
+/** Programs whose `-c` option (alone or in a flag group) runs a command string through a shell. */
+const COMMAND_OPTION_PROGRAMS = new Set(["su", "script", "flock"]);
+/** Package managers whose subcommand runs the program after it: judged by that program. */
+const PACKAGE_EXEC_SUBCOMMANDS: Readonly<Record<string, readonly string[]>> = {
+  npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x", "exec"],
 };
 /** Package runners whose option runs a command string through a shell: npx and npm exec `-c`/`--call`, pnpm's shell mode. */
 function packageRunnerShell(program: string, args: readonly string[]): boolean {
@@ -626,8 +655,10 @@ const POWERSHELL_VALUE_PARAMETERS = ["executionpolicy", "ep", "ex", "version", "
 /**
  * Why a reported check is a shell line, which the Runner does not run (§3.6): its executable holds a command line, an
  * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string, also through a
- * wrapper (`env`, `timeout`, `nohup`, `sudo`, `xargs`, …), `wsl`, or a package runner's shell option (`npx -c`, `npm exec
- * --call`, `pnpm --shell-mode`). Undefined when the check is one program and its arguments.
+ * wrapper (`env`, `timeout`, `nohup`, `sudo`, `xargs`, `setsid`, `flock`, `ionice`, `npx`, …) or a package manager's exec
+ * subcommand (`yarn exec`, `bun x`, …), `wsl`, a `-c` command string (`su`, `script`, `flock`), or a package runner's
+ * shell option (`npx -c`, `npm exec --call`, `pnpm --shell-mode`). Undefined when the check is one program and its
+ * arguments.
  */
 export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "args">, depth = 0): string | undefined {
   const executable = check.executable.trim();
@@ -642,6 +673,25 @@ export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "
   const program = programName(executable);
   const given = `${program} is given a command string`;
   if (SHELL_RUNNERS.has(program)) return `${program} runs its arguments through a shell`;
+  const trimmed = check.args.map((arg) => arg.trim());
+  if (packageRunnerShell(program, trimmed)) return given;
+  if (COMMAND_OPTION_PROGRAMS.has(program) &&
+    trimmed.some((arg) => /^-[a-zA-Z]*c$/.test(arg) || /^--(?:session-)?command(?:=|$)/.test(arg))) return given;
+  const subcommands = PACKAGE_EXEC_SUBCOMMANDS[program];
+  if (subcommands) {
+    // The package manager's options, its exec subcommand, the subcommand's options (and a package's name), then the
+    // program it runs.
+    const at = trimmed.findIndex((arg) => !arg.startsWith("-"));
+    if (at >= 0 && subcommands.includes(trimmed[at]!)) {
+      let index = at + 1;
+      while (index < trimmed.length && trimmed[index]!.startsWith("-")) {
+        const option = trimmed[index]!;
+        index += option === "--" ? 1 : option === "-p" || option === "--package" ? 2 : 1;
+        if (option === "--") break;
+      }
+      if (index < trimmed.length && depth < 4) return cliCheckShellLine({ executable: trimmed[index]!, args: trimmed.slice(index + 1) }, depth + 1);
+    }
+  }
   const wrapper = WRAPPERS[program];
   if (wrapper) {
     // The wrapper's options (and env's NAME=value assignments), then the program it runs; `env -S` splits a string itself.
@@ -659,7 +709,6 @@ export function cliCheckShellLine(check: Pick<CliWorkerCheckV1, "executable" | "
     if (index >= args.length || depth >= 4) return undefined;
     return cliCheckShellLine({ executable: args[index]!, args: args.slice(index + 1) }, depth + 1);
   }
-  if (packageRunnerShell(program, check.args.map((arg) => arg.trim()))) return given;
   if (program === "cmd") return check.args.some((arg) => /^\/[ck]/i.test(arg.trim())) ? given : undefined;
   if (program === "powershell" || program === "pwsh") return powershellCommand(program, check.args) ? given : undefined;
   if (POSIX_SHELLS.has(program)) {
