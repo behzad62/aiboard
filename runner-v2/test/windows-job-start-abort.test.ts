@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -165,7 +165,7 @@ async function assertAbortedStartSettled(started: { result: { isError?: boolean;
   assert.deepEqual(jobFolders(jobHost), [], "the aborted start's exact Job record was released through its binding");
 }
 
-test("a start its caller cancels records the host's exit, so the run closes with its stop proven and no process left", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+test("a start its launcher gives up on records the host's exit, so the run closes with its stop proven and no process left", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
   // The host sleeps before it creates anything, and its close reaches its supervisor a second late, so the abort must
   // wait for it to record the stop.
   const giveUp = giveUpWhen(listening);
@@ -375,6 +375,30 @@ test("a host that died with output retained, before its launcher aborted the sta
   const { processId, startedAt } = failure.startRecord;
   assert.equal((await service.reconcileOwned(processId, owner, fence)).status, "stopped");
   assert.equal((await service.releaseOwned(processId, owner, startedAt, fence)).ownershipReleased, true);
+});
+
+test("a root named through a plain symbolic link is created inside the Job: only an app execution alias takes the Assign path", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async (t) => {
+  const folder = join(ownRoot, "symlink");
+  mkdirSync(folder, { recursive: true });
+  const link = join(folder, "node-link.exe");
+  try { symlinkSync(process.execPath, link, "file"); } catch (error) {
+    t.skip(`this host cannot create a file symbolic link: ${(error as NodeJS.ErrnoException).code}`);
+    return;
+  }
+  assert.ok(lstatSync(link).isSymbolicLink());
+  const stateDirectory = join(folder, "job-host");
+  mkdirSync(stateDirectory, { recursive: true });
+  const owner = { runId: "symlink-run", sessionId: "symlink-session" };
+  const fence = { ownerId: "symlink-owner", fencingToken: 1 };
+  const service = createWindowsJobProcessHost({ stateDirectory });
+  const launched = await service.launchOwned({ ...owner, command: link, args: ["-e", ""], workingDirectory: folder,
+    environment: { ...process.env } as Record<string, string>, interactive: true, fence });
+  assert.ok(await waitUntil(() => jobFolders(stateDirectory)[0]?.status.status === "stopped", 30_000), JSON.stringify(jobFolders(stateDirectory)[0]?.status));
+  const events = jobFolders(stateDirectory)[0]!.events;
+  assert.match(events, /"type":"started"/, events);
+  assert.doesNotMatch(events, /assign_intent|assign_pending/, `the Job attribute was kept, so nothing was created outside the Job: ${events}`);
+  assert.equal((await service.reconcileOwned(launched.processId, owner, fence)).status, "stopped");
+  assert.equal((await service.releaseOwned(launched.processId, owner, launched.startedAt, fence)).ownershipReleased, true);
 });
 
 test("a stopped start whose output was discarded is settled through the fenced status path, also after a Runner restart", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {

@@ -1,7 +1,7 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: Windows Job containment host and helper probes require direct OS process APIs.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -32,7 +32,7 @@ const SUPERVISOR_REQUEST_TIMEOUT_MS = 5_000;
  * first host's worst start and about 1.4 times the second host's extrapolated worst; it is not raised further, since a
  * host that dies or a call that is cancelled no longer waits for it.
  */
-const DEFAULT_START_CEILING_MS = 120_000;
+const DEFAULT_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS;
 /** keepWarm stops after this many consecutive background prestart failures, so a host that cannot start spares stops trying. */
 const KEEP_WARM_FAILURE_LIMIT = 3;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
@@ -2707,12 +2707,6 @@ function waitForLauncherExit(launcher: ChildProcess, timeoutMs: number): Promise
  * a supervisor that exits ends the wait at once.
  */
 const ABORT_ACK_MARGIN_MS = 5_000;
-/**
- * How long a launcher's abort wait may extend while its supervisor ends an Assign-path root (status rootEnding): the
- * supervisor's own bounds for that (managed-process-supervisor.mjs ROOT_ENDER_START_CEILING_MS 120 s plus
- * ROOT_ENDER_ACTION_CEILING_MS 60 s) and a margin, so that a supervisor still ending the root is not killed first.
- */
-const ROOT_ENDING_CEILING_MS = 190_000;
 async function abortStartingSupervisor(launcher: ChildProcess, token: string, deadlineMs: number, statusPath?: string): Promise<void> {
   if (launcher.exitCode !== null || launcher.signalCode !== null) return;
   const started = Date.now();

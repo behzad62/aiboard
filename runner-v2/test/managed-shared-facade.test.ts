@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { MANAGED_START_CEILING_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "../src/cleanup-timeouts.js";
 import { ManagedProcessService, type ManagedProcessSnapshot } from "../src/managed-process.js";
 import type { ToolExecutionContext } from "../src/agent-contracts.js";
 import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
@@ -39,6 +40,18 @@ test("managed facade uses an injected portable runtime and preserves exact immut
     const files = await readdir(join(f.root, "state")); const record = JSON.parse(await readFile(join(f.root, "state", "managed-exact.json"), "utf8"));
     assert.ok(files.includes("managed-exact.json")); assert.equal(record.schemaVersion, 2); assert.equal(record.recordKind, "runner.managed-process");
     assert.doesNotMatch(JSON.stringify(record), /executionGrant|supervisor|Bearer|controlPort|"SAFE_VALUE":"value"/);
+    passed = true;
+  } finally { await f.close(passed); }
+});
+
+test("a managed start's own ceiling sits above the Job host's whole bounded launch, so the backend ends a slow start itself", async t => {
+  // The backend's own failure names the exact record, which then settles on the supervisor's proof; a cut by this
+  // ceiling would cancel a still-pending launch. The former fixed 30 s cut real cold Job host starts.
+  assert.ok(MANAGED_START_CEILING_MS > WINDOWS_JOB_START_CEILING_MS + ROOT_ENDING_CEILING_MS);
+  const f = await fixture(t); let passed = false;
+  try {
+    await f.service.start({ command: "fixture" }, f.context(), f.root);
+    assert.equal((f.requests[0] as unknown as { startTimeoutMs: number }).startTimeoutMs, MANAGED_START_CEILING_MS);
     passed = true;
   } finally { await f.close(passed); }
 });
