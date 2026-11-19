@@ -1648,6 +1648,59 @@ test("Windows signal retries transient descendant inspection uncertainty without
   }
 });
 
+test("Windows signal follows a live supervisor that is still preparing, and gives up on any other unknown", { timeout: 10_000 }, async () => {
+  // The supervisor's PID is this test process, so it is alive; its births come from the fake inspector.
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-signal-preparing-"));
+  const operations: NativeProcessOperations = {
+    inspectProcessBirth: (pid) => pid === 9002
+      ? { state: "present", fingerprint: "owned-descendant-birth" }
+      : { state: "present", fingerprint: "supervisor-birth" },
+    listPosixGroup: () => undefined,
+    signal: () => undefined,
+  };
+  // A 5 ms poll gives a 500 ms settle wait; the supervisor below stays in preparation more than twice that long.
+  const backend = createWindowsProcessBackend({ stateDirectory: root, operations, pollIntervalMs: 5 });
+  const writeState = (directory: string, state: Record<string, unknown>, supervisorPid = process.pid) => writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v1", nonce: "windows-contract-nonce", supervisorPid, revision: 1, handledControl: 0,
+    exitCode: null, signal: null, error: null, updatedAt: "2026-01-01T00:00:00.000Z", ...state,
+  }));
+  const bindingAt = (directory: string, supervisorPid = process.pid) => bindingFor({
+    opaqueIdentity: Buffer.from(JSON.stringify({ ...portableIdentity(directory, "supervisor-birth"), supervisorPid })).toString("base64url"),
+    birthFingerprint: { observedAt: "2026-01-01T00:00:00.000Z", discriminator: createHash("sha256").update("windows-contract-nonce\0supervisor-birth").digest("hex") },
+    rootPid: supervisorPid, startedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const preparing = { status: "preparing", launchEffect: "prepared", rootProcess: { pid: 9002, birth: "owned-descendant-birth" }, knownProcesses: [{ pid: 9002, birth: "owned-descendant-birth" }] };
+  try {
+    for (const published of [false, true]) {
+      const directory = join(root, `preparing-${published}`); mkdirSync(directory);
+      if (published) writeState(directory, preparing);
+      const started = Date.now();
+      const ready = setTimeout(() => writeState(directory, { ...preparing, status: "running", launchEffect: "started" }), 1_200);
+      try {
+        assert.equal(parseProcessSignalResult(await backend.signal(bindingAt(directory), "terminate", fence)).state, "running",
+          `a supervisor ${published ? "in its preparing state" : "yet to publish"} is followed to its started state`);
+      } finally { clearTimeout(ready); }
+      assert.ok(Date.now() - started >= 1_100, "the signal waited for the supervisor's progress");
+      assert.equal(JSON.parse(readFileSync(join(directory, "control.json"), "utf8")).action, "terminate");
+    }
+    // A child of this test that has exited stands in for a supervisor that died while preparing.
+    const exited = execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+    for (const [name, state, supervisorPid] of [
+      ["unknown launch", { ...preparing, status: "running", launchEffect: "unknown" }, process.pid],
+      ["exited supervisor", preparing, Number(exited)],
+    ] as const) {
+      const stalled = join(root, name.replace(" ", "-")); mkdirSync(stalled);
+      writeState(stalled, state, supervisorPid);
+      const started = Date.now();
+      await assert.rejects(backend.signal(bindingAt(stalled, supervisorPid), "terminate", fence), /unavailable/i, name);
+      assert.ok(Date.now() - started < 1_100, `${name}: an unknown that is not live preparation keeps the short settle wait`);
+      assert.equal(existsSync(join(stalled, "control.json")), false);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Windows supervisor treats unavailable CIM inspection as unknown and ignores destructive control", async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows CIM failure fixture requires a Windows host.");

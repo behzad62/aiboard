@@ -2341,7 +2341,10 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   if (isolate.status !== (record.leaseBinding ? "acknowledged" : "pending") || isolate.createdAt !== record.history[0]!.at || (visited.has("isolated") && isolate.acknowledgedAt !== record.history.find((entry) => entry.state === "isolated")!.at) || (!visited.has("isolated") && record.leaseBinding && !hasLateIsolationTransition)) throw new StreamingSessionStoreError("invalid_effect", "Isolation effect state or timing does not match history.");
   const launch = byId.get(`launch:${record.launchId}`);
   if (visited.has("launching") !== Boolean(launch) || (launch && launch.kind !== "launch")) throw new StreamingSessionStoreError("invalid_effect", "Normative launch effect does not match history.");
-  if (launch && (launch.status !== (visited.has("bound") ? "acknowledged" : "pending") || launch.createdAt !== record.history.find((entry) => entry.state === "launching")!.at || (visited.has("bound") && launch.acknowledgedAt !== record.history.find((entry) => entry.state === "bound")!.at))) throw new StreamingSessionStoreError("invalid_effect", "Launch effect state or timing does not match history.");
+  // A late backend binding (bind_cleanup_backend) acknowledges the launch at its own reopening of blocked cleanup,
+  // never through "bound": the exact backend a cancelled launch handed back after cleanup began.
+  const hasLateBackendTransition = Boolean(launch && record.backendBinding && !visited.has("bound") && launch.acknowledgedAt && record.history.some((entry, index) => entry.state === "cleanup_pending" && record.history[index - 1]?.state === "cleanup_blocked" && entry.at === launch.acknowledgedAt));
+  if (launch && (launch.status !== (visited.has("bound") || hasLateBackendTransition ? "acknowledged" : "pending") || launch.createdAt !== record.history.find((entry) => entry.state === "launching")!.at || (visited.has("bound") && launch.acknowledgedAt !== record.history.find((entry) => entry.state === "bound")!.at))) throw new StreamingSessionStoreError("invalid_effect", "Launch effect state or timing does not match history.");
   if (launch && (launch.ownerId !== isolate.ownerId || launch.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Launch effect provenance differs from isolation ownership.");
   const handoff = byId.get(`handoff:${record.launchId}`);
   if (visited.has("handshake_verified") !== Boolean(handoff) || (handoff && handoff.kind !== "handoff")) throw new StreamingSessionStoreError("invalid_effect", "Normative handoff effect does not match history.");
@@ -2359,7 +2362,7 @@ function assertHostLaunchLifecycle(record: Readonly<HostLaunchRecord>): void {
   if (record.state === "released" && cleanup?.resources?.some((resource) => resource.status !== "succeeded")) throw new StreamingSessionStoreError("invalid_effect", "Released cleanup contains an unresolved resource.");
   if (cleanup && (cleanup.originOwnerId !== isolate.ownerId || cleanup.originFencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Cleanup effect origin differs from launch ownership.");
   if (!cleanup && record.state !== "handed_off" && (record.ownerId !== isolate.ownerId || record.fencingToken !== isolate.fencingToken)) throw new StreamingSessionStoreError("invalid_effect", "Host ownership differs from normative effect provenance.");
-  if ((visited.has("isolated") && !record.leaseBinding) || visited.has("bound") !== Boolean(record.backendBinding) || visited.has("handshake_verified") !== Boolean(record.handshakeDigest)) throw new StreamingSessionStoreError("invalid_state", "Host attested bindings do not match lifecycle history.");
+  if ((visited.has("isolated") && !record.leaseBinding) || (visited.has("bound") || hasLateBackendTransition) !== Boolean(record.backendBinding) || visited.has("handshake_verified") !== Boolean(record.handshakeDigest)) throw new StreamingSessionStoreError("invalid_state", "Host attested bindings do not match lifecycle history.");
   if ((record.state === "handed_off" || record.state === "released") !== (record.ownerId === "none")) throw new StreamingSessionStoreError("invalid_state", "Host launch terminal ownership is invalid.");
 }
 
@@ -2981,7 +2984,7 @@ function assertHostOutputCheckpointLink(record: Readonly<HostLaunchRecord>, chec
 
 function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Record<string, unknown>): Readonly<HostLaunchRecord> {
   assertNoForbiddenDurableValues(input);
-  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], bind_cleanup_isolation: ["lease", "resources"], begin_launch: [], bind_backend: ["backendBinding"], begin_channel: [], verify_handshake: ["handshakeDigest"], begin_cleanup: ["resources"], settle_cleanup_blocked: ["blocker", "results"], settle_cleanup_cleaned: ["results"], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
+  const extraKeys: Record<string, readonly string[]> = { bind_isolation: ["lease"], bind_cleanup_isolation: ["lease", "resources"], begin_launch: [], bind_backend: ["backendBinding"], bind_cleanup_backend: ["backendBinding"], begin_channel: [], verify_handshake: ["handshakeDigest"], begin_cleanup: ["resources"], settle_cleanup_blocked: ["blocker", "results"], settle_cleanup_cleaned: ["results"], takeover_cleanup: ["newOwnerId", "newFencingToken", "ownerExpiresAt"] };
   assertExactKeys(input, new Set(["type", "launchId", "ownerId", "fencingToken", "expectedRevision", "at", ...(extraKeys[String(input.type)] ?? [])]), "host launch command");
   const ownerId = requiredText(input.ownerId, "ownerId");
   const fence = requiredPositiveInteger(input.fencingToken, "fencingToken");
@@ -3024,6 +3027,26 @@ function applyHostLaunchCommand(current: Readonly<HostLaunchRecord>, input: Reco
     additions.backendBinding = parseBackendBindingValue(input.backendBinding);
     ensureTransition(current.state, "launching", input, current, additions);
     acknowledgeHostEffect(effects, `launch:${current.launchId}`, at);
+  } else if (input.type === "bind_cleanup_backend") {
+    // A backend that answered its launch only after a cancel moved the record into cleanup (a late result, or a failed
+    // launch that names the exact identity it created): that exact binding is kept so the cleanup quiesces, verifies
+    // and releases it on the backend's own proof. As bind_cleanup_isolation: only from blocked cleanup, which it
+    // reopens (pending, its resources begun again); never over a binding, and only for the launch this record began
+    // and is still waiting on.
+    if (current.state !== "cleanup_blocked") throw new StreamingSessionStoreError("invalid_state", "Late backend binding requires blocked cleanup ownership.");
+    const binding = parseBackendBindingValue(input.backendBinding);
+    if (current.backendBinding) throw new StreamingSessionStoreError("identity_conflict", "Late backend binding cannot replace a bound backend.");
+    if (!current.leaseBinding) throw new StreamingSessionStoreError("invalid_state", "Late backend binding requires its isolation lease.");
+    if (effects.find((effect) => effect.effectId === `launch:${current.launchId}`)?.status !== "pending") throw new StreamingSessionStoreError("invalid_effect", "Late backend binding requires the pending launch it answers.");
+    state = "cleanup_pending"; additions.backendBinding = binding;
+    acknowledgeHostEffect(effects, `launch:${current.launchId}`, at);
+    // A backend binding alone derives no cleanup resource (a channel needs its acquisition marker), so the cleanup's
+    // obligations are unchanged; the host resource's quiesce and release now reach the exact backend.
+    const derived = derivedHostCleanupDefinitions({ ...current, ...additions });
+    if (!sameCleanupDefinitions(derived, derivedHostCleanupDefinitions(current))) throw new StreamingSessionStoreError("invalid_effect", "Late backend binding cannot change cleanup obligations.");
+    const index = effects.findIndex((effect) => effect.kind === "cleanup"); if (index < 0) throw new StreamingSessionStoreError("invalid_effect", "Exact cleanup effect is missing.");
+    const effect = effects[index]!;
+    effects[index] = { ...effect, status: "pending", ownerId, fencingToken: fence, blocker: undefined, blockedAt: undefined, resources: beginCleanupResources(effect.resources ?? [], derived, ownerId, fence) };
   } else if (input.type === "begin_channel") {
     if (current.state !== "bound" || current.channelAcquisitionStartedAt) throw new StreamingSessionStoreError("invalid_state", "Channel acquisition may be marked exactly once from a bound launch.");
     state = "bound"; additions.channelAcquisitionStartedAt = at;

@@ -507,7 +507,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const observedState = readState(identity.directory);
       let beforeSignal = observedState?.status === "outcome_unknown"
         ? this.windowsMembershipSnapshot(identity, true)
-        : await this.waitForKnownEmptiness(identity);
+        : await this.waitForWindowsSignalReadiness(identity);
       if (typeof beforeSignal !== "string")
         beforeSignal = beforeSignal.state === "ready" ? beforeSignal.emptiness : beforeSignal.state;
       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
@@ -852,6 +852,30 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       result = await this.emptiness(identity);
     }
     return result;
+  }
+  // Windows, before a signal: a supervisor that is alive and still preparing (no state published yet, or its own
+  // "preparing" state) is on its way to the final state a signal needs; a launch cancelled after spawn hands its
+  // identity to cleanup at exactly that point. The supervisor's own startup deadline ends that phase (a cold start
+  // under load took 12-18 s on 16 cores), so the wait follows its progress up to the shared start ceiling instead of a
+  // fixed 2.5 s. Any other unknown keeps the short settle wait. Waiting decides nothing: the fenced effect re-attests
+  // the exact identity before any control is written.
+  private async waitForWindowsSignalReadiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+    const started = Date.now();
+    const settleDeadline = started + Math.max(500, this.pollIntervalMs * 100);
+    const ceiling = started + WINDOWS_PORTABLE_START_CEILING_MS;
+    let result = await this.emptiness(identity);
+    while (result === "outcome_unknown") {
+      const now = Date.now();
+      if (now >= ceiling || (now >= settleDeadline && !this.windowsSupervisorPreparing(identity))) break;
+      await delay(this.pollIntervalMs);
+      result = await this.emptiness(identity);
+    }
+    return result;
+  }
+  private windowsSupervisorPreparing(identity: Identity): boolean {
+    const state = readState(identity.directory);
+    if (state !== undefined && (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid || state.status !== "preparing")) return false;
+    return pidAlive(identity.supervisorPid);
   }
   private async cleanupFailedLaunch(identity: Identity): Promise<void> {
     const deadline = Date.now() + 3_000;

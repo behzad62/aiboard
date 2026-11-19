@@ -1487,6 +1487,11 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
         if (durable.state === "cleanup_blocked" && lease && !durable.leaseBinding) {
           durable = writer.transitionLaunch({ type: "bind_cleanup_isolation", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, lease, at: clock().toISOString() });
         }
+        // A backend that answered after the cancel moved the record into cleanup (a late result, or a failed launch naming
+        // its exact identity): its binding is made durable so the cleanup settles that backend on its own proof.
+        if (durable.state === "cleanup_blocked" && backendBinding && !durable.backendBinding &&
+            durable.effects.some((effect) => effect.effectId === `launch:${request.launchId}` && effect.status === "pending"))
+          durable = writer.transitionLaunch({ type: "bind_cleanup_backend", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, backendBinding, at: clock().toISOString() });
         if (durable.state === "cleanup_pending" || durable.state === "cleanup_blocked") return;
         if (durable.state === "prepared" && lease) durable = writer.transitionLaunch({ type: "bind_isolation", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, lease, at: clock().toISOString() });
         if (durable.state === "isolated" && backendBinding) durable = writer.transitionLaunch({ type: "begin_launch", launchId: request.launchId, ownerId: durable.ownerId, fencingToken: durable.fencingToken, expectedRevision: durable.revision, at: clock().toISOString() });

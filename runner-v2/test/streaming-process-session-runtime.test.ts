@@ -3257,6 +3257,51 @@ test("abort returns promptly for a never-settling provider and supervises a late
   await waitUntil(() => fixture.releaseCalls === 1); assert.equal(fixture.releaseCalls, 1);
 });
 
+// A backend that answers its launch only after the cancel moved the record into cleanup: a failed launch naming its exact
+// identity (a portable launch cancelled after spawn), or a late successful launch. Its binding is made durable from the
+// cleanup state, so the cleanup quiesces and releases that exact backend instead of blocking on an unknown one.
+for (const answer of ["failed launch naming its identity", "late successful launch"] as const) {
+  test(`a ${answer} after a cancel is bound for cleanup, then quiesced and released on its binding`, { timeout: 3_000 }, async () => {
+    const fixture = await makeFixture(2, "cleaned");
+    const named = new Error("launch was cancelled after its supervisor started");
+    const quiesced: unknown[] = [], released: unknown[] = [];
+    const abort = new AbortController();
+    let launched = false;
+    const runtime = createStreamingProcessSessionRuntime({
+      ...fixture.runtimeOptions,
+      host: {
+        ...fixture.runtimeOptions.host,
+        // The call is cancelled 10 ms into the backend's launch, which answers 30 ms after the cancel.
+        launch: async ({ signal }) => {
+          launched = true;
+          setTimeout(() => abort.abort(), 10);
+          await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          if (answer === "late successful launch") return fixture.backendBinding;
+          throw named;
+        },
+        failedLaunchBinding: (error) => (error === named ? fixture.backendBinding : undefined),
+        quiesce: async ({ record }) => {
+          const binding = (record as { backendBinding?: unknown }).backendBinding;
+          if (!binding) return "outcome_unknown";
+          quiesced.push(binding); return "verified";
+        },
+        release: async ({ record }) => { released.push((record as { backendBinding?: unknown }).backendBinding); return "verified"; },
+      },
+    });
+    await assert.rejects(runtime.open({ ...fixture.request, signal: abort.signal }));
+    assert.equal(launched, true, "the backend's launch had started when the call was cancelled");
+    for (let waited = 0; waited < 1_500 && fixture.kernel.store.readHostLaunch("launch-1")?.state !== "released"; waited += 10)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    const record = fixture.kernel.store.readHostLaunch("launch-1")!;
+    assert.equal(record.state, "released", JSON.stringify({ state: record.state, binding: record.backendBinding ?? null, effects: record.effects.map((effect) => [effect.effectId, effect.status]) }));
+    assert.deepEqual(record.backendBinding, fixture.backendBinding, "the late binding was made durable");
+    assert.equal(record.effects.find((effect) => effect.effectId === "launch:launch-1")?.status, "acknowledged");
+    assert.deepEqual(quiesced.at(-1), fixture.backendBinding, "cleanup quiesced the exact backend");
+    assert.deepEqual(released, [fixture.backendBinding], "the exact backend was released once");
+  });
+}
+
 test("abort is caller-bounded when every provider phase is permanently noncooperative", { timeout: 2_000 }, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
   for (const phase of ["isolate", "launch", "channel", "handshake"] as const) {
     const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { evidence }); const never = async () => await new Promise<never>(() => undefined);

@@ -540,6 +540,73 @@ test("durable SQL tables contain metadata only and reject every payload capabili
   } finally { if (!closed) kernel.store.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("a late backend binding is kept only by blocked cleanup of the pending launch it answers", () => {
+  const owner = { launchId: "launch-1", ownerId: "host:run-1", fencingToken: 1 } as const;
+  const late = "2026-08-30T00:00:10.000Z";
+  const failure = { code: "host_reconciliation_failed", message: "Host reconciliation failed." };
+  const refused = (code: string) => (error: unknown) => error instanceof StreamingSessionStoreError && error.code === code;
+  const blockedCleanup = (phase: "prepared" | "isolated" | "launching") => {
+    const kernel = createInMemoryStreamingSessionStore(); const writer = getStreamingSessionKernelWriter(kernel);
+    writer.prepareLaunch(hostRecord());
+    if (phase !== "prepared") writer.transitionLaunch({ type: "bind_isolation", ...owner, expectedRevision: 0, lease: leaseBinding(), at: now });
+    if (phase === "launching") {
+      writer.transitionLaunch({ type: "begin_launch", ...owner, expectedRevision: 1, at: now });
+      assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: 2, backendBinding: backendBinding(), at: now }), refused("invalid_state"),
+        "a launch that is not in cleanup binds through bind_backend only");
+    }
+    let record = writer.transitionLaunch({ type: "begin_cleanup", ...owner, expectedRevision: kernel.store.readHostLaunch("launch-1")!.revision, at: now });
+    assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: record.revision, backendBinding: backendBinding(), at: now }), refused("invalid_state"),
+      "pending cleanup is still being worked by its owner");
+    const results = record.effects.find((effect) => effect.kind === "cleanup")!.resources!.map((fact) => ({ resource: fact.resource, identity: fact.identity, ownerId: fact.ownerId, fencingToken: fact.fencingToken, status: fact.resource === "host" ? "failed" : "succeeded", ...(fact.resource === "host" ? { failure } : {}) }));
+    record = writer.transitionLaunch({ type: "settle_cleanup_blocked", ...owner, expectedRevision: record.revision, blocker: failure, results, at: now });
+    assert.equal(record.state, "cleanup_blocked");
+    return { kernel, writer, record };
+  };
+
+  const prepared = blockedCleanup("prepared");
+  assert.throws(() => prepared.writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: prepared.record.revision, backendBinding: backendBinding(), at: late }), refused("invalid_state"),
+    "no isolation lease, so no launch could have created a backend");
+  const isolated = blockedCleanup("isolated");
+  assert.throws(() => isolated.writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: isolated.record.revision, backendBinding: backendBinding(), at: late }), refused("invalid_effect"),
+    "a record that never began a launch has no launch for a backend to answer");
+
+  const { kernel, writer, record: blocked } = blockedCleanup("launching");
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, fencingToken: 2, expectedRevision: blocked.revision, backendBinding: backendBinding(), at: late }), refused("stale_fence"));
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: blocked.revision, backendBinding: { ...backendBinding(), opaqueIdentity: "" }, at: late }));
+  const bound = writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: blocked.revision, backendBinding: backendBinding(), at: late });
+  assert.equal(bound.state, "cleanup_pending");
+  assert.deepEqual(bound.backendBinding, backendBinding());
+  assert.deepEqual(bound.history.slice(-2).map((entry) => entry.state), ["cleanup_blocked", "cleanup_pending"]);
+  const launch = bound.effects.find((effect) => effect.kind === "launch")!;
+  assert.equal(launch.status, "acknowledged"); assert.equal(launch.acknowledgedAt, late);
+  const cleanup = bound.effects.find((effect) => effect.kind === "cleanup")!;
+  assert.equal(cleanup.status, "pending");
+  assert.deepEqual(cleanup.resources!.map((fact) => [fact.resource, fact.status]), [["host", "pending"], ["isolation_lease", "succeeded"]],
+    "the obligations are unchanged; only the unresolved host duty is begun again");
+  assert.deepEqual(kernel.store.readHostLaunch("launch-1"), bound, "the binding is durable");
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: blocked.revision, backendBinding: backendBinding(), at: late }), refused("invalid_state"),
+    "a replay finds the cleanup already reopened and changes nothing");
+  assert.deepEqual(kernel.store.readHostLaunch("launch-1"), bound);
+
+  // The parser accepts a backend binding outside "bound" only through that exact late reopening of blocked cleanup.
+  assert.throws(() => parseHostLaunchRecord({ ...blocked, backendBinding: backendBinding() }), refused("invalid_state"));
+  assert.throws(() => parseHostLaunchRecord({ ...bound, effects: bound.effects.map((effect) => effect.kind === "launch" ? { ...effect, acknowledgedAt: now } : effect) }), refused("invalid_effect"));
+  assert.throws(() => parseHostLaunchRecord({ ...bound, effects: bound.effects.map((effect) => effect.kind === "launch" ? { ...effect, status: "pending", acknowledgedAt: undefined } : effect) }), refused("invalid_state"));
+
+  const host = cleanup.resources!.find((fact) => fact.resource === "host")!;
+  const reblocked = writer.transitionLaunch({ type: "settle_cleanup_blocked", ...owner, expectedRevision: bound.revision, blocker: failure, results: [{ resource: "host", identity: host.identity, ownerId: host.ownerId, fencingToken: host.fencingToken, status: "failed", failure }], at: late });
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: reblocked.revision, backendBinding: { ...backendBinding(), opaqueIdentity: "opaque-2" }, at: late }), refused("identity_conflict"),
+    "a late binding never replaces the backend already bound");
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: reblocked.revision, backendBinding: backendBinding(), at: late }), refused("identity_conflict"));
+  const retried = writer.transitionLaunch({ type: "begin_cleanup", ...owner, expectedRevision: reblocked.revision, at: late });
+  const retry = retried.effects.find((effect) => effect.kind === "cleanup")!.resources!.find((fact) => fact.resource === "host")!;
+  const released = writer.transitionLaunch({ type: "settle_cleanup_cleaned", ...owner, expectedRevision: retried.revision, results: [{ resource: "host", identity: retry.identity, ownerId: retry.ownerId, fencingToken: retry.fencingToken, status: "succeeded" }], at: late });
+  assert.equal(released.state, "released"); assert.deepEqual(released.backendBinding, backendBinding());
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, ownerId: "none", fencingToken: released.fencingToken, expectedRevision: released.revision, backendBinding: backendBinding(), at: late }), refused("invalid_state"),
+    "released cleanup is terminal");
+  assert.throws(() => writer.transitionLaunch({ type: "bind_cleanup_backend", ...owner, expectedRevision: released.revision, backendBinding: backendBinding(), at: late }), refused("stale_fence"));
+});
+
 function hostRecord() {
   return {
     recordKind: "runner.host-launch" as const, schemaVersion: HOST_LAUNCH_RECORD_VERSION,
