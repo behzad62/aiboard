@@ -43,8 +43,12 @@ let startupAborted = false;
 // The host reported its workload started (its started line).
 let reportedStarted = false;
 // The Assign path's suspended root (assign_pending: pid and creation time), until the host reports started. If the
-// host dies first, that exact process is ended here (endPendingRoot), never a process by its pid alone.
+// host dies first, that exact process is ended here (endRoot), never a process by its pid alone.
 let pendingRoot = null;
+// The Assign path's intent (assign_intent: the host's pid and creation time, and the time it was written), until the
+// host reports started. If the host dies before it reported the root's identity, the root is the host's child created
+// after that time and before the host's exit, and exactly that process is ended (endRoot).
+let assignIntent = null;
 let pendingRootEnd;
 let backendFailure;
 const retainedOutput = [];
@@ -576,9 +580,11 @@ function launchWindowsJob() {
         persistStatus();
       }
       // The Assign path's root may still live outside the Job: the empty proof waits until that exact process is gone.
-      if (pendingRoot && !reportedStarted) {
-        const root = pendingRoot;
-        pendingRootEnd = endPendingRoot(root).then((ended) => {
+      // Its reported identity names it; before that report, the intent does (the host's child created after it).
+      if ((pendingRoot || assignIntent) && !reportedStarted) {
+        const root = pendingRoot ? { pid: pendingRoot.pid, creationTime: pendingRoot.creationTime }
+          : { ...assignIntent, hostExitedAt: fileTimeNow() };
+        pendingRootEnd = endRoot(root).then((ended) => {
           if (!ended) return;
           status.jobEmptyProof = true;
           tryMarkStopped();
@@ -648,6 +654,15 @@ function launchWindowsJob() {
 
 function drainInteractiveOutput(stream, readable) {
   if (!config?.interactive || !readable || readable.destroyed) return;
+  // An aborted start's output has no reader: every byte is read and dropped, past the retained bound too, so its
+  // streams reach their end and the stop can be recorded.
+  if (startupAborted) {
+    let dropped = false;
+    for (let chunk = readable.read(); chunk !== null; chunk = readable.read()) dropped = true;
+    if (dropped && !status.outputDiscarded) { status.outputDiscarded = true; persistStatus(); }
+    readable.read(0);
+    return;
+  }
   const maximumChunks = config.maxRetainedOutputChunks ?? 16;
   const maximumBytes = config.maxRetainedOutputBytes ?? 256 * 1024;
   const retainedBytes = retainedOutputByteLength();
@@ -760,7 +775,15 @@ function handleJobEvent(line) {
   }
   if (event.type === "started") {
     pendingRoot = null;
+    assignIntent = null;
     markRunning(event.pid);
+    return;
+  }
+  if (event.type === "assign_intent") {
+    const tick = /^[1-9][0-9]{0,19}$/;
+    if (backend && event.hostPid === backend.pid && typeof event.hostCreationTime === "string" && tick.test(event.hostCreationTime) &&
+        typeof event.at === "string" && tick.test(event.at))
+      assignIntent = { hostPid: event.hostPid, hostCreationTime: event.hostCreationTime, at: event.at };
     return;
   }
   if (event.type === "assign_pending") {
@@ -841,7 +864,7 @@ function startupFailed(error) {
 async function stopOwnedTree(signal, requestedDeadline) {
   if (status.status === "stopped") return;
   stopping = true;
-  if (!reportedStarted) startupAborted = true;
+  if (!reportedStarted) markStartupAborted();
   const deadlineMs = Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, requestedDeadline || config.stopDeadlineMs || MAX_STOP_DEADLINE_MS));
   if (config.interactive) {
     // The interactive host dedicates its stdin to the child. Its exact process
@@ -882,7 +905,7 @@ async function abortStartup(message) {
   if (!message || message.token !== config.token) return;
   try {
     if (status.port > 0 && backend) {
-      startupAborted = true;
+      markStartupAborted();
       await stopOwnedTree("SIGKILL", config.stopDeadlineMs);
       // The kill ends the host, and its exit (a kill-on-close Job) is the exact empty proof: wait for it and record the
       // stop before acknowledging, so the aborted launch's record ends stopped with proof, never `starting`. Bounded by
@@ -906,29 +929,96 @@ async function abortStartup(message) {
 }
 
 /**
- * Ends the Assign path's suspended root after its host died before assigning it: exactly the process with this pid
- * AND this creation time (a reused pid names another process and is left alone). True when that process is gone.
- * Bounded; any failure leaves the stop unproven.
+ * A stop requested before the host reported its workload started: the workload's output has no reader. Its streams are
+ * drained and dropped from here on, and a host that already died with output retained gets its stop recorded.
  */
-async function endPendingRoot(root) {
-  const script = `$p = Get-Process -Id ${root.pid} -ErrorAction SilentlyContinue; ` +
+function markStartupAborted() {
+  startupAborted = true;
+  if (config?.interactive && backend) {
+    drainInteractiveOutput("stdout", backend.stdout);
+    drainInteractiveOutput("stderr", backend.stderr);
+  }
+  tryMarkStopped();
+}
+
+/** The current time as FILETIME ticks (100 ns since 1601), as a decimal string. */
+function fileTimeNow() {
+  return String(BigInt(Date.now()) * 10_000n + 116_444_736_000_000_000n);
+}
+
+/**
+ * How long the PowerShell that ends an Assign-path root may take to start: a ceiling for a start that hangs, never the
+ * expected time. It is the same cold PowerShell start the Job host makes, measured 2026-11-18 at up to 32.9 s cold under
+ * 40 busy loops on a 16-core host (about 1.8 times that on the PR 240 reviewer's host), and the same ceiling as the
+ * launcher's start wait (windows-job-process-host.ts DEFAULT_START_CEILING_MS). Once it reports ready, ending the root
+ * takes a Kill and a bounded WaitForExit.
+ */
+const ROOT_ENDER_START_CEILING_MS = 120_000;
+const ROOT_ENDER_ACTION_CEILING_MS = 60_000;
+
+/**
+ * Ends the Assign path's root after its host died before assigning it, and returns true when it is gone. The root is
+ * exactly one process:
+ * - with a reported identity: the process with this pid AND this creation time (a reused pid is left alone);
+ * - with only the intent: the host's child (ParentProcessId = the host's pid) created at or after the intent and before
+ *   the host's exit. If a process now has the host's pid with another creation time, the pid was reused, and the window
+ *   ends at that process's creation, so none of its children can match. A host that is somehow still alive (its pid and
+ *   creation time) leaves the stop unproven.
+ * While it runs, the durable status carries rootEnding, which extends the launcher's bounded waits. The wait follows
+ * progress: up to ROOT_ENDER_START_CEILING_MS for the PowerShell to report ready, then ROOT_ENDER_ACTION_CEILING_MS for
+ * the result. Any failure leaves the stop unproven.
+ */
+async function endRoot(root) {
+  const exactScript = () => `$p = Get-Process -Id ${root.pid} -ErrorAction SilentlyContinue; ` +
     `if ($null -eq $p) { 'gone'; exit 0 }; ` +
-    `if ($p.StartTime.ToFileTimeUtc() -ne ${root.creationTime}) { 'gone'; exit 0 }; ` +
-    `$p.Kill(); if ($p.WaitForExit(10000)) { 'gone' } else { 'alive' }`;
-  return await new Promise((resolvePromise) => {
-    let output = "";
-    let child;
-    try {
-      child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "ignore"] });
-    } catch {
-      resolvePromise(false);
-      return;
-    }
-    const timer = setTimeout(() => { child.kill(); resolvePromise(false); }, 30_000);
-    child.stdout.on("data", (chunk) => { output += chunk.toString("utf8"); });
-    child.once("error", () => { clearTimeout(timer); resolvePromise(false); });
-    child.once("close", (code) => { clearTimeout(timer); resolvePromise(code === 0 && output.trim() === "gone"); });
-  });
+    `if ($p.StartTime.ToFileTimeUtc() -ne [long]'${root.creationTime}') { 'gone'; exit 0 }; ` +
+    `$p.Kill(); if ($p.WaitForExit(30000)) { 'gone' } else { 'alive' }`;
+  const intentScript = () => `$from = [long]'${root.at}'; $to = [long]'${root.hostExitedAt}'; $hostPid = ${root.hostPid}; ` +
+    `$h = Get-Process -Id $hostPid -ErrorAction SilentlyContinue; ` +
+    `if ($null -ne $h) { $t = $h.StartTime.ToFileTimeUtc(); if ($t -eq [long]'${root.hostCreationTime}') { 'alive'; exit 0 }; if ($t -lt $to) { $to = $t } }; ` +
+    `$alive = $false; ` +
+    `foreach ($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $hostPid")) { ` +
+    `$p = Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue; if ($null -eq $p) { continue }; ` +
+    `try { $t = $p.StartTime.ToFileTimeUtc() } catch { continue }; ` +
+    `if ($t -lt $from -or $t -gt $to) { continue }; ` +
+    `$p.Kill(); if (-not $p.WaitForExit(30000)) { $alive = $true } }; ` +
+    `if ($alive) { 'alive' } else { 'gone' }`;
+  const valid = /^[1-9][0-9]{0,19}$/;
+  const exact = root.pid !== undefined;
+  if (exact ? !(Number.isSafeInteger(root.pid) && root.pid > 0 && valid.test(root.creationTime))
+    : !(Number.isSafeInteger(root.hostPid) && root.hostPid > 0 && valid.test(root.at) && valid.test(root.hostExitedAt) && valid.test(root.hostCreationTime))) return false;
+  const script = `[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); ${exact ? exactScript() : intentScript()}`;
+  status.rootEnding = true;
+  persistStatus();
+  try {
+    return await new Promise((resolvePromise) => {
+      let output = "";
+      let child;
+      let timer;
+      const finish = (value) => { clearTimeout(timer); resolvePromise(value); };
+      try {
+        child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        resolvePromise(false);
+        return;
+      }
+      timer = setTimeout(() => { child.kill(); finish(false); }, ROOT_ENDER_START_CEILING_MS);
+      let ready = false;
+      child.stdout.on("data", (chunk) => {
+        output += chunk.toString("utf8");
+        if (!ready && /^ready\r?\n/.test(output)) {
+          ready = true;
+          clearTimeout(timer);
+          timer = setTimeout(() => { child.kill(); finish(false); }, ROOT_ENDER_ACTION_CEILING_MS);
+        }
+      });
+      child.once("error", () => finish(false));
+      child.once("close", (code) => finish(code === 0 && output.replace(/^ready\r?\n/, "").trim() === "gone"));
+    });
+  } finally {
+    status.rootEnding = false;
+    persistStatus();
+  }
 }
 
 async function waitForExit(timeoutMs) {

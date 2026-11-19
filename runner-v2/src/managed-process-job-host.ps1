@@ -186,6 +186,9 @@ public static class ManagedProcessJobHost
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
 
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr OpenReparsePoint(
         string name,
@@ -282,12 +285,12 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
+            // No intent event file: a root that would be created outside the Job is refused before it is created.
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, job, out contained, out processInfo))
+                environmentBlock, cwd, startup, job, null, out contained, out processInfo))
                 ThrowWin32("CreateProcess");
-            // Only the interactive host (every production launch) takes the Assign path: it writes the suspended root's
-            // exact identity first, so its supervisor can end that process if this host dies before the Assign. Here a
-            // root created outside the Job is refused; the finally terminates it.
+            // Only the interactive host (every production launch) takes the Assign path (StartSuspended refuses it
+            // above); this stays as a second check, and the finally terminates such a root.
             if (!contained)
                 throw new InvalidOperationException("The root was created outside the Job; only the interactive host assigns such a root.");
             if (ResumeThread(processInfo.hThread) == 0xffffffff)
@@ -396,6 +399,7 @@ public static class ManagedProcessJobHost
         string cwd,
         STARTUPINFO startup,
         IntPtr job,
+        string intentEventPath,
         out bool inJob,
         out PROCESS_INFORMATION processInfo)
     {
@@ -407,12 +411,17 @@ public static class ManagedProcessJobHost
         bool appExecLink = launch.Application != null && IsAppExecLink(launch.Application);
         bool useJobList = !ForceAssignPath && !appExecLink;
         bool triedJobList;
+        // A root created outside the Job lives there until it is assigned. Before such a create, the host's intent (its
+        // own pid and creation time, and the time now) is written, so that if this host dies before it reports the
+        // root's identity, its supervisor can end exactly the host's child created after that time.
+        if (!useJobList) EmitAssignIntent(intentEventPath);
         if (CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
             job, useJobList, out triedJobList, out inJob, out processInfo))
             return true;
         if (!triedJobList) return false;
         // Any other refusal with the root inside the Job: created as before. If the Job then refuses the root, the
         // launch fails and the suspended root is terminated (the callers' finally), never left outside the Job.
+        EmitAssignIntent(intentEventPath);
         return CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
             job, false, out triedJobList, out inJob, out processInfo);
     }
@@ -556,7 +565,7 @@ public static class ManagedProcessJobHost
         {
             // Stricter-only test fault: a host that takes longer to start than its launcher waits (a loaded host).
             if (injectedFault == "slow_start_late_close") Thread.Sleep(30000);
-            ForceAssignPath = injectedFault == "assign_path_exit_after_create";
+            ForceAssignPath = injectedFault == "assign_path_exit_after_create" || injectedFault == "assign_path_exit_before_assign";
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
@@ -588,11 +597,12 @@ public static class ManagedProcessJobHost
                 BuildCommandLine(launch.Application, launch.Arguments));
 
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, job, out contained, out processInfo))
+                environmentBlock, cwd, startup, job, eventPath, out contained, out processInfo))
                 ThrowWin32("CreateProcess");
-            // Stricter-only test fault: the host dies right after CreateProcess, before resume, as a kill of the host
-            // would. The root was created inside the Job (JOB_LIST), so the Job's kill-on-close ends it.
-            if (injectedFault == "host_exit_after_create")
+            // Stricter-only test faults: the host dies right after CreateProcess, before resume, as a kill of the host
+            // would. Inside the Job (JOB_LIST) the Job's kill-on-close ends the root; on the Assign path the supervisor
+            // ends the host's child created after the written intent.
+            if (injectedFault == "host_exit_after_create" || (injectedFault == "assign_path_exit_after_create" && !contained))
             {
                 EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
                 System.Diagnostics.Process.GetCurrentProcess().Kill();
@@ -603,9 +613,12 @@ public static class ManagedProcessJobHost
                 // (pid and creation time) is written first, so the supervisor can end exactly that process if this
                 // host dies before the Assign (a write that fails throws, and the finally terminates the root).
                 EmitAssignPending(eventPath, processInfo.dwProcessId, CreationTime(processInfo.hProcess));
-                // Stricter-only test fault: the host dies in that window, as a kill of the host would.
-                if (injectedFault == "assign_path_exit_after_create")
+                // Stricter-only test fault: the host dies after it reported the root's identity, before the Assign.
+                if (injectedFault == "assign_path_exit_before_assign")
+                {
+                    EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
                     System.Diagnostics.Process.GetCurrentProcess().Kill();
+                }
                 if (!AssignProcessToJobObject(job, processInfo.hProcess))
                     ThrowWin32("AssignProcessToJobObject");
                 contained = true;
@@ -984,6 +997,19 @@ public static class ManagedProcessJobHost
             ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
             ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}");
         Console.Out.Flush();
+    }
+
+    // The Assign path's intent, written before the root is created outside the Job: this host's pid and creation time,
+    // and the time now (FILETIME ticks, as strings: they exceed the integers a JSON reader keeps exactly). Without an
+    // event file (the non-interactive host) a root outside the Job is refused before it is created.
+    private static void EmitAssignIntent(string eventPath)
+    {
+        if (String.IsNullOrWhiteSpace(eventPath))
+            throw new InvalidOperationException("The root would be created outside the Job; only the interactive host assigns such a root.");
+        long hostCreation = CreationTime(GetCurrentProcess());
+        long now = DateTime.UtcNow.ToFileTimeUtc();
+        File.AppendAllText(eventPath, "{\"type\":\"assign_intent\",\"hostPid\":" + System.Diagnostics.Process.GetCurrentProcess().Id +
+            ",\"hostCreationTime\":\"" + hostCreation + "\",\"at\":\"" + now + "\"}" + Environment.NewLine, new UTF8Encoding(false));
     }
 
     // The Assign path's exact identity of the suspended root. The creation time is a string: FILETIME ticks exceed the

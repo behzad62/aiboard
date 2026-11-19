@@ -202,8 +202,20 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
   assert.deepEqual([...jobHost.matchAll(/bool useJobList = ([^;]+);/g)].map((match) => match[1]),
     ["!ForceAssignPath && !appExecLink"]);
   assert.match(jobHost, /IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;/);
+  // Only that one reparse tag is an alias: any other reparse point (a plain symbolic link, a mount point) keeps the Job
+  // attribute. The check returns the tag comparison and nothing else that could say yes.
+  const aliasCheck = /private static bool IsAppExecLink\(string path\)\s*\{([\s\S]*?)\r?\n    \}\r?\n/.exec(jobHost)?.[1] ?? "";
+  assert.ok(aliasCheck, "IsAppExecLink is present");
+  assert.deepEqual([...aliasCheck.matchAll(/return ([^;]+);/g)].map((match) => match[1]),
+    ["false", "false", "unchecked((uint)Marshal.ReadInt32(buffer, 0)) == IO_REPARSE_TAG_APPEXECLINK", "false"]);
+  // Every create outside the Job is preceded by the host's written intent, and the non-interactive host (no event file)
+  // refuses such a create before it happens.
+  assert.match(jobHost, /if \(!useJobList\) EmitAssignIntent\(intentEventPath\);\s*if \(CreateSuspended\(launch,/);
+  assert.match(jobHost, /EmitAssignIntent\(intentEventPath\);\s*return CreateSuspended\(launch, [\s\S]*?job, false,/);
+  assert.match(jobHost, /environmentBlock, cwd, startup, job, null, out contained, out processInfo\)/, "the non-interactive host passes no intent file");
+  assert.match(jobHost, /if \(String\.IsNullOrWhiteSpace\(eventPath\)\)\s*throw new InvalidOperationException\("The root would be created outside the Job/);
   assert.deepEqual([...jobHost.matchAll(/ForceAssignPath = ([^;]+);/g)].map((match) => match[1]),
-    ["injectedFault == \"assign_path_exit_after_create\""]);
+    ["injectedFault == \"assign_path_exit_after_create\" || injectedFault == \"assign_path_exit_before_assign\""]);
   // On the Assign path the suspended root's exact identity is written before the Assign.
   const assignPath = /EmitAssignPending\(eventPath, processInfo\.dwProcessId, CreationTime\(processInfo\.hProcess\)\);[\s\S]*?AssignProcessToJobObject\(job, processInfo\.hProcess\)/;
   assert.match(jobHost, assignPath);

@@ -25,7 +25,7 @@ import { createProcessTools, processRunSupport } from "../src/process-tools.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { createWindowsJobProcessHost, waitForSupervisor, type WindowsJobInjectedLaunchFault } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, waitForSupervisor, WindowsJobStartFailedError, type WindowsJobInjectedLaunchFault } from "../src/windows-job-process-host.js";
 
 const WINDOWS = process.platform === "win32";
 const ownRoot = mkdtempSync(join(tmpdir(), `aiboard-start-abort-${randomUUID().slice(0, 8)}-`));
@@ -178,11 +178,13 @@ test("a start its caller cancels records the host's exit, so the run closes with
   await assertAbortedStartSettled(started, closeError, jobHost);
 });
 
-test("an aborted start whose workload already wrote output drops that output and still settles", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
-  const giveUp = giveUpWhen((folder) => folder.stdoutBytes >= 24);
+test("an aborted start whose workload wrote past the retained bound drops that output and still settles", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  // 400 KiB: the supervisor retains up to 256 KiB, then stops reading, so the workload blocks on a full pipe. The start
+  // is abandoned only once the retained bound is reached.
+  const giveUp = giveUpWhen((folder) => Number(folder.status.retainedOutputBytes) >= 256 * 1024);
   const { value: started, closeError, jobHost } = await withRun("wrote", "late_started_line", { startWaitSignal: giveUp.signal }, async ({ invoke, jobHost }) => {
     giveUp.arm(jobHost);
-    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(24)); setTimeout(() => {}, 60000)`] });
+    const result = await invoke("process.start", { command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(400 * 1024)); setTimeout(() => {}, 60000)`] });
     return { result, folders: await abortedStartSettled(jobHost) };
   });
   assert.equal(started.folders[0]?.status.outputDiscarded, true, JSON.stringify(started.folders[0]?.status));
@@ -224,6 +226,7 @@ test("one-shot process.run whose start failed keeps its exact record blocked for
   assert.equal(ran.result.isError, true, content);
   assert.doesNotMatch(content, /not_required/, "a start with an exact record is never 'nothing to clean up'");
   assert.match(content, /cleanup_blocked/, content);
+  assert.match(content, /Process launch failed: /, "the launch's own failure comes first in the message");
   // The close re-attests the bound record and releases it only because the stop was recorded with the Job empty.
   await assertAbortedStartSettled(ran, closeError, jobHost);
 });
@@ -249,16 +252,53 @@ test("a host that dies right after it created the root inside the Job, before re
   assert.ok(await waitUntil(() => !alive(observed.pid), 10_000), `the suspended root ${observed.pid} died with the host's Job`);
 });
 
-test("on the Assign path, a host that dies before the Assign fails the launch at once and its exact suspended root is ended", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
-  const { value: observed } = await withRun("assign", "assign_path_exit_after_create", {}, async ({ invoke, jobHost }) => {
-    const started = Date.now();
+for (const [fault, window, identity] of [
+  ["assign_path_exit_after_create", "right after CreateProcess, before it reported the root's identity", "the host's child created after its written intent"],
+  ["assign_path_exit_before_assign", "after it reported the root's identity, before the Assign", "the reported pid and creation time"],
+] as const) test(`on the Assign path, a host that dies ${window} leaves no process: the supervisor ends ${identity}`, { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const { value: observed } = await withRun(fault, fault, {}, async ({ invoke, jobHost }) => {
     const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
-    const elapsedMs = Date.now() - started;
-    const pending = jobFolders(jobHost).map((folder) => /"type":"assign_pending","pid":(\d+),"creationTime":"(\d+)"/.exec(folder.events)?.[1]).find(Boolean);
-    return { result, elapsedMs, pid: pending ? Number(pending) : 0 };
+    const folder = jobFolders(jobHost)[0];
+    const created = folder ? /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
+    const statuses = folder ? readFileSync(join(jobHost, folder.name, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean)
+      .map((line) => JSON.parse(line) as { status?: string; rootEnding?: boolean; jobEmptyProof?: boolean }) : [];
+    return { result, events: folder?.events ?? "", pid: created ? Number(created) : 0, statuses };
   });
   assert.equal(observed.result.isError, true, JSON.stringify(observed.result.content));
-  assert.ok(observed.pid > 0, `the host reported the suspended root's exact identity: ${JSON.stringify(observed.result.content)}`);
-  assert.ok(observed.elapsedMs < 45_000, `the launch failed on the host's exit, not the start ceiling: ${observed.elapsedMs} ms`);
-  assert.ok(await waitUntil(() => !alive(observed.pid), 15_000), `the suspended root ${observed.pid} outside the Job was ended`);
+  assert.ok(observed.pid > 0, `the host reported the root it created: ${observed.events}`);
+  assert.match(observed.events, /"type":"assign_intent","hostPid":\d+,"hostCreationTime":"\d+","at":"\d+"/, "the intent was written before the create");
+  if (fault === "assign_path_exit_before_assign") assert.match(observed.events, /"type":"assign_pending","pid":\d+,"creationTime":"\d+"/);
+  else assert.doesNotMatch(observed.events, /assign_pending/, "the host died before it reported the root's identity");
+  // The launch ended on the host's exit (its terminal status), not on the start ceiling, and the stop was proven only
+  // once the root was ended.
+  const states = observed.statuses.map((entry) => entry.status);
+  assert.ok(states.includes("exited_unknown"), JSON.stringify(states));
+  assert.ok(observed.statuses.some((entry) => entry.rootEnding === true), "the supervisor ended the root");
+  assert.ok(observed.statuses.some((entry) => entry.status === "stopped" && entry.jobEmptyProof === true), JSON.stringify(observed.statuses));
+  assert.equal(alive(observed.pid), false, `the suspended root ${observed.pid} outside the Job was ended`);
+});
+
+test("a stopped start whose output was discarded is settled through the fenced status path, also after a Runner restart", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const stateDirectory = join(ownRoot, "restart", "job-host");
+  mkdirSync(stateDirectory, { recursive: true });
+  const giveUp = giveUpWhen((folder) => folder.stdoutBytes >= 24);
+  const owner = { runId: "restart-run", sessionId: "restart-session" };
+  const fence = { ownerId: "restart-owner", fencingToken: 1 };
+  const first = createWindowsJobProcessHost({ stateDirectory, injectedLaunchFault: "late_started_line", startWaitSignal: giveUp.signal });
+  giveUp.arm(stateDirectory);
+  const failure = await first.launchOwned({ ...owner, command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(24)); setTimeout(() => {}, 60000)`],
+    workingDirectory: ownRoot, environment: { ...process.env } as Record<string, string>, interactive: true, fence })
+    .then(() => assert.fail("the start was abandoned"), (error: unknown) => error);
+  assert.ok(failure instanceof WindowsJobStartFailedError, String(failure));
+  const { processId, startedAt } = failure.startRecord;
+  const [folder] = await abortedStartSettled(stateDirectory);
+  assert.equal(folder?.status.outputDiscarded, true, JSON.stringify(folder?.status));
+  // The record's own offsets were never moved by the launch: a Runner that restarts now finds them behind the logs.
+  const record = JSON.parse(readFileSync(join(stateDirectory, `${processId}.json`), "utf8")) as { outputOffsets?: { stdout: number } };
+  assert.equal(record.outputOffsets?.stdout ?? 0, 0, JSON.stringify(record.outputOffsets));
+  const restarted = createWindowsJobProcessHost({ stateDirectory });
+  const reconciled = await restarted.reconcileOwned(processId, owner, fence);
+  assert.equal(reconciled.status, "stopped");
+  const released = await restarted.releaseOwned(processId, owner, startedAt, fence);
+  assert.equal(released.ownershipReleased, true);
 });
