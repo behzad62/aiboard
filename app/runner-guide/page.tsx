@@ -187,9 +187,80 @@ aiboard models disable <provider:model>`}
         <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">aiboard browser install</pre>
         <p className="text-sm text-muted-foreground">
           The CLI uses an installed Google Chrome first, then Microsoft Edge, then Playwright&apos;s Chromium. A Build
-          never downloads a browser: <code>aiboard browser install</code> or the Install browser button in Settings,
+          never downloads a browser: <code>aiboard browser install</code> or the Install browser button in Settings &gt;
           Tools, downloads Chromium only when you choose to. On Linux, Chromium&apos;s system libraries need root, so the
           Runner prints the command for you to run.
+        </p>
+      </section>
+      <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">CLI workers</h2>
+        <p>
+          A Build can use Claude Code and agy, signed in on this computer, as workers next to API models (Runner 0.3.21
+          or newer: <code>aiboard update</code>). Turn each one on in Settings &gt; Providers &gt; CLI workers.
+          Settings shows whether the CLI is installed and logged in, and suggests models. Test sends one tiny prompt in
+          the CLI&apos;s most restricted mode, in an empty folder, and uses a little of that CLI&apos;s usage.
+        </p>
+        <p>
+          The CLI signs in with its own login: AI Board never reads that login or keeps a key for it. Sign in with the
+          CLI&apos;s own login command, because a key or token in an environment variable doesn&apos;t reach a
+          Build&apos;s processes. A CLI&apos;s use isn&apos;t counted toward a USD budget, so a Budgeted Build with a CLI
+          worker also needs a time limit. Each CLI attempt has its own limit: 90 minutes by default, 5 to 240 in
+          Settings.
+        </p>
+        <p>
+          CLI workers are workers only, never the Architect, a reviewer or a verifier. They need Full Access, because a
+          CLI runs commands as you with its own permission prompts turned off. So it can reach what you can, and:
+        </p>
+        <ul className="list-disc space-y-1 pl-6">
+          <li>the Runner can&apos;t undo a push or a write outside the worktree;</li>
+          <li>
+            the Runner tells the Architect when your project folder&apos;s Git state (HEAD, index or changed files)
+            changed while the CLI ran;
+          </li>
+          <li>your own CLI setup (hooks, MCP servers, plugins, instruction files) runs in Builds too.</li>
+        </ul>
+        <p>The Runner starts the CLI in the task&apos;s worktree. When the CLI finishes, the Runner:</p>
+        <ul className="list-disc space-y-1 pl-6">
+          <li>
+            stops everything the CLI left running (a dev server, a watcher, its browser) and proves it has stopped;
+          </li>
+          <li>
+            undoes the CLI&apos;s own commits, keeping their changes, and puts back any change to{" "}
+            <code>docs/project</code>;
+          </li>
+          <li>runs the checks the CLI reports again itself;</li>
+          <li>
+            when every criterion has a passing check, submits the work for review like any worker&apos;s. If a check
+            fails, or a criterion has no passing check, the CLI gets one fix round. If a criterion still has none after
+            it, the attempt fails, unless the time budget cut its check short: the work then goes on, with that
+            criterion marked not verified. A question, or a &quot;can&apos;t do this&quot;, goes to the Architect.
+          </li>
+        </ul>
+        <p>
+          A stop it can&apos;t prove pauses the Build and keeps the task&apos;s work. The pause says what failed: close
+          any leftover program it names, then Resume, which tries the stop again. Collecting the CLI&apos;s work can
+          take a second Resume.
+        </p>
+        <p>
+          When a CLI is out of usage or logged out, its task moves, in the same worktree, to another healthy worker (an
+          API or CLI worker), with a summary of the work so far. If no healthy worker is left, the Build pauses. All of
+          that CLI&apos;s workers cool down together, and a passing Test ends the cooldown.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          CLI workers run on Windows only for now, and only where Windows passes the Runner&apos;s Job check; Settings
+          says when it doesn&apos;t. Codex CLI is refused on Windows for now: in AI Board&apos;s tests, some processes it
+          started ran outside the Runner&apos;s Job, and that is still being traced. On Linux and macOS, every CLI worker
+          is refused:
+        </p>
+        <ul className="list-disc space-y-1 pl-6 text-sm text-muted-foreground">
+          <li>
+            on Linux, Claude Code and Codex run commands outside the process group the Runner can stop, and agy
+            wasn&apos;t measured;
+          </li>
+          <li>macOS wasn&apos;t measured.</li>
+        </ul>
+        <p className="text-sm text-muted-foreground">
+          Use Claude Code&apos;s native <code>claude.exe</code>: its npm <code>.cmd</code> shim is refused.
         </p>
       </section>
       <section className="space-y-3">

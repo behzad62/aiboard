@@ -452,7 +452,7 @@ Those items add +2–2.5. The design gave only a total, not a split per packet, 
 
 ### 5.3 Steps that stay with the owner
 - The go for CW0's real prompts (CWD-1).
-- A real Build with each CLI as a worker, on a toy project, before CW10 closes.
+- A real Build with each CLI as a worker, before CW10 closes. The owner chose the AIBoard Build of SB1–SB9 and DX1–DX6 on this repository over a toy project (§8.1).
 - Pushes, merges, releases, and the full suite at the gate.
 None of these blocks a later packet's code; CW10 lists the ones still pending.
 
@@ -503,5 +503,36 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW6 | Done | #236 (eab536f1) |
 | CW7 | Done | #234, follow-ups #241 |
 | CW8 | Done | #237 |
-| CW9 | In review 2026-11-19; the Runner release it needs, 0.3.21 (CW5–CW8, #238, #239, #240, #242, #232), is out, so it can merge (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
-| CW10 | Not started | — |
+| CW9 | Done 2026-11-19, after Runner 0.3.21 (CW1–CW8 with CW5a, #238, #239, #240, #242, #232) went live. The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 (main 0534f29e) |
+| CW10 | Docs done 2026-11-19 (the Runner guide's CLI workers section, AGENTS.md, CLAUDE.md, this status, the 2026-11-03 plan's §6.5 note). The owner's steps are pending (below) | this pull request |
+
+### 8.1 The gate (CW10)
+- **Checks:** `npm run typecheck:runner-v2`, root `npx tsc --noEmit` and `npm run lint` pass on this change.
+- **What CI runs:** PR CI runs a fixed list of files (.github/workflows/runner-v2-portable-execution.yml). It has the `cli-worker-*` suites and a few shared files: child-environment, managed-process, playwright-cli-session, native-build-manager, aiboard-home-store, control-server-home, filesystem-mutation-routing, static-adapter-policy and runner-resource-cleanup.
+  - Most other targeted files these packets name are in no CI workflow.
+  - Runner tests among them: native-worker-driver, worker-runtime, workspace-manager, runtime-router, evidence-tools, native-build-initialization, native-build-capabilities, verification-inventory, local-stdio-mcp, live-model-output and windows-process-backend.
+  - Web scripts among them: test-cli-workers-ui, test-build-live-state, test-native-build-policy, test-build-ui-overhaul and test-settings-home.
+  - The full `test:runner-v2` is the only automated run of those Runner tests and of the first four web scripts.
+  - test-settings-home runs only in `npm run test:home`, which neither CI nor the full suite runs.
+- **The full `test:runner-v2`:** pending, by CI or the owner.
+  - On main c1745049 it had 18 failures outside every CI workflow: 16 C3 tests in streaming-process-session-runtime.test.ts and both task8-raw-launch-closure.test.ts tests.
+  - All 18 were stale tests, not product regressions. #247 (main 65d51c77) fixed them, and the task8 test now also covers the CLI transport.
+- **The owner's real Build with each CLI:** pending for Claude Code and for agy. Codex is refused on Windows, so it has no run.
+  - The owner chose to run it as the AIBoard Build of the 2026-11-03 plan's SB1–SB9 and DX1–DX6 on this repository (OD-33), not on a toy project (§5.3).
+  - The owner's Tests before that run are the first real use of the restricted Test forms (§3.4).
+  - The run is the first use of the §3.5 launch forms through the Runner. CW0 ran them only in a throwaway harness.
+- **Runner releases that carry CLI workers:**
+  - 0.3.21: CW1–CW8 with CW5a, and the CW0b fix #232.
+  - 0.3.22: #244, the progress-based portable start and the late backend binding.
+- **Open follow-ups named in this plan, none started:**
+  - Lifting the POSIX refusals (§3.11):
+    - a cgroup v2 containment plan for Linux;
+    - agy's Linux measurement;
+    - macOS's own measurement and design.
+  - Lifting Codex's Windows refusal. The R1–R4 fix (#232) is in; none of the rest is started:
+    - the owner's trace (CW0b report §4.1);
+    - a CW0-style measurement with Codex;
+    - an answer to the packaged-root opt-out (CW0b report §6).
+  - No recovery owner reopens `state/transient-runs/<id>/` after a Runner crash during a Test or check, and nothing sweeps a kept `state/cli-worker-tests/<random>/` folder (§3.4).
+  - §3.11a's open process edge, still open at native-process-backend.ts:981-983: the Windows launch cleanup reads `handledControl` outside its fence.
+  - The launchers' own `.cmd` refusal has no code yet (§3.5).

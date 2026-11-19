@@ -48,6 +48,17 @@ Final checks follow `docs/plans/2026-11-13-build-verification.md`: the Runner su
 
 Builds browse through the Playwright CLI bundled with the Runner: workers, the Architect and the verifiers run `playwright-cli`, with one browser session per agent session, stopped with it. A final check browses with a `start` check whose program is `playwright-cli-session` and whose steps run `playwright-cli`; the program and its steps share the check's owner, so one session (VF4b). It browses a URL that is already served (`file:` is blocked). The Runner's `playwright-cli` exits 1 when the CLI prints a failed result (`isError: true` with `--json`, `### Error` as text; raw output, which is the page's own value, is never read), which the CLI itself prints with exit 0, so a failed command fails its step or `process.run`. New runs have no `browser.*` tools. A browser is downloaded only on the owner's action (`aiboard browser install` or Settings > Tools), never by a Build.
 
+CLI workers follow `docs/plans/2026-11-14-cli-workers.md`. Claude Code and agy (Codex CLI is refused) run as Build workers through the `cli` transport (`runner-v2/src/cli-worker-*.ts`):
+- **Where they may run:** as workers only, never the Architect, a reviewer or a verifier; only under Full access; v1 is Windows only, so they are refused on Linux and macOS.
+- **Launch:** a CLI starts only through the managed process host:
+  - Build workers through `createManagedCliProcessLauncher` in `cli-worker-runtime.ts`;
+  - free checks and Tests through `createExecutionHostCliWorkerProcesses` in `cli-worker-processes.ts`.
+
+  Every process it started must be proven stopped before the Runner collects its work, and an unproven stop pauses the Build with the claim kept. The task8 audit keeps raw launches out of the `cli-worker-*` modules. The host-free crew rules (workers only, Full access), which the web imports too, are in `cli-crew-policy.ts`; `cli-worker-crew.ts` adds the per-OS, root and `.cmd` refusals.
+- **Collect:** the Runner undoes the CLI's commits, restores `docs/project`, re-runs the checks the CLI reports, and submits through the shared path.
+- **Prompt and logins:** model text never goes in argv; the prompt goes on stdin. The CLI's login stays in its own files.
+- **Tests:** they use fake CLIs (`runner-v2/test/support/fake-cli.mjs`), never a real CLI or a real prompt.
+
 ### Providers
 
 Browser discussion providers implement `AIProvider` from `lib/providers/base.ts`. `lib/client/providers.ts` is the live browser registry. `lib/providers/catalog.ts` is the built-in model source of truth and `lib/providers/provider-registry.ts` owns provider metadata and runtime policies.
