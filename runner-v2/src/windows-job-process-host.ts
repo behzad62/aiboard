@@ -271,6 +271,8 @@ interface SupervisorStatus {
   outputDiscarded?: boolean;
   /** The supervisor is ending an Assign-path root its dead host left outside the Job; the launcher's waits extend. */
   rootEnding?: boolean;
+  /** Which identity named that root: the one its host reported, or only the host's intent. */
+  rootEndedBy?: "identity" | "intent";
 }
 
 export class WindowsJobHostError extends Error {

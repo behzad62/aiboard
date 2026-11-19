@@ -262,7 +262,7 @@ for (const [fault, window, identity] of [
     const created = folder ? /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
     const sentinel = folder ? /"type":"fault_sentinel","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
     const statuses = folder ? readFileSync(join(jobHost, folder.name, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean)
-      .map((line) => JSON.parse(line) as { status?: string; rootEnding?: boolean; jobEmptyProof?: boolean }) : [];
+      .map((line) => JSON.parse(line) as { status?: string; rootEnding?: boolean; rootEndedBy?: string; jobEmptyProof?: boolean }) : [];
     return { result, events: folder?.events ?? "", pid: created ? Number(created) : 0, sentinel: sentinel ? Number(sentinel) : 0, statuses };
   });
   if (fault === "assign_path_exit_after_create") {
@@ -283,6 +283,8 @@ for (const [fault, window, identity] of [
   const states = observed.statuses.map((entry) => entry.status);
   assert.ok(states.includes("exited_unknown"), JSON.stringify(states));
   assert.ok(observed.statuses.some((entry) => entry.rootEnding === true), "the supervisor ended the root");
+  assert.equal(observed.statuses.findLast((entry) => entry.rootEndedBy !== undefined)?.rootEndedBy,
+    fault === "assign_path_exit_before_assign" ? "identity" : "intent", "the root was named by the identity the host reported, else by its intent");
   assert.ok(observed.statuses.some((entry) => entry.status === "stopped" && entry.jobEmptyProof === true), JSON.stringify(observed.statuses));
   assert.equal(alive(observed.pid), false, `the suspended root ${observed.pid} outside the Job was ended`);
 });

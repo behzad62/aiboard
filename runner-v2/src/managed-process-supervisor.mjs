@@ -989,6 +989,8 @@ async function endRoot(root) {
     : !(Number.isSafeInteger(root.hostPid) && root.hostPid > 0 && valid.test(root.at) && valid.test(root.hostExitedAt) && valid.test(root.hostCreationTime))) return false;
   const script = `[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); ${exact ? exactScript() : intentScript()}`;
   status.rootEnding = true;
+  // Which identity named the root: the reported one, or only the intent (evidence for tests and diagnostics).
+  status.rootEndedBy = exact ? "identity" : "intent";
   persistStatus();
   try {
     return await new Promise((resolvePromise) => {
