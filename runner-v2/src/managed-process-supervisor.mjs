@@ -49,6 +49,9 @@ let pendingRoot = null;
 // host reports started. If the host dies before it reported the root's identity, the root is the host's child created
 // after that time and before the host's exit, and exactly that process is ended (endRoot).
 let assignIntent = null;
+// An assign_intent or assign_pending line that failed validation: if the host then dies before it reported started with
+// no valid root named, the root cannot be named, so the stop stays unproven.
+let assignEventMalformed = false;
 let pendingRootEnd;
 let backendFailure;
 const retainedOutput = [];
@@ -581,6 +584,14 @@ function launchWindowsJob() {
       }
       // The Assign path's root may still live outside the Job: the empty proof waits until that exact process is gone.
       // Its reported identity names it; before that report, the intent does (the host's child created after it).
+      if (!pendingRoot && !assignIntent && assignEventMalformed && !reportedStarted) {
+        // The host named its Assign-path root in a line that failed validation: that root cannot be named here, so it
+        // may still live outside the Job, and the stop stays unproven.
+        status.status = "exited_unknown";
+        status.error = "The Windows Job host's Assign-path root could not be named; its stop is unproven.";
+        persistStatus();
+        return;
+      }
       if ((pendingRoot || assignIntent) && !reportedStarted) {
         const root = pendingRoot ? { pid: pendingRoot.pid, creationTime: pendingRoot.creationTime }
           : { ...assignIntent, hostExitedAt: fileTimeNow() };
@@ -784,11 +795,13 @@ function handleJobEvent(line) {
     if (backend && event.hostPid === backend.pid && typeof event.hostCreationTime === "string" && tick.test(event.hostCreationTime) &&
         typeof event.at === "string" && tick.test(event.at))
       assignIntent = { hostPid: event.hostPid, hostCreationTime: event.hostCreationTime, at: event.at };
+    else malformedAssignEvent(line);
     return;
   }
   if (event.type === "assign_pending") {
     if (Number.isSafeInteger(event.pid) && event.pid > 0 && typeof event.creationTime === "string" && /^[1-9][0-9]{0,19}$/.test(event.creationTime))
       pendingRoot = { pid: event.pid, creationTime: event.creationTime };
+    else malformedAssignEvent(line);
     return;
   }
   if (event.type === "root_exited") {
@@ -941,9 +954,21 @@ function markStartupAborted() {
   tryMarkStopped();
 }
 
-/** The current time as FILETIME ticks (100 ns since 1601), as a decimal string. */
+function malformedAssignEvent(line) {
+  assignEventMalformed = true;
+  try { appendFileSync(config.stderrPath, `Malformed Assign-path event from the Job host: ${line.slice(0, 2000)}
+`); } catch {}
+}
+
+/**
+ * The host's exit time as FILETIME ticks (100 ns since 1601), as a decimal string: the end of the intent's window.
+ * Date.now() has millisecond precision, so it is rounded up by 1 ms, which can only widen the window past the exit.
+ * That is safe while this supervisor holds the host's process handle (its pid cannot be reused, so no later child of
+ * that pid exists). The window assumes the clock does not move backwards between the intent and the create; if it is
+ * set back, the root's creation time falls before the intent, it is not matched, and the stop stays unproven.
+ */
 function fileTimeNow() {
-  return String(BigInt(Date.now()) * 10_000n + 116_444_736_000_000_000n);
+  return String((BigInt(Date.now()) + 1n) * 10_000n + 116_444_736_000_000_000n);
 }
 
 /**
@@ -969,20 +994,29 @@ const ROOT_ENDER_ACTION_CEILING_MS = 60_000;
  * the result. Any failure leaves the stop unproven.
  */
 async function endRoot(root) {
-  const exactScript = () => `$p = Get-Process -Id ${root.pid} -ErrorAction SilentlyContinue; ` +
-    `if ($null -eq $p) { 'gone'; exit 0 }; ` +
+  // Each script stops on any error and answers "alive" (unproven), never "gone": a failed or unreadable query proves
+  // nothing. A process is killed only after its exact identity was read and matched. GetProcessById's
+  // ArgumentException is the one "no such process" answer.
+  // Stricter-only test fault (rootEnderFault "query_fails"): the identity read, or the child query, fails.
+  const queryFails = config.rootEnderFault === "query_fails";
+  const exactScript = () => `$ErrorActionPreference = 'Stop'; try { ` +
+    `$p = $null; try { $p = [System.Diagnostics.Process]::GetProcessById(${root.pid}) } catch [System.ArgumentException] { 'gone'; exit 0 }; ` +
+    (queryFails ? `throw 'injected identity read failure'; ` : "") +
     `if ($p.StartTime.ToFileTimeUtc() -ne [long]'${root.creationTime}') { 'gone'; exit 0 }; ` +
-    `$p.Kill(); if ($p.WaitForExit(30000)) { 'gone' } else { 'alive' }`;
-  const intentScript = () => `$from = [long]'${root.at}'; $to = [long]'${root.hostExitedAt}'; $hostPid = ${root.hostPid}; ` +
-    `$h = Get-Process -Id $hostPid -ErrorAction SilentlyContinue; ` +
-    `if ($null -ne $h) { $t = $h.StartTime.ToFileTimeUtc(); if ($t -eq [long]'${root.hostCreationTime}') { 'alive'; exit 0 }; if ($t -lt $to) { $to = $t } }; ` +
+    `$p.Kill(); if ($p.WaitForExit(30000)) { 'gone' } else { 'alive' } ` +
+    `} catch { 'alive: ' + $_.Exception.Message; exit 0 }`;
+  const intentScript = () => `$ErrorActionPreference = 'Stop'; try { ` +
+    `$from = [long]'${root.at}'; $to = [long]'${root.hostExitedAt}'; $hostPid = ${root.hostPid}; ` +
+    `$h = $null; try { $h = [System.Diagnostics.Process]::GetProcessById($hostPid) } catch [System.ArgumentException] { }; ` +
+    `if ($null -ne $h) { $t = $h.StartTime.ToFileTimeUtc(); if ($t -eq [long]'${root.hostCreationTime}') { 'alive: the host still runs'; exit 0 }; if ($t -lt $to) { $to = $t } }; ` +
     `$alive = $false; ` +
-    `foreach ($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $hostPid")) { ` +
-    `$p = Get-Process -Id $c.ProcessId -ErrorAction SilentlyContinue; if ($null -eq $p) { continue }; ` +
-    `try { $t = $p.StartTime.ToFileTimeUtc() } catch { continue }; ` +
+    `foreach ($c in @(Get-CimInstance ${queryFails ? "Win32_AiboardInjectedMissingClass" : "Win32_Process"} -Filter "ParentProcessId = $hostPid")) { ` +
+    `$p = $null; try { $p = [System.Diagnostics.Process]::GetProcessById([int]$c.ProcessId) } catch [System.ArgumentException] { continue }; ` +
+    `$t = $p.StartTime.ToFileTimeUtc(); ` +
     `if ($t -lt $from -or $t -gt $to) { continue }; ` +
     `$p.Kill(); if (-not $p.WaitForExit(30000)) { $alive = $true } }; ` +
-    `if ($alive) { 'alive' } else { 'gone' }`;
+    `if ($alive) { 'alive' } else { 'gone' } ` +
+    `} catch { 'alive: ' + $_.Exception.Message; exit 0 }`;
   const valid = /^[1-9][0-9]{0,19}$/;
   const exact = root.pid !== undefined;
   if (exact ? !(Number.isSafeInteger(root.pid) && root.pid > 0 && valid.test(root.creationTime))

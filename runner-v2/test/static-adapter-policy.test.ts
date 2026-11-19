@@ -201,6 +201,10 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
   // inside the Job.
   assert.deepEqual([...jobHost.matchAll(/bool useJobList = ([^;]+);/g)].map((match) => match[1]),
     ["!ForceAssignPath && !appExecLink"]);
+  // An alias is the tag check alone at its one call site, never widened there to any reparse point.
+  assert.deepEqual([...jobHost.matchAll(/bool appExecLink = ([^;]+);/g)].map((match) => match[1]),
+    ["launch.Application != null && IsAppExecLink(launch.Application)"]);
+  assert.equal([...jobHost.matchAll(/IsAppExecLink\(/g)].length, 2, "IsAppExecLink is defined once and called once");
   assert.match(jobHost, /IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;/);
   // Only that one reparse tag is an alias: any other reparse point (a plain symbolic link, a mount point) keeps the Job
   // attribute. The check returns the tag comparison and nothing else that could say yes.
@@ -220,6 +224,14 @@ test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway
   const assignPath = /EmitAssignPending\(eventPath, processInfo\.dwProcessId, CreationTime\(processInfo\.hProcess\)\);[\s\S]*?AssignProcessToJobObject\(job, processInfo\.hProcess\)/;
   assert.match(jobHost, assignPath);
   assert.equal([...jobHost.matchAll(/AssignProcessToJobObject\(job, /g)].length, 1, "one Assign, after the exact identity");
+  // The supervisor's root ender. With only the intent, the window is bounded on both sides: created at or after the
+  // intent, and at or before the host's exit, narrowed to a reused pid's creation (a real pid reuse cannot be staged in
+  // a test). Each script stops on any error and answers "alive", never "gone".
+  const supervisor = readFileSync(join(sourceRoot, "managed-process-supervisor.mjs"), "utf8");
+  assert.match(supervisor, /if \(\$t -lt \$from -or \$t -gt \$to\) \{ continue \}; /);
+  assert.match(supervisor, /if \(\$t -lt \$to\) \{ \$to = \$t \}/);
+  assert.equal([...supervisor.matchAll(/\$ErrorActionPreference = 'Stop'; try \{ /g)].length, 2);
+  assert.equal([...supervisor.matchAll(/\} catch \{ 'alive: ' \+ \$_\.Exception\.Message; exit 0 \}/g)].length, 2);
 });function sourceCodeFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);

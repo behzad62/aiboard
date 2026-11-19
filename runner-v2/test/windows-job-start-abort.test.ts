@@ -87,7 +87,8 @@ test("the start wait ends at once when the supervisor is already gone or the cal
 });
 
 type Invoke = (tool: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ isError?: boolean; content: unknown[] }>;
-async function withRun<T>(name: string, fault: WindowsJobInjectedLaunchFault, options: { readonly spare?: boolean; readonly startWaitSignal?: AbortSignal },
+async function withRun<T>(name: string, fault: WindowsJobInjectedLaunchFault,
+  options: { readonly spare?: boolean; readonly startWaitSignal?: AbortSignal },
   body: (input: { invoke: Invoke; jobHost: string; project: string }) => Promise<T>): Promise<{ value: T; closeError: unknown; jobHost: string }> {
   const root = join(ownRoot, name);
   const project = join(root, "project"), state = join(root, "state"), jobHost = join(state, "job-host");
@@ -287,6 +288,51 @@ for (const [fault, window, identity] of [
     fault === "assign_path_exit_before_assign" ? "identity" : "intent", "the root was named by the identity the host reported, else by its intent");
   assert.ok(observed.statuses.some((entry) => entry.status === "stopped" && entry.jobEmptyProof === true), JSON.stringify(observed.statuses));
   assert.equal(alive(observed.pid), false, `the suspended root ${observed.pid} outside the Job was ended`);
+});
+
+for (const fault of ["assign_path_exit_after_create", "assign_path_exit_before_assign"] as const) test(`on the Assign path (${fault}), a root ender whose query fails proves nothing: the stop stays unproven and the root is not killed unverified`, { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  // rootEnderFault "query_fails": the ender's identity read (a reported identity) or its child query (only the intent)
+  // fails. The supervisor's answer must be "alive", never "gone", and it kills nothing it did not identify. Once that
+  // answer is in, the test ends the root itself (its own fault's process, a few seconds old): the root's handles to the
+  // host's pipes close, and the stop must still stay unproven, since nothing proved the root gone. This drives the Job
+  // host directly: a run's close would wait out its cleanup bound for a proof that never comes.
+  const stateDirectory = join(ownRoot, `${fault}-query-fails`, "job-host");
+  mkdirSync(stateDirectory, { recursive: true });
+  const owner = { runId: "query-fails-run", sessionId: "query-fails-session" };
+  const fence = { ownerId: "query-fails-owner", fencingToken: 1 };
+  const service = createWindowsJobProcessHost({ stateDirectory, injectedLaunchFault: fault, injectedRootEnderFault: "query_fails" });
+  const read = (folder: JobFolder | undefined, name: string) =>
+    (folder && existsSync(join(stateDirectory, folder.name, name)) ? readFileSync(join(stateDirectory, folder.name, name), "utf8") : "");
+  const answered = waitUntil(() => /Assign-path root end was not proven/.test(read(jobFolders(stateDirectory)[0], "stderr.log")), 50_000).then(() => {
+    const folder = jobFolders(stateDirectory)[0];
+    const pid = Number(/"type":"fault_created","pid":(\d+)/.exec(folder?.events ?? "")?.[1] ?? 0);
+    const rootAlive = pid > 0 && alive(pid);
+    if (pid > 0) try { process.kill(pid); } catch { /* already gone */ }
+    const sentinel = Number(/"type":"fault_sentinel","pid":(\d+)/.exec(folder?.events ?? "")?.[1] ?? 0);
+    if (sentinel > 0) try { process.kill(sentinel); } catch { /* already gone */ }
+    return { pid, rootAlive };
+  });
+  const failure = await service.launchOwned({ ...owner, command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"],
+    workingDirectory: ownRoot, environment: { ...process.env } as Record<string, string>, interactive: true, fence })
+    .then(() => assert.fail("the host died before it started the workload"), (error: unknown) => error);
+  assert.ok(failure instanceof WindowsJobStartFailedError, String(failure));
+  const { pid, rootAlive } = await answered;
+  const [folder] = jobFolders(stateDirectory);
+  assert.ok(pid > 0 && folder, folder?.events);
+  // The supervisor acknowledged the abort and exited; its status is final.
+  assert.ok(await waitUntil(() => !alive(Number(jobFolders(stateDirectory)[0]?.status.supervisorPid)), 30_000), "the supervisor exited");
+  const statuses = read(folder, "supervisor.jsonl").split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line) as { status?: string; rootEnding?: boolean; rootEndedBy?: string; jobEmptyProof?: boolean });
+  assert.equal(statuses.findLast((entry) => entry.rootEndedBy !== undefined)?.rootEndedBy,
+    fault === "assign_path_exit_before_assign" ? "identity" : "intent", JSON.stringify(statuses));
+  assert.ok(statuses.some((entry) => entry.rootEnding === true), "the supervisor ran its ender");
+  assert.match(read(folder, "stderr.log"), /Assign-path root end was not proven \(exit 0\): ready\r?\nalive: /);
+  assert.equal(rootAlive, true, "a root the ender could not identify was not killed");
+  assert.equal(statuses.some((entry) => entry.jobEmptyProof === true), false, `no empty proof, also once the root's pipes closed: ${JSON.stringify(statuses)}`);
+  assert.equal(statuses.some((entry) => entry.status === "stopped"), false, JSON.stringify(statuses));
+  // The exact record stays held: it cannot be released without a recorded stop.
+  const { processId, startedAt } = failure.startRecord;
+  await assert.rejects(service.releaseOwned(processId, owner, startedAt, fence));
 });
 
 test("a stopped start whose output was discarded is settled through the fenced status path, also after a Runner restart", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
