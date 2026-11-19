@@ -156,17 +156,7 @@ test("stop never waits for an undrained write; the write ends outcome_unknown an
   });
 });
 
-// POSIX: a portable write whose acknowledgement the channel never consumes (it failed, or it landed after the wait was
-// given up) leaves the session's cleanup cleanup_blocked ("Streaming operation exceeded its recovery bound"). On main
-// before this change too: 4 of 10 runs after an EPIPE-failed write, and 2 of 2 after a write that drained after its
-// 15 s deadline (Linux Docker). It is a separate portable-channel bug, named as a follow-up in
-// docs/runner-v2/managed-stdin-write-bound.md; the two tests that end that way run on Windows until it is fixed.
-const POSIX_UNCONSUMED_ACK_SKIP = process.platform !== "win32" &&
-  "POSIX cleanup after an unconsumed portable input acknowledgement is a known separate bug (cleanup_blocked)";
-
-test("a reader that exits without reading fails the pending write at once, coded", {
-  timeout: 120_000, skip: POSIX_UNCONSUMED_ACK_SKIP,
-}, async () => {
+test("a reader that exits without reading fails the pending write at once, coded", { timeout: 120_000 }, async () => {
   await withHost({}, async (f) => {
     const processId = await startReader(f, "exit");
     const results = await sendChunks(f, processId, false).settled;
@@ -177,9 +167,7 @@ test("a reader that exits without reading fails the pending write at once, coded
   });
 });
 
-test("a write past its ceiling is outcome_unknown and delivered once; input works again after the reader drains it", {
-  timeout: 120_000, skip: POSIX_UNCONSUMED_ACK_SKIP,
-}, async () => {
+test("a write past its ceiling is outcome_unknown and delivered once; input works again after the reader drains it", { timeout: 120_000 }, async () => {
   const ceilingMs = 2_000;
   await withHost({ inputWriteCeilingMs: ceilingMs }, async (f) => {
     const processId = await startReader(f, "gate");
@@ -188,8 +176,9 @@ test("a write past its ceiling is outcome_unknown and delivered once; input work
     assert.equal(last.status, "outcome_unknown");
     assert.equal(last.errorCode, "process_input_outcome_unknown");
     assert.ok(last.ms >= ceilingMs - 100, `the write waited out its ceiling (${Math.round(last.ms)} ms)`);
-    // A retry while that write still waits in the pipe is refused before anything is sent (the Job supervisor
-    // admits one write at a time) and leaves input usable: the next write after the drain still goes through.
+    // A retry while that write still waits in the pipe is refused before anything is sent (the Job supervisor admits
+    // one write at a time; the portable channel refuses a write behind its own unsettled command) and leaves input
+    // usable: the next write after the drain still goes through.
     const retry = await f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: "retry", data: "never" }, context));
     assert.equal(retry.status, "rejected", "refused before admission: a certain refusal, not an unknown outcome");
     // The unacknowledged write was handed to the pipe once: when the reader starts, it reads every admitted byte.
@@ -197,8 +186,18 @@ test("a write past its ceiling is outcome_unknown and delivered once; input work
     writeFileSync(join(f.project, "go"), "");
     await readUntil(f, processId, (stdout) => stdout.includes(`seen:${admitted}\n`), false);
     // Drained, the next write is admitted and acknowledged (on the Windows Job too: the spent sequence moved on).
-    const tail = await f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: "tail", data: "tail", closeInput: true }, context));
-    assert.equal(tail.status, "acknowledged");
+    // The reader's output can reach us a moment before the supervisor records the drained write as settled; a write
+    // in that gap is a certain refusal (nothing sent), so a caller may send it again with a new writeId (the service
+    // returns a stored result, a refusal included, for a writeId it has seen). The test waits for that condition, the
+    // settlement, polling fast; it fails only if the refusal outlasts a whole write ceiling.
+    const sendTail = (attempt: number) => f.invoke("process.write_stdin", (context) => f.service.writeInput(processId, { writeId: `tail-${attempt}`, data: "tail", closeInput: true }, context));
+    let attempt = 0;
+    let tail = await sendTail(attempt);
+    for (const refusedUntil = performance.now() + MANAGED_INPUT_WRITE_CEILING_MS; tail.status === "rejected" && performance.now() < refusedUntil;) {
+      await sleep(50);
+      tail = await sendTail(++attempt);
+    }
+    assert.equal(tail.status, "acknowledged", `the tail after ${attempt} refused attempt(s)`);
     const exit = await readUntil(f, processId, (stdout) => reported(stdout, admitted + 4), true);
     assert.equal(exit.exitCode, 0, "never resent: the reader got exactly the admitted bytes and the tail, and nothing of the refused retry");
   });
