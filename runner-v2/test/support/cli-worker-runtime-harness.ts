@@ -73,7 +73,10 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-cli-worker-${label}-`)));
   // Registered before anything can throw (the worktree, the stores), so a failed setup still removes the folder.
   const closers: Array<() => void> = [];
-  t.after(() => {
+  const launchers: ChildCliLauncher[] = [];
+  t.after(async () => {
+    // Every fake CLI this test started has exited before its folder (their working folder) is removed.
+    await Promise.all(launchers.map((launcher) => launcher.settle()));
     for (const close of closers.reverse()) close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
@@ -101,7 +104,11 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
   const h: Harness = {
     root, project, state, scheduler, sessions, evidence, budget, artifacts, ledger, workspaces, workspace, owners,
     scenario: (scenario) => writeFakeCliScenario(files, scenario, `scenario-${++scenarios}.json`),
-    launcher: (scenario) => new ChildCliLauncher(h.scenario(scenario)),
+    launcher: (scenario) => {
+      const launcher = new ChildCliLauncher(h.scenario(scenario));
+      launchers.push(launcher);
+      return launcher;
+    },
     deps: (launcher, overrides = {}) => ({
       schedulerStore: scheduler, sessions, workspaceManager: workspaces, launcher,
       settings: async (): Promise<CliWorkerLaunchSettings> => ({
