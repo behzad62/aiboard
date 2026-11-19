@@ -6,7 +6,7 @@ import { delimiter, dirname, extname, isAbsolute, resolve } from "node:path";
 
 import { ProcessLaunchFailedWithIdentityError, type ProcessBackend, type ProcessBackendBinding, type ProcessEffectFence, type ProcessLaunchRequest } from "./process-backend.js";
 import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
-import { WindowsJobStartFailedError, type WindowsJobProcessHost } from "./windows-job-process-host.js";
+import { memberEvidenceDetail, WindowsJobStartFailedError, type WindowsJobProcessHost } from "./windows-job-process-host.js";
 import { createWindowsJobProcessChannelProvider } from "./windows-job-process-channel.js";
 import type { ProcessHostSemanticFact, ProcessHostSemanticFacts } from "./process-host-semantic-probes.js";
 
@@ -216,6 +216,9 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     await this.claimFence(identity, fence);
     const snapshot = await this.control(identity, fence, async () =>
       await this.service.reconcileOwned(identity.processId, jobOwner(identity), fence));
+    // R2: a Job that held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify, is not
+    // verified empty even once it has no members: that program's children were created outside the Job.
+    if (snapshot.memberEvidence) return { empty: false, detail: memberEvidenceDetail(snapshot.memberEvidence) };
     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
   }
   /** T1 read-only CPU evidence: no fence claim, no control lane, no effect. Undefined when unavailable. */

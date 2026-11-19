@@ -45,8 +45,25 @@ public static class ManagedProcessJobHost
     private const int STD_OUTPUT_HANDLE = -11;
     private const int STD_ERROR_HANDLE = -12;
     private const int JobObjectBasicAccountingInformation = 1;
+    private const int JobObjectAssociateCompletionPortInformation = 7;
     private const int JobObjectExtendedLimitInformation = 9;
     private const uint WAIT_OBJECT_0 = 0;
+    private const uint JOB_OBJECT_MSG_NEW_PROCESS = 6;
+    private const int WAIT_TIMEOUT = 258;
+    // An OpenProcess access right, never a Job limit (the Job's LimitFlags are only KILL_ON_JOB_CLOSE).
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const int ERROR_INSUFFICIENT_BUFFER = 122;
+    private const int ERROR_INVALID_PARAMETER = 87;
+    private const int APPMODEL_ERROR_NO_PACKAGE = 15700;
+    /// <summary>Windows 10 1703: the first build that has PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY.</summary>
+    private const int DESKTOP_APP_POLICY_MIN_BUILD = 15063;
+    /// <summary>R4: the coded refusal when the desktop app policy cannot be set on a Windows that has it.</summary>
+    public const string DesktopPolicyRefusalCode = "windows_job_desktop_policy_unavailable";
+    /// <summary>R2: the coded refusal when the Job's membership messages cannot be watched.</summary>
+    public const string MembershipWatchRefusalCode = "windows_job_membership_watch_unavailable";
+    // Not a launch refusal: the host's error after its workload started when a member event could not be written. The
+    // supervisor keeps it as member evidence, so the stop is never proven (R2).
+    public const string MembershipEvidenceLostCode = "windows_job_membership_evidence_lost";
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SECURITY_ATTRIBUTES
@@ -144,6 +161,31 @@ public static class ManagedProcessJobHost
         public uint TotalTerminatedProcesses;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_ASSOCIATE_COMPLETION_PORT
+    {
+        public IntPtr CompletionKey;
+        public IntPtr CompletionPort;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct OSVERSIONINFOW
+    {
+        public int dwOSVersionInfoSize;
+        public int dwMajorVersion;
+        public int dwMinorVersion;
+        public int dwBuildNumber;
+        public int dwPlatformId;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 128)] public char[] szCSDVersion;
+    }
+
+    /// <summary>A launch refusal with a Runner code, raised before CreateProcess, so no workload process exists.</summary>
+    public sealed class LaunchRefusedException : Exception
+    {
+        public readonly string Code;
+        public LaunchRefusedException(string code, string message) : base(message) { Code = code; }
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
 
@@ -176,6 +218,34 @@ public static class ManagedProcessJobHost
     // No SetLastError: it runs after a failed CreateProcess and must not replace that error.
     [DllImport("kernel32.dll")]
     private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job, int infoClass, ref JOBOBJECT_ASSOCIATE_COMPLETION_PORT info, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateIoCompletionPort(
+        IntPtr fileHandle, IntPtr existingCompletionPort, UIntPtr completionKey, uint numberOfConcurrentThreads);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetQueuedCompletionStatus(
+        IntPtr completionPort, out uint numberOfBytes, out UIntPtr completionKey, out IntPtr overlapped, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool PostQueuedCompletionStatus(
+        IntPtr completionPort, uint numberOfBytes, UIntPtr completionKey, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetPackageFullName(IntPtr process, ref uint packageFullNameLength, StringBuilder packageFullName);
+
+    [DllImport("ntdll.dll")]
+    private static extern int RtlGetVersion(ref OSVERSIONINFOW versionInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
@@ -244,7 +314,8 @@ public static class ManagedProcessJobHost
         string cwd,
         IDictionary<string, string> environment,
         string stdoutPath,
-        string stderrPath)
+        string stderrPath,
+        string injectedFault)
     {
         IntPtr job = IntPtr.Zero;
         IntPtr environmentBlock = IntPtr.Zero;
@@ -252,12 +323,15 @@ public static class ManagedProcessJobHost
         IntPtr stderr = new IntPtr(-1);
         IntPtr stdin = new IntPtr(-1);
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+        MembershipWatch watch = null;
+        bool desktopPolicy = false;
         bool contained = false;
         try
         {
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
+            watch = MembershipWatch.Start(job, EmitLine, injectedFault);
 
             SECURITY_ATTRIBUTES inheritable = new SECURITY_ATTRIBUTES();
             inheritable.nLength = Marshal.SizeOf(typeof(SECURITY_ATTRIBUTES));
@@ -287,8 +361,15 @@ public static class ManagedProcessJobHost
 
             // No intent event file: a root that would be created outside the Job is refused before it is created.
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, job, null, out contained, out processInfo))
+                environmentBlock, cwd, startup, job, null, injectedFault, out contained, out desktopPolicy, out processInfo))
                 ThrowWin32("CreateProcess");
+            // The watch learns the root right after its create, before any Assign. Inside the Job (JOB_LIST) the root's
+            // membership message may be handled first: the root is then identified like any member, which reports nothing
+            // for an unpackaged root. Windows refuses the Job attribute for a packaged root (measured with Store pwsh, both
+            // through its alias and at its target), so such a root takes the Assign path, where this runs before it joins;
+            // were a packaged root ever created inside the Job, it would be reported as evidence (the stop fails closed).
+            int rootPackageResult;
+            watch.SetRoot(processInfo.dwProcessId, PackageFullNameOf(processInfo.hProcess, out rootPackageResult), desktopPolicy, injectedFault);
             // Only the interactive host (every production launch) takes the Assign path (StartSuspended refuses it
             // above); this stays as a second check, and the finally terminates such a root.
             if (!contained)
@@ -330,10 +411,12 @@ public static class ManagedProcessJobHost
                     if (inputLine == null)
                     {
                         TerminateAndProve(job, DefaultStopDeadlineMs);
+                        watch.Settle();
                         return 0;
                     }
                     int deadline = ParseDeadline(inputLine);
                     TerminateAndProve(job, deadline);
+                    watch.Settle();
                     Emit("stopped", processInfo.dwProcessId, null, 0, null);
                     return 0;
                 }
@@ -349,6 +432,7 @@ public static class ManagedProcessJobHost
                     uint active = ActiveProcesses(job);
                     if (active == 0)
                     {
+                        watch.Settle();
                         Emit("natural_stopped", processInfo.dwProcessId, rootExitCode, 0, null);
                         return 0;
                     }
@@ -363,7 +447,8 @@ public static class ManagedProcessJobHost
         }
         catch (Exception error)
         {
-            Emit("error", processInfo.dwProcessId, null, 0, error.Message);
+            LaunchRefusedException refused = error as LaunchRefusedException;
+            Emit("error", processInfo.dwProcessId, null, 0, error.Message, refused == null ? null : refused.Code);
             return 1;
         }
         finally
@@ -377,6 +462,7 @@ public static class ManagedProcessJobHost
             if (stdout != new IntPtr(-1)) CloseHandle(stdout);
             if (stderr != new IntPtr(-1)) CloseHandle(stderr);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
+            if (watch != null) watch.Stop();
             if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
@@ -388,8 +474,11 @@ public static class ManagedProcessJobHost
     // Store's pwsh, has its children created by default outside the desktop app environment, by a broker, so they leave
     // this Job and outlive a stop. The desktop app policy keeps the root's process tree inside: measured 2026-11-10 with
     // Store pwsh 7.6.9 starting node, node stayed in the Job and died with it. It does not reach a packaged program a
-    // descendant launches (that one is created outside the Job either way). Without the attribute (Windows before
-    // 10 1703) the launch goes ahead without the policy, as before.
+    // descendant launches (that one's children are created outside the Job either way); MembershipWatch reports such a
+    // member so the stop is not claimed as proven.
+    // R4: on Windows 10 1703 (build 15063) or newer, which has the attribute, a failure to build or update the attribute
+    // list refuses the launch with a coded refusal before CreateProcess, so no workload process exists. Only an older
+    // Windows, which has no such attribute, launches without the policy, as before.
     private static bool StartSuspended(
         LaunchSpec launch,
         StringBuilder commandLine,
@@ -400,30 +489,50 @@ public static class ManagedProcessJobHost
         STARTUPINFO startup,
         IntPtr job,
         string intentEventPath,
+        string injectedFault,
         out bool inJob,
+        out bool desktopPolicy,
         out PROCESS_INFORMATION processInfo)
     {
         // An app execution alias (IO_REPARSE_TAG_APPEXECLINK, such as python3.exe or pwsh.exe under WindowsApps) names a
         // packaged program, and Windows refuses the Job attribute for it (ERROR_ACCESS_DENIED), both through the alias
         // and at the program the alias names (measured 2026-11-19 with Store pwsh 7.7.0). After that refusal the Job
         // refuses the retried root as well. So such a root takes the Assign path: created suspended, its exact identity
-        // reported, then assigned. Any other reparse point (a plain symbolic link) keeps the Job attribute.
+        // reported, then assigned. The program the alias names (the one R3 pins as the root, in a package's folder) takes
+        // it too. Any other reparse point (a plain symbolic link) keeps the Job attribute.
         bool appExecLink = launch.Application != null && IsAppExecLink(launch.Application);
-        bool useJobList = !ForceAssignPath && !appExecLink;
+        bool packagedProgram = launch.Application != null && InPackageFolder(launch.Application);
+        bool useJobList = !ForceAssignPath && !appExecLink && !packagedProgram;
         bool triedJobList;
         // A root created outside the Job lives there until it is assigned. Before such a create, the host's intent (its
         // own pid and creation time, and the time now) is written, so that if this host dies before it reports the
         // root's identity, its supervisor can end exactly the host's child created after that time.
         if (!useJobList) EmitAssignIntent(intentEventPath);
         if (CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
-            job, useJobList, out triedJobList, out inJob, out processInfo))
+            job, useJobList, injectedFault, out triedJobList, out inJob, out desktopPolicy, out processInfo))
             return true;
         if (!triedJobList) return false;
         // Any other refusal with the root inside the Job: created as before. If the Job then refuses the root, the
         // launch fails and the suspended root is terminated (the callers' finally), never left outside the Job.
         EmitAssignIntent(intentEventPath);
         return CreateSuspended(launch, commandLine, ref processAttributes, ref threadAttributes, environmentBlock, cwd, startup,
-            job, false, out triedJobList, out inJob, out processInfo);
+            job, false, injectedFault, out triedJobList, out inJob, out desktopPolicy, out processInfo);
+    }
+
+    // Whether the path is a program in a Microsoft Store package's folder, anchored to the package roots Windows uses, as
+    // the Runner's PATH filter is (child-environment.ts, isWindowsAppsPathEntry): <root>\Program Files\WindowsApps\..., and
+    // a package's folder on another volume's package root, <root>\WindowsApps\<Name>_..._<PublisherId>\.... A packaged
+    // program anywhere else keeps the Job attribute, which Windows refuses, so its launch fails closed.
+    private static bool InPackageFolder(string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch (Exception) { return false; }
+        if (full.StartsWith(@"\\?\", StringComparison.Ordinal)) full = full.Substring(4);
+        const string root = @"^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)?";
+        return System.Text.RegularExpressions.Regex.IsMatch(full,
+            root + @"\\program files\\windowsapps\\[^\\]+\\|" + root + @"\\windowsapps\\[^\\]+_[a-z0-9]{13}\\",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     }
 
     // Whether the path is an app execution alias: its reparse tag is IO_REPARSE_TAG_APPEXECLINK. A path whose reparse
@@ -469,8 +578,10 @@ public static class ManagedProcessJobHost
         STARTUPINFO startup,
         IntPtr job,
         bool useJobList,
+        string injectedFault,
         out bool withJob,
         out bool inJob,
+        out bool desktopPolicy,
         out PROCESS_INFORMATION processInfo)
     {
         IntPtr attributeList = IntPtr.Zero;
@@ -478,27 +589,45 @@ public static class ManagedProcessJobHost
         IntPtr jobs = IntPtr.Zero;
         inJob = false;
         withJob = false;
+        desktopPolicy = false;
         try
         {
+            bool policyRequired = DesktopAppPolicyExpected();
             IntPtr size = IntPtr.Zero;
             int attributeCount = useJobList ? 2 : 1;
             InitializeProcThreadAttributeList(IntPtr.Zero, attributeCount, 0, ref size);
-            if (size != IntPtr.Zero)
+            int failure = Marshal.GetLastWin32Error();
+            if (size != IntPtr.Zero && injectedFault != "desktop_policy_initialize")
             {
                 attributeList = Marshal.AllocHGlobal(size);
                 if (!InitializeProcThreadAttributeList(attributeList, attributeCount, 0, ref size))
                 {
+                    failure = Marshal.GetLastWin32Error();
                     Marshal.FreeHGlobal(attributeList);
                     attributeList = IntPtr.Zero;
                 }
             }
+            if (attributeList == IntPtr.Zero && policyRequired)
+                throw new LaunchRefusedException(DesktopPolicyRefusalCode,
+                    "The Windows Job host could not build the process attribute list for the desktop app policy (Win32 " +
+                    failure + "), so it refused the launch: without the policy a packaged program's children would leave the Job.");
             bool withPolicy = false;
             if (attributeList != IntPtr.Zero)
             {
                 policy = Marshal.AllocHGlobal(4);
                 Marshal.WriteInt32(policy, PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE);
-                withPolicy = UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
-                    policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero);
+                withPolicy = injectedFault != "desktop_policy_update" &&
+                    UpdateProcThreadAttribute(attributeList, 0, new IntPtr(PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY),
+                        policy, new IntPtr(4), IntPtr.Zero, IntPtr.Zero);
+                // R4: on a Windows that has the policy, a launch without it is refused before CreateProcess, whether or
+                // not the Job attribute is set (the finally frees the list).
+                if (!withPolicy && policyRequired)
+                {
+                    failure = Marshal.GetLastWin32Error();
+                    throw new LaunchRefusedException(DesktopPolicyRefusalCode,
+                        "The Windows Job host could not set the desktop app policy (Win32 " + failure +
+                        "), so it refused the launch: without the policy a packaged program's children would leave the Job.");
+                }
                 // The root is created inside the Job (Windows 10+), so no moment exists in which it lives outside it:
                 // a host killed between CreateProcess and an AssignProcessToJobObject call would otherwise leave a
                 // suspended root behind, outside every Job.
@@ -511,11 +640,13 @@ public static class ManagedProcessJobHost
                 }
                 if (!withPolicy && !withJob)
                 {
+                    // Neither attribute was set (a Windows without the policy, on the Assign path): no list.
                     DeleteProcThreadAttributeList(attributeList);
                     Marshal.FreeHGlobal(attributeList);
                     attributeList = IntPtr.Zero;
                 }
             }
+            desktopPolicy = withPolicy;
             STARTUPINFOEX extended = new STARTUPINFOEX();
             extended.StartupInfo = startup;
             uint creationFlags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
@@ -544,6 +675,326 @@ public static class ManagedProcessJobHost
         }
     }
 
+    // True on Windows 10 1703 (build 15063) or newer, where PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY exists. RtlGetVersion
+    // reports the real version whatever the host's manifest says. If it cannot answer, the policy is expected (fail closed).
+    private static bool DesktopAppPolicyExpected()
+    {
+        OSVERSIONINFOW version = new OSVERSIONINFOW();
+        version.dwOSVersionInfoSize = Marshal.SizeOf(typeof(OSVERSIONINFOW));
+        if (RtlGetVersion(ref version) != 0) return true;
+        return version.dwMajorVersion > 10 ||
+            (version.dwMajorVersion == 10 && version.dwBuildNumber >= DESKTOP_APP_POLICY_MIN_BUILD);
+    }
+
+    // R2: the Job's own membership messages. The port is associated before the root joins, so every process that joins
+    // the Job, the root and each descendant (members of nested Jobs too), posts JOB_OBJECT_MSG_NEW_PROCESS with its PID.
+    // Each non-root member is opened at once and asked for its package identity. A packaged (MSIX / Microsoft Store)
+    // member is evidence that the stop cannot be proven: Windows creates a packaged program's children outside this Job
+    // unless the program is the Job's root (PR #167), so they can outlive the Job. A member that cannot be identified (it
+    // was gone before it could be opened, or its PID no longer names a member), a Job whose process count is ahead of
+    // the messages received (Windows does not guarantee their delivery), or a watch that fails is the same evidence: the
+    // stop fails closed. The evidence goes out as a "member" event at once, and the supervisor keeps it in its durable
+    // status. This is the Job's own evidence, never a host census: a packaged program created outside the Job, by
+    // anything, is not seen here.
+    private sealed class MembershipWatch
+    {
+        private static readonly UIntPtr SettleKey = new UIntPtr(2);
+        private const int MaxReports = 16;
+        // The settle wait returns the moment the watch has handled its queue (an event, never a sleep); this is only its
+        // ceiling. Measured 2026-11-18 (16 cores; single process, 40 sequential and 40 detached children, a Store pwsh
+        // root starting node; idle and under 4 and 6 busy cores): 120 of 120 settles took under 1 ms (watch_settled).
+        // A settle past the ceiling is evidence (fail closed), so it sits thousands of times above the measured worst.
+        private const int SettleWaitMs = 5000;
+        private readonly IntPtr job;
+        private readonly IntPtr port;
+        private readonly Action<string> emit;
+        private readonly object gate = new object();
+        private uint rootPid;
+        private string rootPackage;
+        private bool rootPolicy;
+        private long seen;
+        private long explained;
+        private int quietMismatches;
+        private int reports;
+        private readonly List<string> pending = new List<string>();
+        private string failEmits;
+        // Set once the watch is settled or stopped: from then on it never touches the Job (whose handle the host closes
+        // next, so a later query would fail and read as false evidence). Read and written only under gate.
+        private bool finished;
+        private ManualResetEvent settled;
+
+        private MembershipWatch(IntPtr job, IntPtr port, Action<string> emit)
+        {
+            this.job = job;
+            this.port = port;
+            this.emit = emit;
+        }
+
+        public static MembershipWatch Start(IntPtr job, Action<string> emit, string injectedFault)
+        {
+            IntPtr port = CreateIoCompletionPort(new IntPtr(-1), IntPtr.Zero, UIntPtr.Zero, 1);
+            if (port == IntPtr.Zero)
+                throw new LaunchRefusedException(MembershipWatchRefusalCode,
+                    "The Windows Job host could not create a completion port for the Job's membership messages (Win32 " +
+                    Marshal.GetLastWin32Error() + "), so it refused the launch.");
+            JOBOBJECT_ASSOCIATE_COMPLETION_PORT association = new JOBOBJECT_ASSOCIATE_COMPLETION_PORT();
+            association.CompletionKey = new IntPtr(1);
+            association.CompletionPort = port;
+            bool associated = injectedFault != "membership_watch" && SetInformationJobObject(job,
+                JobObjectAssociateCompletionPortInformation, ref association,
+                (uint)Marshal.SizeOf(typeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT)));
+            if (!associated)
+            {
+                int failure = Marshal.GetLastWin32Error();
+                CloseHandle(port);
+                throw new LaunchRefusedException(MembershipWatchRefusalCode,
+                    "The Windows Job host could not watch the Job's membership messages (Win32 " + failure +
+                    "), so it refused the launch: a packaged descendant could not be detected.");
+            }
+            MembershipWatch watch = new MembershipWatch(job, port, emit);
+            Thread thread = new Thread(watch.Loop);
+            thread.IsBackground = true;
+            // Opens each member as soon as its message arrives, ahead of the workload's own threads.
+            thread.Priority = ThreadPriority.Highest;
+            thread.Start();
+            return watch;
+        }
+
+        /// <summary>
+        /// Called after CreateProcess and before AssignProcessToJobObject, so the root's message is known. A packaged root
+        /// started with the desktop app policy passes its identity to its descendants (measured 2026-11-18, Store pwsh
+        /// 7.7: node, conhost and a second pwsh it started all carried it), and those stay in the Job and die with it, so a
+        /// member with exactly the root's package under the policy is not evidence. Any other packaged member is.
+        /// </summary>
+        public void SetRoot(uint pid, string package, bool desktopPolicy, string injectedFault)
+        {
+            lock (gate)
+            {
+                rootPid = pid;
+                // Test faults, stricter only: each treats the root as unpackaged, so its members are reported; the
+                // member_emit_* ones also fail member writes (see Flush).
+                bool emitFault = injectedFault == "member_emit_retry" || injectedFault == "member_emit_lost" ||
+                    injectedFault == "member_emit_unwritable";
+                rootPackage = injectedFault == "membership_ignore_root_package" || emitFault ? null : package;
+                failEmits = emitFault ? injectedFault : null;
+                rootPolicy = desktopPolicy;
+            }
+        }
+
+        /// <summary>
+        /// Before a terminal event: every message queued so far is handled (the port is first in, first out, so the
+        /// settle packet comes after them), then the Job's own process count is compared with the messages received.
+        /// </summary>
+        public void Settle()
+        {
+            ManualResetEvent done = new ManualResetEvent(false);
+            System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+            lock (gate)
+            {
+                if (finished) throw new InvalidOperationException("The Job's membership watch was already settled or stopped.");
+                settled = done;
+            }
+            if (!PostQueuedCompletionStatus(port, 0, SettleKey, IntPtr.Zero))
+                lock (gate) Report(0, "unidentified", null, "The Job's membership messages could not be settled (Win32 " +
+                    Marshal.GetLastWin32Error() + ").");
+            else if (!done.WaitOne(SettleWaitMs))
+                lock (gate) Report(0, "unidentified", null, "The Job's membership messages did not settle within " +
+                    SettleWaitMs + " ms.");
+            lock (gate)
+            {
+                finished = true;
+                // Evidence only, never a lifecycle fact: how long the settle took, the measure SettleWaitMs is set from.
+                try { emit("{\"type\":\"watch_settled\",\"ms\":" + clock.ElapsedMilliseconds + ",\"members\":" + seen + "}"); }
+                catch (Exception) { }
+                Flush(false);
+                // A member event that could not be written must not end as a clean stop: the host reports an error.
+                if (pending.Count > 0) throw new LaunchRefusedException(MembershipEvidenceLostCode,
+                    "The Windows Job host could not record its membership evidence, so the stop is not proven.");
+            }
+        }
+
+        /// <summary>
+        /// Before the host closes the Job handle, on every path: the watch stops touching the Job. Every handling step runs
+        /// under gate, so once this returns no step that could still query the Job is running or will run.
+        /// </summary>
+        public void Stop()
+        {
+            lock (gate) finished = true;
+            PostQueuedCompletionStatus(port, 0, SettleKey, IntPtr.Zero);
+        }
+
+        private void Loop()
+        {
+            while (true)
+            {
+                try
+                {
+                    uint message;
+                    UIntPtr key;
+                    IntPtr overlapped;
+                    if (!GetQueuedCompletionStatus(port, out message, out key, out overlapped, 100))
+                    {
+                        int failure = Marshal.GetLastWin32Error();
+                        lock (gate)
+                        {
+                            if (finished) return;
+                            Flush(false);
+                            if (failure == WAIT_TIMEOUT) { CheckAccounting(false); continue; }
+                            Report(0, "unidentified", null, "The Job's membership messages stopped (Win32 " + failure + ").");
+                        }
+                        return;
+                    }
+                    lock (gate)
+                    {
+                        if (finished) return;
+                        Flush(false);
+                        if (key == SettleKey)
+                        {
+                            CheckAccounting(true);
+                            // Settled: the host emits its terminal event and closes the Job next, so the watch ends here.
+                            finished = true;
+                            if (settled != null) settled.Set();
+                            return;
+                        }
+                        if (message != JOB_OBJECT_MSG_NEW_PROCESS) continue;
+                        seen++;
+                        uint pid = unchecked((uint)overlapped.ToInt64());
+                        if (pid != rootPid) Identify(pid);
+                    }
+                }
+                catch (Exception error)
+                {
+                    lock (gate)
+                    {
+                        if (finished) return;
+                        Report(0, "unidentified", null, "The Job's membership watch failed: " + error.Message);
+                    }
+                }
+            }
+        }
+
+        // The members the Job counted that no message named: past one quiet interval (a message can be in flight), or at
+        // once when settling, they are unidentified members.
+        private void CheckAccounting(bool final)
+        {
+            long missing = (long)TotalProcesses(job) - seen - explained;
+            if (missing <= 0) { quietMismatches = 0; return; }
+            if (!final && ++quietMismatches < 2) return;
+            quietMismatches = 0;
+            explained += missing;
+            Report(0, "unidentified", null, missing + " process(es) joined the Job without a membership message.");
+        }
+
+        private void Identify(uint pid)
+        {
+            // A member that already exited is not evidence: OpenProcess fails with ERROR_INVALID_PARAMETER, or its PID
+            // now names another process, outside this Job (a process never leaves its Job). Short-lived members whose
+            // parent drops its handle at once (cmd's `start /b`, a sequential `cmd /c`) do this routinely under load, and
+            // in every measured shape Windows created a packaged program outside the Job rather than as a member
+            // (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §6). Any other failure stays unidentified.
+            IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero)
+            {
+                int failure = Marshal.GetLastWin32Error();
+                if (failure == ERROR_INVALID_PARAMETER) return;
+                Report(pid, "unidentified", null, "The member could not be opened to read its package identity (Win32 " +
+                    failure + ").");
+                return;
+            }
+            try
+            {
+                bool inJob;
+                if (!IsProcessInJob(process, job, out inJob))
+                {
+                    Report(pid, "unidentified", null, "Its membership of this Job could not be read (Win32 " +
+                        Marshal.GetLastWin32Error() + ").");
+                    return;
+                }
+                if (!inJob) return;
+                int result;
+                string package = PackageFullNameOf(process, out result);
+                if (result == APPMODEL_ERROR_NO_PACKAGE) return;
+                if (package == null)
+                {
+                    Report(pid, "unidentified", null, "Its package identity could not be read (error " + result + ").");
+                    return;
+                }
+                if (rootPolicy && rootPackage != null && String.Equals(package, rootPackage, StringComparison.Ordinal)) return;
+                Report(pid, "packaged", package,
+                    "A packaged (MSIX or Microsoft Store) program ran in the Job as a descendant; Windows creates its children outside the Job.");
+            }
+            finally { CloseHandle(process); }
+        }
+
+        private void Report(uint pid, string evidence, string package, string detail)
+        {
+            if (reports >= MaxReports) return;
+            reports++;
+            string line = "{\"type\":\"member\",\"pid\":" + pid + ",\"evidence\":\"" + evidence + "\",\"package\":" +
+                (package == null ? "null" : JsonQuote(package)) + ",\"detail\":" + JsonQuote(detail) + "}";
+            pending.Add(line);
+            Flush(failEmits != null);
+        }
+
+        // Writes the pending member lines in order. Never throws: an exception would end the host on a background thread,
+        // losing the evidence while the host's exit still read as the Job's empty proof. A line that cannot be written
+        // stays pending and is retried at the watch's next wake (at most 100 ms later); one still pending when the watch
+        // settles fails the stop (MembershipEvidenceLostCode). injectFailure fails this attempt (stricter-only test
+        // faults: member_emit_retry fails each line's first attempt; member_emit_lost and member_emit_unwritable every
+        // attempt, and member_emit_unwritable also the host's coded error line).
+        private void Flush(bool injectFailure)
+        {
+            while (pending.Count > 0)
+            {
+                try
+                {
+                    if (injectFailure || (failEmits != null && failEmits != "member_emit_retry"))
+                        throw new IOException("injected " + failEmits);
+                    emit(pending[0]);
+                    pending.RemoveAt(0);
+                }
+                catch (Exception) { return; }
+            }
+        }
+    }
+
+    // A process's package full name, or null: result is APPMODEL_ERROR_NO_PACKAGE for an unpackaged process, 0 for a
+    // packaged one, and any other value when the identity could not be read. Before Windows 8 there is no
+    // GetPackageFullName and no packaged programs, so that reads as unpackaged.
+    private static string PackageFullNameOf(IntPtr process, out int result)
+    {
+        try
+        {
+            uint length = 0;
+            result = GetPackageFullName(process, ref length, null);
+            if (result != ERROR_INSUFFICIENT_BUFFER) return null;
+            StringBuilder name = new StringBuilder((int)length);
+            result = GetPackageFullName(process, ref length, name);
+            return result == 0 ? name.ToString() : null;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            result = APPMODEL_ERROR_NO_PACKAGE;
+            return null;
+        }
+    }
+
+    private static uint TotalProcesses(IntPtr job)
+    {
+        int size = Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+        IntPtr pointer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation,
+                pointer, (uint)size, IntPtr.Zero)) ThrowWin32("QueryInformationJobObject");
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting =
+                (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)Marshal.PtrToStructure(
+                    pointer, typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+            return accounting.TotalProcesses;
+        }
+        finally { Marshal.FreeHGlobal(pointer); }
+    }
+
     // The LSP mode keeps its standard streams transparent: the PowerShell host
     // reads one bootstrap line, then the launched server exclusively owns the
     // inherited stdin/stdout/stderr handles. The Job Object remains open until
@@ -560,6 +1011,8 @@ public static class ManagedProcessJobHost
         IntPtr job = IntPtr.Zero;
         IntPtr environmentBlock = IntPtr.Zero;
         PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION();
+        MembershipWatch watch = null;
+        bool desktopPolicy = false;
         bool contained = false;
         try
         {
@@ -569,6 +1022,7 @@ public static class ManagedProcessJobHost
             job = CreateJobObject(IntPtr.Zero, null);
             CheckHandle(job, "CreateJobObject");
             SetKillOnClose(job);
+            watch = MembershipWatch.Start(job, delegate(string line) { EmitLspLine(eventPath, line); }, injectedFault);
 
             IntPtr stdin = GetStdHandle(STD_INPUT_HANDLE);
             IntPtr stdout = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -610,7 +1064,7 @@ public static class ManagedProcessJobHost
                 EmitLsp(eventPath, "fault_sentinel", (uint)sentinel.Id, null, 0, null);
             }
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
-                environmentBlock, cwd, startup, job, eventPath, out contained, out processInfo))
+                environmentBlock, cwd, startup, job, eventPath, injectedFault, out contained, out desktopPolicy, out processInfo))
                 ThrowWin32("CreateProcess");
             // Stricter-only test faults: the host dies right after CreateProcess, before resume, as a kill of the host
             // would. Inside the Job (JOB_LIST) the Job's kill-on-close ends the root; on the Assign path the supervisor
@@ -620,6 +1074,13 @@ public static class ManagedProcessJobHost
                 EmitLsp(eventPath, "fault_created", processInfo.dwProcessId, null, 0, null);
                 System.Diagnostics.Process.GetCurrentProcess().Kill();
             }
+            // The watch learns the root right after its create, before any Assign. Inside the Job (JOB_LIST) the root's
+            // membership message may be handled first: the root is then identified like any member, which reports nothing
+            // for an unpackaged root. Windows refuses the Job attribute for a packaged root (measured with Store pwsh, both
+            // through its alias and at its target), so such a root takes the Assign path, where this runs before it joins;
+            // were a packaged root ever created inside the Job, it would be reported as evidence (the stop fails closed).
+            int rootPackageResult;
+            watch.SetRoot(processInfo.dwProcessId, PackageFullNameOf(processInfo.hProcess, out rootPackageResult), desktopPolicy, injectedFault);
             if (!contained)
             {
                 // The Assign path: the suspended root lives outside the Job until it is assigned. Its exact identity
@@ -643,6 +1104,13 @@ public static class ManagedProcessJobHost
             // Stricter-only test fault: the workload runs (and may write output) while its started line is late, as on a
             // loaded host; a launcher that gives up meanwhile aborts a start whose workload already ran.
             if (injectedFault == "late_started_line") Thread.Sleep(30000);
+            // Stricter-only test fault: the started line cannot be written. The workload runs for the write's retry
+            // window (about a second, EmitLspLine) before the failure is thrown, and no later line is written either.
+            if (injectedFault == "started_emit_unwritable")
+            {
+                Thread.Sleep(1000);
+                throw new IOException("injected started_emit_unwritable");
+            }
             EmitLsp(eventPath, "started", processInfo.dwProcessId, null, ActiveProcesses(job), null);
 
             bool rootExited = false;
@@ -693,6 +1161,7 @@ public static class ManagedProcessJobHost
                     uint active = ActiveProcesses(job);
                     if (active == 0)
                     {
+                        watch.Settle();
                         EmitLsp(eventPath, "natural_stopped", processInfo.dwProcessId, rootExitCode, 0, null);
                         return unchecked((int)rootExitCode);
                     }
@@ -708,10 +1177,22 @@ public static class ManagedProcessJobHost
         catch (Exception error)
         {
             Win32Exception native = error as Win32Exception;
+            LaunchRefusedException refused = error as LaunchRefusedException;
             string detail = native == null
                 ? error.Message
                 : error.Message + " (Win32 " + native.NativeErrorCode + ")";
-            EmitLsp(eventPath, "error", processInfo.dwProcessId, null, 0, detail);
+            // Stricter-only test fault: the event file stays unwritable for the coded line too. The supervisor then sees
+            // a host that ended after its workload started with no natural stop and no stop request (R2 evidence).
+            if (refused != null && refused.Code == MembershipEvidenceLostCode && injectedFault == "member_emit_unwritable")
+                throw new IOException("injected member_emit_unwritable");
+            if (injectedFault == "started_emit_unwritable")
+                throw new IOException("injected started_emit_unwritable");
+            // R2: "launched": false only when no process was ever created (a coded refusal or a CreateProcess failure).
+            // Any other failure before the started line leaves the Job's membership unsettled, and the supervisor keeps
+            // that as evidence.
+            string line = EventLine("error", processInfo.dwProcessId, null, 0, detail, refused == null ? null : refused.Code);
+            if (processInfo.hProcess == IntPtr.Zero) line = line.Substring(0, line.Length - 1) + ",\"launched\":false}";
+            EmitLspLine(eventPath, line);
             return 1;
         }
         finally
@@ -722,6 +1203,7 @@ public static class ManagedProcessJobHost
             if (processInfo.hThread != IntPtr.Zero) CloseHandle(processInfo.hThread);
             if (processInfo.hProcess != IntPtr.Zero) CloseHandle(processInfo.hProcess);
             if (environmentBlock != IntPtr.Zero) Marshal.FreeHGlobal(environmentBlock);
+            if (watch != null) watch.Stop();
             if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
@@ -787,7 +1269,7 @@ public static class ManagedProcessJobHost
         string line = "{\"type\":\"accounting\",\"pid\":" + pid +
             ",\"exitCode\":null,\"activeProcesses\":0,\"error\":null,\"cpu100ns\":" + cpu100ns + "}" +
             Environment.NewLine;
-        File.AppendAllText(eventPath, line, new UTF8Encoding(false));
+        lock (EventLock) File.AppendAllText(eventPath, line, new UTF8Encoding(false));
         return line.Length;
     }
 
@@ -1003,13 +1485,35 @@ public static class ManagedProcessJobHost
         return result.ToString();
     }
 
-    private static void Emit(string type, uint pid, uint? exitCode, uint active, string error)
+    // One writer at a time: the membership watch writes events from its own thread.
+    private static readonly object EventLock = new object();
+
+    private static string EventLine(string type, uint pid, uint? exitCode, uint active, string error, string code)
     {
         string escaped = error == null ? "null" : "\"" + error.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-        Console.Out.WriteLine("{\"type\":\"" + type + "\",\"pid\":" + pid +
+        return "{\"type\":\"" + type + "\",\"pid\":" + pid +
             ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
-            ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}");
-        Console.Out.Flush();
+            ",\"activeProcesses\":" + active + ",\"error\":" + escaped +
+            (code == null ? "" : ",\"code\":\"" + code + "\"") + "}";
+    }
+
+    private static void Emit(string type, uint pid, uint? exitCode, uint active, string error)
+    {
+        Emit(type, pid, exitCode, active, error, null);
+    }
+
+    private static void Emit(string type, uint pid, uint? exitCode, uint active, string error, string code)
+    {
+        EmitLine(EventLine(type, pid, exitCode, active, error, code));
+    }
+
+    private static void EmitLine(string line)
+    {
+        lock (EventLock)
+        {
+            Console.Out.WriteLine(line);
+            Console.Out.Flush();
+        }
     }
 
     // The Assign path's intent, written before the root is created outside the Job: this host's pid and creation time,
@@ -1036,18 +1540,39 @@ public static class ManagedProcessJobHost
 
     private static void EmitLsp(string eventPath, string type, uint pid, uint? exitCode, uint active, string error)
     {
-        string escaped = error == null ? "null" : "\"" + error.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-        string line = "{\"type\":\"" + type + "\",\"pid\":" + pid +
-            ",\"exitCode\":" + (exitCode.HasValue ? exitCode.Value.ToString() : "null") +
-            ",\"activeProcesses\":" + active + ",\"error\":" + escaped + "}";
-        if (String.IsNullOrWhiteSpace(eventPath))
+        EmitLsp(eventPath, type, pid, exitCode, active, error, null);
+    }
+
+    private static void EmitLsp(string eventPath, string type, uint pid, uint? exitCode, uint active, string error, string code)
+    {
+        EmitLspLine(eventPath, EventLine(type, pid, exitCode, active, error, code));
+    }
+
+    // A lifecycle or evidence event: a write that fails (the file briefly held by another reader) is retried for about
+    // a second before the failure is thrown.
+    private static void EmitLspLine(string eventPath, string line)
+    {
+        lock (EventLock)
         {
-            Console.Error.WriteLine("@aiboard-lsp-job-host:" + line);
-            Console.Error.Flush();
-        }
-        else
-        {
-            File.AppendAllText(eventPath, line + Environment.NewLine, new UTF8Encoding(false));
+            if (String.IsNullOrWhiteSpace(eventPath))
+            {
+                Console.Error.WriteLine("@aiboard-lsp-job-host:" + line);
+                Console.Error.Flush();
+                return;
+            }
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.AppendAllText(eventPath, line + Environment.NewLine, new UTF8Encoding(false));
+                    return;
+                }
+                catch (IOException)
+                {
+                    if (attempt >= 40) throw;
+                    Thread.Sleep(25);
+                }
+            }
         }
     }
 
@@ -1136,6 +1661,9 @@ function Initialize-JobHostType {
 }
 
 if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
+    # R2: until RunInteractive is entered no process can have been created, so a failure here says "launched": false.
+    # A failure that escapes RunInteractive (its own error line could not be written) does not: it may have run one.
+    $runInteractiveEntered = $false
     try {
         $bootstrap = [Console]::In.ReadLine()
         if ([string]::IsNullOrWhiteSpace($bootstrap)) {
@@ -1156,6 +1684,7 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
             $environment[$property.Name] = [string]$property.Value
         }
         Initialize-JobHostType -HelperAssemblyPath $configuration.helperAssemblyPath -HelperAssemblySha256 $configuration.helperAssemblySha256 -EventPath $configuration.eventPath
+        $runInteractiveEntered = $true
         $exitCode = [ManagedProcessJobHost]::RunInteractive(
             [string]$configuration.command,
             [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
@@ -1166,10 +1695,14 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
         )
         exit $exitCode
     } catch {
-        if ($null -ne $configuration -and -not [string]::IsNullOrWhiteSpace([string]$configuration.eventPath)) {
-            [IO.File]::AppendAllText([string]$configuration.eventPath, '{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}' + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        $launchedField = if ($runInteractiveEntered) { '' } else { ',"launched":false' }
+        $bootstrapError = '{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."' + $launchedField + '}'
+        if ($runInteractiveEntered -and [string]$configuration.injectedFault -eq "started_emit_unwritable") {
+            # Stricter-only test fault: the event file stays unwritable for this line too, so the host ends silent.
+        } elseif ($null -ne $configuration -and -not [string]::IsNullOrWhiteSpace([string]$configuration.eventPath)) {
+            [IO.File]::AppendAllText([string]$configuration.eventPath, $bootstrapError + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
         } else {
-            [Console]::Error.WriteLine('@aiboard-lsp-job-host:{"type":"error","pid":0,"exitCode":null,"activeProcesses":0,"error":"LSP Job Object bootstrap failed."}')
+            [Console]::Error.WriteLine('@aiboard-lsp-job-host:' + $bootstrapError)
             [Console]::Error.Flush()
         }
         exit 1
@@ -1188,6 +1721,7 @@ $exitCode = [ManagedProcessJobHost]::Run(
     [string]$configuration.cwd,
     $environment,
     [string]$configuration.stdoutPath,
-    [string]$configuration.stderrPath
+    [string]$configuration.stderrPath,
+    [string]$configuration.injectedFault
 )
 exit $exitCode

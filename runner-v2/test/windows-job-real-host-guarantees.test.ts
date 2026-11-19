@@ -17,7 +17,7 @@
 // never a record-set diff, and the supervisor gate tolerates supervisors that
 // were already alive before the file started (a PX-2c pre-started spare).
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -31,6 +31,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import test, { after, before, type TestContext } from "node:test";
 
@@ -527,12 +528,59 @@ test("real-host pin: a git call outside its exact grant fails closed without lau
   await assertNoLiveSupervisors(h);
 });
 
+// Own-process tests. R2 (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §6): a Job host that ended with neither
+// a natural stop nor a stop the Runner asked for never settled its membership watch, so its Job is never verified empty
+// and the run keeps its record and its internal helper, as a blocked run does. A test that kills a Job host from
+// outside therefore runs in a child process of its own (this file again, filtered to that test), and the parent test
+// retires that child's tree by the child's own PID once the child has reported, then removes the child's own root.
+const OWN_PROCESS_TEST = process.env.AIBOARD_PX2T_CHILD_TEST;
+const OWN_PROCESS_ROOT_FILE = process.env.AIBOARD_PX2T_CHILD_ROOT_FILE;
+
+function ownProcessTest(name: string, timeoutMs: number, body: (t: TestContext) => Promise<void>): void {
+  if (OWN_PROCESS_TEST === name) {
+    test(name, { timeout: timeoutMs }, async (t) => {
+      const h = needsJob(t);
+      if (h && OWN_PROCESS_ROOT_FILE) writeFileSync(OWN_PROCESS_ROOT_FILE, h.root);
+      await body(t);
+    });
+    return;
+  }
+  if (OWN_PROCESS_TEST !== undefined) return;
+  test(`${name} (in a process of its own)`, { timeout: timeoutMs + 60_000 }, async (t) => {
+    const h = needsJob(t);
+    if (!h) return;
+    const rootFile = join(h.root, `own-process-root-${randomUUID().slice(0, 8)}.txt`);
+    const environment: NodeJS.ProcessEnv = { ...process.env, AIBOARD_PX2T_CHILD_TEST: name, AIBOARD_PX2T_CHILD_ROOT_FILE: rootFile };
+    delete environment.NODE_TEST_CONTEXT;
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const child = spawn(process.execPath, ["--import", "tsx", "--test", "--test-reporter=tap", "--test-concurrency=1",
+      `--test-name-pattern=^${escaped}$`, fileURLToPath(import.meta.url)], { cwd: process.cwd(), env: environment, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += String(chunk); });
+    child.stderr.on("data", (chunk) => { output += String(chunk); });
+    let exited = false;
+    child.once("exit", () => { exited = true; });
+    const verdict = new RegExp(`^(not )?ok \\d+ - ${escaped}$`, "mu");
+    try {
+      await waitFor(() => verdict.test(output) || exited, timeoutMs + 50_000, `the own-process verdict of ${name}`);
+      const found = output.match(verdict);
+      assert.ok(found, `${name} ended in its own process without a verdict:\n${output.slice(-4000)}`);
+      assert.equal(found[1], undefined, `${name} failed in its own process:\n${output.slice(-4000)}`);
+    } finally {
+      // This test's own child and its tree (the run's kept helper), by the child's own PID: never a census.
+      if (!exited && child.pid) execFileSync("taskkill.exe", ["/T", "/F", "/PID", String(child.pid)], { stdio: "ignore", windowsHide: true });
+      await waitFor(() => exited, 30_000, `the own-process child of ${name} to exit`);
+      if (existsSync(rootFile)) rmSync(readFileSync(rootFile, "utf8").trim(), { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+    }
+  });
+}
+
 // G3 — host (Job-host process) death kills the whole tree: killing the
 // powershell.exe that owns the Job must kill the TERM-ignoring tree, and the
-// call must never report a clean success.
-test(
+// call must never report a clean success. It runs in a process of its own (above).
+ownProcessTest(
   "real-host pin: host-process death kills the whole tree and never reports success",
-  { timeout: 55_000 },
+  55_000,
   async (t) => {
     const h = needsJob(t);
     if (!h) return;
@@ -1254,9 +1302,10 @@ test(
 // stay untested on the real host (review r2; see the evidence file). Part B
 // keeps the host-death audit pins: a killed call never gains an exit code,
 // live or durably.
-test(
+// Part B kills a Job host, so this test runs in a process of its own (ownProcessTest, above).
+ownProcessTest(
   "real-host pin: recovery reports an in-flight launch fail-closed and host death leaves no exit code",
-  { timeout: 55_000 },
+  55_000,
   async (t) => {
     const h = needsJob(t);
     if (!h) return;

@@ -20,6 +20,8 @@ export interface RunnerOwnedChildEnvironmentCredentialResolver {
 
 export type ChildEnvironmentDecision =
   | { readonly kind: "removed_runner_path"; readonly name: string; readonly count: number }
+  /** R3: Windows packaged-program alias folders (WindowsApps) taken off the child's PATH. */
+  | { readonly kind: "removed_packaged_alias_path"; readonly name: string; readonly count: number }
   | { readonly kind: "removed_ambient"; readonly name: string }
   | { readonly kind: "removed_explicit"; readonly name: string }
   | { readonly kind: "applied_explicit"; readonly name: string }
@@ -104,9 +106,15 @@ export interface PreparedChildEnvironment {
 
 export interface ChildEnvironmentFactory {
   prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment;
+  /**
+   * `rootProgramEnvironment` is the environment the launch's own program is looked up in (R3): the child's, except that
+   * its PATH keeps the WindowsApps folders the child's PATH lost, in their places, so an installed Store program
+   * (pwsh, python3, winget) is still found and pinned to its package's own program, started as the Job's root. It is
+   * never a child's environment.
+   */
   withChildEnvironment<T>(
     capability: ChildEnvironmentCapability,
-    trustedSpawn: (environment: Readonly<Record<string, string>>) => T,
+    trustedSpawn: (environment: Readonly<Record<string, string>>, rootProgramEnvironment?: Readonly<Record<string, string>>) => T,
   ): T;
 }
 
@@ -118,6 +126,8 @@ export interface CreateChildEnvironmentFactoryOptions {
   readonly mcpChildDepth?: number;
   /** VF7b: the Runner's per-owner values; consulted only when a prepare names both runId and sessionId. */
   readonly processEnvironment?: RunnerProcessEnvironmentResolver;
+  /** The platform whose PATH rules apply (R3 removes WindowsApps folders on win32). Defaults to this process's. */
+  readonly platform?: NodeJS.Platform;
 }
 
 export const LOCAL_MCP_DEPTH_LIMIT = 2;
@@ -147,11 +157,13 @@ export function createChildEnvironmentFactory(
   options: CreateChildEnvironmentFactoryOptions,
 ): ChildEnvironmentFactory {
   const environments = new WeakMap<object, Readonly<Record<string, string>>>();
+  const rootProgramEnvironments = new WeakMap<object, Readonly<Record<string, string>>>();
   const redeemedGrantIds = new Set<string>();
   const now = options.now ?? (() => new Date());
   const mcpChildDepth = options.mcpChildDepth ?? parseMcpDepth(process.env.AIBOARD_MCP_DEPTH) + 1;
   if (!Number.isSafeInteger(mcpChildDepth) || mcpChildDepth < 1 || mcpChildDepth > 1_000_000) throw new Error("Invalid child MCP depth.");
   const installRoots = runnerInstallRoots(options.runnerInstallRoot);
+  const platform = options.platform ?? process.platform;
 
   return Object.freeze({
     prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment {
@@ -219,12 +231,16 @@ export function createChildEnvironmentFactory(
         decisions.push({ kind: "applied_runner", name });
       }
       const path = environment.get("PATH");
+      // R3: the PATH the launch's own program is looked up in keeps the WindowsApps entries the child's PATH loses.
+      let rootProgramPath: string | undefined;
       if (path) {
         const entries = path.value.split(delimiter);
-        const retained = entries.filter((entry) => keepsPathEntry(entry, installRoots, request.workingDirectory));
-        if (retained.length !== entries.length) {
-          setEnvironment(environment, path.name, retained.join(delimiter));
-          decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - retained.length });
+        const { outsideInstall, retained } = filterPathEntries(entries, installRoots, request.workingDirectory, platform);
+        if (retained.length !== entries.length) setEnvironment(environment, path.name, retained.join(delimiter));
+        if (outsideInstall.length !== entries.length) decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - outsideInstall.length });
+        if (retained.length !== outsideInstall.length) {
+          decisions.push({ kind: "removed_packaged_alias_path", name: path.name, count: outsideInstall.length - retained.length });
+          rootProgramPath = outsideInstall.join(delimiter);
         }
       }
       const prepend = runner?.pathPrepend ?? [];
@@ -235,10 +251,16 @@ export function createChildEnvironmentFactory(
         const current = environment.get("PATH");
         const name = current?.name ?? (process.platform === "win32" ? "Path" : "PATH");
         setEnvironment(environment, name, [...prepend, ...(current?.value ? [current.value] : [])].join(delimiter));
+        if (rootProgramPath !== undefined) rootProgramPath = [...prepend, ...(rootProgramPath ? [rootProgramPath] : [])].join(delimiter);
         decisions.push({ kind: "applied_runner", name });
       }
       const capability = Object.freeze({}) as ChildEnvironmentCapability;
-      environments.set(capability, createRawEnvironment(environment));
+      const raw = createRawEnvironment(environment);
+      environments.set(capability, raw);
+      if (rootProgramPath !== undefined) {
+        const pathName = environment.get("PATH")!.name;
+        rootProgramEnvironments.set(capability, Object.freeze({ ...raw, [pathName]: rootProgramPath }));
+      }
       return Object.freeze({
         capability,
         audit: freezeAudit(inheritedNames, removedNames, explicitSafeNames, grantedNames, decisions),
@@ -247,13 +269,15 @@ export function createChildEnvironmentFactory(
 
     withChildEnvironment<T>(
       capability: ChildEnvironmentCapability,
-      trustedSpawn: (environment: Readonly<Record<string, string>>) => T,
+      trustedSpawn: (environment: Readonly<Record<string, string>>, rootProgramEnvironment?: Readonly<Record<string, string>>) => T,
     ): T {
       if (!capability || typeof capability !== "object") throw invalidGrant();
       const environment = environments.get(capability);
       if (!environment) throw invalidGrant();
       environments.delete(capability);
-      return trustedSpawn(environment);
+      const rootProgramEnvironment = rootProgramEnvironments.get(capability) ?? environment;
+      rootProgramEnvironments.delete(capability);
+      return trustedSpawn(environment, rootProgramEnvironment);
     },
   });
 }
@@ -392,20 +416,62 @@ function runnerInstallRoots(runnerInstallRoot?: string): string[] {
   return [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
 }
 
-function keepsPathEntry(entry: string, installRoots: readonly string[], workingDirectory?: string): boolean {
-  const candidate = pathEntryCandidate(entry, workingDirectory);
-  return candidate === undefined || !installRoots.some((root) => insideInstall(root, candidate));
+/**
+ * VF4b: the PATH a launch in `workingDirectory` searches before the owner's folders are put first: the same entries
+ * `prepare` keeps (outside the Runner's own installation and, on Windows, outside WindowsApps), so a check's tool
+ * lookup never finds a tool the launch cannot find.
+ */
+export function withoutRunnerInstallPath(path: string, options: {
+  readonly workingDirectory?: string; readonly runnerInstallRoot?: string; readonly delimiter?: string; readonly platform?: NodeJS.Platform;
+  /** "root_program": the PATH a launch's own program is looked up in, which keeps the WindowsApps folders (R3). */
+  readonly purpose?: "child" | "root_program";
+} = {}): string {
+  const separator = options.delimiter ?? delimiter;
+  const installRoots = runnerInstallRoots(options.runnerInstallRoot);
+  const { outsideInstall, retained } = filterPathEntries(path.split(separator), installRoots, options.workingDirectory, options.platform ?? process.platform);
+  return (options.purpose === "root_program" ? outsideInstall : retained).join(separator);
+}
+
+/** Both PATH filters with each entry's real path resolved once: the Runner's installation, then WindowsApps (win32). */
+function filterPathEntries(entries: readonly string[], installRoots: readonly string[], workingDirectory: string | undefined, platform: NodeJS.Platform): { outsideInstall: string[]; retained: string[] } {
+  const outsideInstall: string[] = [], retained: string[] = [];
+  for (const entry of entries) {
+    const candidate = pathEntryCandidate(entry, workingDirectory);
+    if (candidate !== undefined && installRoots.some((root) => insideInstall(root, candidate))) continue;
+    outsideInstall.push(entry);
+    if (platform === "win32" && (isWindowsAppsPathEntry(entry) || (candidate !== undefined && isWindowsAppsPathEntry(candidate)))) continue;
+    retained.push(entry);
+  }
+  return { outsideInstall, retained };
 }
 
 /**
- * VF4b: the PATH a launch in `workingDirectory` searches before the owner's folders are put first: the same entries
- * `prepare` keeps, so a check's tool lookup never finds a tool only in the Runner's own installation, which the launch
- * cannot find.
+ * R3: a Windows folder of packaged (MSIX / Microsoft Store) programs: %LOCALAPPDATA%\Microsoft\WindowsApps, which holds
+ * the app execution aliases (pwsh.exe, python3.exe, py.exe, ...), its per-package folders, and the packages' own install
+ * folders (%ProgramFiles%\WindowsApps\<package>, which a Store pwsh puts on its children's PATH). A program started from
+ * any of them runs packaged, and Windows creates a packaged program's children outside the Runner's Job unless the program
+ * is the Job's root (PR #167; measured 2026-11-18: the Store pwsh has its package identity whether CreateProcess names
+ * the alias or the package's own pwsh.exe). So a managed child's PATH never holds them, and `pwsh`, `python3` or `py`
+ * typed in a worker's shell does not resolve to a packaged program. This is defense in depth, not proof: an explicit
+ * path still starts one, and the Job host's membership watch (managed-process-job-host.ps1) is what keeps the stop
+ * honest. The Runner's own shells are found from its own PATH (shell-inventory.ts) and started as the Job's root.
  */
-export function withoutRunnerInstallPath(path: string, options: { readonly workingDirectory?: string; readonly runnerInstallRoot?: string; readonly delimiter?: string } = {}): string {
-  const separator = options.delimiter ?? delimiter;
-  const installRoots = runnerInstallRoots(options.runnerInstallRoot);
-  return path.split(separator).filter((entry) => keepsPathEntry(entry, installRoots, options.workingDirectory)).join(separator);
+export function isWindowsAppsPathEntry(entry: string): boolean {
+  const value = normalizeWindowsPathEntry(entry);
+  // Anchored to the folders Windows uses, never any folder that happens to be named WindowsApps: a user's
+  // %LOCALAPPDATA%\Microsoft\WindowsApps (as the Runner sees it, and under any profile), the Program Files package root,
+  // and a package's folder on another volume's package root (<drive>:\WindowsApps\<Name>_<Version>_<Arch>_<Res>_<PublisherId>).
+  const localAppData = process.env.LOCALAPPDATA ? normalizeWindowsPathEntry(process.env.LOCALAPPDATA) : undefined;
+  if (localAppData && (value === `${localAppData}\\microsoft\\windowsapps` || value.startsWith(`${localAppData}\\microsoft\\windowsapps\\`))) return true;
+  // A drive, a UNC share, or a driveless rooted path (the current drive's root).
+  const root = String.raw`^(?:[a-z]:|\\\\[^\\]+\\[^\\]+)?`;
+  return new RegExp(`${root}\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\microsoft\\\\windowsapps(?:\\\\|$)`, "u").test(value) ||
+    new RegExp(`${root}\\\\program files\\\\windowsapps(?:\\\\|$)`, "u").test(value) ||
+    new RegExp(`${root}\\\\windowsapps\\\\[^\\\\]+_[a-z0-9]{13}(?:\\\\|$)`, "u").test(value);
+}
+
+function normalizeWindowsPathEntry(entry: string): string {
+  return entry.trim().replace(/^"(.*)"$/u, "$1").replaceAll("/", "\\").replace(/\\+$/u, "").toLowerCase();
 }
 
 function defaultRunnerInstallRoot(): string {

@@ -142,7 +142,9 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
   assert.ok(!existsSync(probePath),"hermetic probe name is unique before creation");
   const ambient=snapshotNativeBuildAmbientEnvironment();
   const pathName=Object.keys(ambient).find((name)=>name.toUpperCase()==="PATH")??"PATH";
-  const baselinePath=[install,ambient[pathName]??""].join(delimiter);
+  // R3 / rollback pin: on Windows the user's WindowsApps folder is on PATH, so the packaged-alias scrub is always made.
+  const windowsApps=process.platform==="win32"&&process.env.LOCALAPPDATA?join(process.env.LOCALAPPDATA,"Microsoft","WindowsApps"):undefined;
+  const baselinePath=[install,ambient[pathName]??"",...(windowsApps?[windowsApps]:[])].join(delimiter);
   const environment={...ambient,[pathName]:baselinePath,npm_config_cache:"private-v1",INIT_CWD:process.cwd()};
   const host=createExecutionHost({projectRoot:project,stateDirectory:state,artifacts:new ArtifactStore(join(state,"artifacts")),ambientEnvironment:environment});
   try {
@@ -158,6 +160,7 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
     const probe=await binding.commandExecution.execute({...request,arguments:["-e","const cp=require('node:child_process'); const r=cp.spawnSync('"+probeBase+"',[],{shell:true,encoding:'utf8'}); process.exit(r.status===0?0:17);"]});
     assert.equal(probe.process.exitCode,17,"actual project child script fails because probe exists only in runner PATH");
     assert.ok(probe.childEnvironmentAudit?.decisions.some((entry)=>entry.kind==="removed_runner_path"));
+    if(windowsApps)assert.ok(probe.childEnvironmentAudit?.decisions.some((entry)=>entry.kind==="removed_packaged_alias_path"),"the tool-result audit keeps the packaged-alias scrub");
     assert.ok(probe.childEnvironmentAudit?.removedNames.includes("npm_config_cache"));
     assert.ok(probe.childEnvironmentAudit?.removedNames.includes("INIT_CWD"));
     assert.doesNotMatch(JSON.stringify(probe.childEnvironmentAudit),/private-v1/);
@@ -175,10 +178,28 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
         assert.ok(record.environmentAudit.removedNames.includes("npm_config_cache"));
         assert.ok(record.environmentAudit.removedNames.includes("INIT_CWD"));
         assert.ok(record.environmentAudit.scrubDecisions?.some((entry)=>entry.kind==="removed_runner_path"));
+        // Every kind a durable record holds is one Runner 0.3.20 parses, so a rollback still reads the record.
+        for(const decision of record.environmentAudit.scrubDecisions??[])assert.ok(SCRUB_KINDS_0_3_20.includes(decision.kind),`0.3.20 parses ${decision.kind}`);
         assert.doesNotMatch(JSON.stringify(record.environmentAudit),/private-v1/);
       }
     } finally {reopened.store.close();}
   } finally {await host.close();rmSync(probePath,{force:true});rmSync(root,{recursive:true,force:true});}
+});
+
+// The scrub decision kinds Runner 0.3.20's parseScrubDecisions (durable-process-store.ts at 4ed5a01d) accepts in a durable
+// process record; any other kind makes it call the record corrupt after `aiboard update --rollback`. A new kind is
+// parsed in one release and persisted only from the next (removed_packaged_alias_path: persisted after 0.3.21).
+const SCRUB_KINDS_0_3_20:readonly string[]=["removed_runner_path","removed_ambient","removed_explicit","applied_explicit","rejected_explicit","granted_credential","applied_runner"];
+
+test("Rollback pin: a durable process record persists only scrub kinds 0.3.20 parses",async()=> {
+  const {ROLLBACK_PARSEABLE_SCRUB_KINDS,persistableScrubDecisions}=await import("../src/durable-process-store.js");
+  assert.deepEqual([...ROLLBACK_PARSEABLE_SCRUB_KINDS].sort(),[...SCRUB_KINDS_0_3_20].sort());
+  const kept=persistableScrubDecisions([{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_packaged_alias_path",name:"PATH",count:2},{kind:"removed_ambient",name:"INIT_CWD"}]);
+  assert.deepEqual(kept,[{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_ambient",name:"INIT_CWD"}]);
+  // The one writer of a record's scrub decisions goes through the filter (the store's own read parses them).
+  const writers=readdirSync(join(import.meta.dirname,"..","src")).filter((name)=>/\.(?:ts|mts|mjs)$/.test(name))
+    .flatMap((name)=>[...readFileSync(join(import.meta.dirname,"..","src",name),"utf8").matchAll(/scrubDecisions: (?!parseScrubDecisions\()([^,\r\n]+)/g)].map((match)=>`${name}: ${match[1]}`));
+  assert.deepEqual(writers,["subprocess-runtime.ts: persistableScrubDecisions(preparedEnvironment.audit.decisions)"]);
 });
 
 test("V1 reserved npm credentials cannot bypass scrub but legitimate credentials remain single-use",()=> {

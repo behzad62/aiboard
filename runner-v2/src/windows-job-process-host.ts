@@ -1,4 +1,5 @@
 // RUNNER_RAW_PROCESS_BOUNDARY: Windows Job containment host and helper probes require direct OS process APIs.
+import { WINDOWS_JOB_LAUNCH_REFUSAL_CODES } from "./windows-job-launch-refusal.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
@@ -74,7 +75,17 @@ export interface WindowsJobProcessSnapshot {
   readonly exitCode: number | null; readonly signal: NodeJS.Signals | null;
   readonly startedAt: string; readonly updatedAt: string;
   readonly stdout: string; readonly stderr: string; readonly ownershipReleased?: boolean;
+  /**
+   * R2: the Job held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify. Windows creates
+   * a packaged program's children outside the Job, so the Job's emptiness does not prove the workload stopped: such a
+   * Job is never verified empty or released (DECISION 2026-09-19 §8.3, cleanup_blocked).
+   */
+  readonly memberEvidence?: WindowsJobMemberEvidence;
 }
+export interface WindowsJobMemberEvidenceEntry {
+  readonly pid: number; readonly evidence: "packaged" | "unidentified"; readonly package: string | null; readonly detail: string;
+}
+export interface WindowsJobMemberEvidence { readonly count: number; readonly entries: readonly WindowsJobMemberEvidenceEntry[] }
 export interface WindowsJobOutputRead {
   readonly stdout: Uint8Array; readonly stderr: Uint8Array;
   readonly next: { readonly stdout: number; readonly stderr: number };
@@ -161,10 +172,14 @@ export interface WindowsJobChannelState {
  * ends the host right after it created the root inside the Job, before it resumed it, and delivers the host's close
  * to its supervisor 2 s late; assign_path_exit_after_create takes the Assign path (as an app execution alias does)
  * and ends the host right after CreateProcess, before it reported the root's identity; assign_path_exit_before_assign
- * takes the Assign path and ends the host after it reported that identity, before the Assign.
+ * takes the Assign path and ends the host after it reported that identity, before the Assign. desktop_policy_initialize,
+ * desktop_policy_update and membership_watch refuse the launch before CreateProcess; membership_ignore_root_package
+ * reports every packaged member, the root's own package included; the member_emit_* ones fail member writes; and
+ * started_emit_unwritable leaves the host silent after it resumes the workload.
  */
 export type WindowsJobInjectedLaunchFault = "slow_start_late_close" | "late_started_line" | "host_exit_after_create" | "assign_path_exit_after_create" |
-  "assign_path_exit_before_assign";
+  "assign_path_exit_before_assign" | "desktop_policy_initialize" | "desktop_policy_update" | "membership_watch" |
+  "membership_ignore_root_package" | "member_emit_retry" | "member_emit_lost" | "member_emit_unwritable" | "started_emit_unwritable";
 export interface WindowsJobProcessHostOptions {
   readonly stateDirectory: string; readonly platform?: NodeJS.Platform;
   readonly idFactory?: () => string; readonly clock?: () => string;
@@ -194,6 +209,11 @@ export interface WindowsJobProcessHostOptions {
    * read, or the host's child list), which must leave the stop unproven.
    */
   readonly injectedRootEnderFault?: "query_fails";
+  /**
+   * Test seam, stricter-only: the supervisor leaves a coded launch refusal's stop unproven (its ownership never
+   * released), so the refused start is never released and fails with its exact record.
+   */
+  readonly injectedRefusedStopUnproven?: true;
   /** Test seam: ends every start wait, as its ceiling would, once aborted (a test aborts it when the supervisor listens). */
   readonly startWaitSignal?: AbortSignal;
 }
@@ -257,6 +277,8 @@ interface HostRecord extends WindowsJobOwnershipKey {
    * pass that finds it finishes the deletion without the stop proof, whose status file may already be gone.
    */
   retentionRemovingAt?: string;
+  /** R2: kept once seen and never cleared; see WindowsJobProcessSnapshot.memberEvidence. */
+  memberEvidence?: WindowsJobMemberEvidence;
 }
 interface SupervisorStatus {
   protocol: typeof PROTOCOL; processId: string; supervisorPid: number; childPid: number; port: number;
@@ -272,6 +294,10 @@ interface SupervisorStatus {
   claimed?: boolean;
   spareReady?: boolean;
   spareRetired?: string;
+  /** R2: the Job host's packaged or unidentified member evidence. */
+  memberEvidence?: WindowsJobMemberEvidence;
+  /** R4/R2: a coded launch refusal the Job host raised before CreateProcess. */
+  errorCode?: string;
   /** A start stopped before its workload reported started dropped output nobody will read (its counts are then 0). */
   outputDiscarded?: boolean;
   /** The supervisor is ending an Assign-path root its dead host left outside the Job; the launcher's waits extend. */
@@ -759,6 +785,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly startDeadlineMs: number;
   private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
   private readonly injectedRootEnderFault: "query_fails" | undefined;
+  private readonly injectedRefusedStopUnproven: boolean;
   private readonly startWaitSignal: AbortSignal | undefined;
   private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
@@ -802,6 +829,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_CEILING_MS;
     this.injectedLaunchFault = options.injectedLaunchFault;
     this.injectedRootEnderFault = options.injectedRootEnderFault;
+    this.injectedRefusedStopUnproven = options.injectedRefusedStopUnproven === true;
     this.startWaitSignal = options.startWaitSignal;
     this.controlDeadlineMs = options.controlDeadlineMs ?? DEFAULT_CONTROL_DEADLINE_MS;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
@@ -983,6 +1011,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
+        ...(this.injectedRefusedStopUnproven ? { refusedStopUnproven: true } : {}),
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher), this.startSignal(input));
       await this.applyStatus(record, status);
@@ -991,12 +1020,30 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       // The abort waits for the host's exit, which records the start's stop; the error carries the exact record, so
       // the caller settles it on that recorded proof (reconcile, verify-empty, release).
       await abortStartingSupervisor(launcher, token, this.stopDeadlineMs, record.supervisor.statusPath).catch(() => undefined);
+      if (refusalCodeOf(error) && await this.releaseRefusedStart(record, input)) throw error;
       throw new WindowsJobStartFailedError(error instanceof WindowsJobHostError ? error.code : "process_start_failed",
         error instanceof Error ? error.message : "Windows Job start failed.", { processId, startedAt: record.startedAt }, error);
     }
     if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
     if (this.spareOptions.keepWarm === true && input.interactive === true) this.refreshSpareInBackground(input);
     return this.snapshot(record);
+  }
+
+  /**
+   * R4/R2: a launch the Job host refused before CreateProcess created nothing. Once its stop is recorded with the Job
+   * empty, its exact record is released here under the call's own fence (reconcile, then release, with every check a
+   * release has), so the refusal goes back with its own code and words and nothing is left to clean up. A stop that is
+   * not proven, or any failed step, returns false: the caller then fails the start with the exact record, as any other
+   * failed start.
+   */
+  private async releaseRefusedStart(record: Pick<HostRecord, "processId" | "startedAt">,
+    input: { readonly runId: string; readonly sessionId: string; readonly fence?: WindowsJobWriterFence }): Promise<boolean> {
+    const owner: WindowsJobOwnershipKey = { runId: input.runId, sessionId: input.sessionId };
+    try {
+      const reconciled = await this.reconcileOwned(record.processId, owner, input.fence);
+      if (reconciled.status !== "stopped") return false;
+      return (await this.releaseOwned(record.processId, owner, record.startedAt, input.fence)).ownershipReleased === true;
+    } catch { return false; }
   }
 
   /**
@@ -1139,6 +1186,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
+        ...(this.injectedRefusedStopUnproven ? { refusedStopUnproven: true } : {}),
         spare: true,
         ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
       }));
@@ -1287,6 +1335,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         // reached is killed. The error carries the claimed record, so the
         // caller settles it on that proof (reconcile, verify-empty, release).
         await this.stopClaimedStart(claimed, launcher, entry.token).catch(() => undefined);
+        if (refusalCodeOf(error) && await this.releaseRefusedStart(claimed, input)) throw error;
         throw new WindowsJobStartFailedError(error instanceof WindowsJobHostError ? error.code : "process_start_failed",
           `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`,
           { processId, startedAt: claimed.startedAt }, error);
@@ -1557,6 +1606,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is an unclaimed spare.`);
     if (!current.backendOwnershipReleasedAt || current.status !== "stopped")
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} is not released.`);
+    // R2: a record with member evidence is never released, so never retired; checked here as well, fail closed.
+    if (current.memberEvidence)
+      throw new WindowsJobHostError("process_stop_unproven_packaged_descendant", `Windows Job record ${named.processId} holds member evidence.`);
     if (!proveStop) {
       if (current.retentionRemovingAt === undefined) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} lost its retention mark.`);
       return;
@@ -1564,6 +1616,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const status = readSupervisorStatus(current.supervisor.statusPath);
     if (!status) throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} has no durable supervisor status.`);
     this.assertStatusIdentity(current, status);
+    assertNoMemberEvidence(current, status);
     if (status.status !== "stopped" || !status.ownershipReleased)
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job record ${named.processId} stop is not proven.`);
     this.assertJobOutputSettled(current, status);
@@ -1633,6 +1686,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const status = await this.authenticatedStatus(record, false);
     this.assertObservedStatusAuthority(record, status, fence);
     this.throwIfTerminalOutputPending(status);
+    assertNoMemberEvidence(record, status);
     if (status.status !== "stopped" || !status.ownershipReleased) {
       // PX-2b repair 1 (B4): a release refused while retained output is still
       // draining is output-unsettled whether or not the empty proof has
@@ -1657,6 +1711,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       return await this.withFenceEffect(record, fence, "release", async (current) => {
         if (current.startedAt !== expectedStartedAt) throw new WindowsJobHostError("process_identity_mismatch", `Windows Job process ${processId} identity mismatch.`);
         const final = await this.authenticatedStatus(current);
+        assertNoMemberEvidence(current, final);
         if (final.status !== "stopped" || !final.ownershipReleased)
           throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} terminal ownership changed before release.`);
         this.assertJobOutputSettled(current, final);
@@ -2075,6 +2130,9 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.assertStatusIdentity(record, status); record.pid = status.childPid; record.supervisor.port = status.port;
     record.status = status.status === "stopped" ? "stopped" : status.status === "exited_unknown" ? "exited_unknown" : "running";
     record.exitCode = status.exitCode; record.signal = status.signal; record.updatedAt = status.updatedAt;
+    // R2: sticky. A later status never clears evidence an earlier one carried.
+    if (status.memberEvidence && (!record.memberEvidence || status.memberEvidence.count > record.memberEvidence.count))
+      record.memberEvidence = status.memberEvidence;
   }
   private assertSupervisor(value: SupervisorRecord): void {
     if (value.protocol !== PROTOCOL || value.token.length < 32 || value.supervisorPid < 1 || value.port < 0 || value.port > 65_535)
@@ -2086,6 +2144,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (status.jobEmptyProof !== undefined && typeof status.jobEmptyProof !== "boolean" ||
         status.terminationRequested !== undefined && typeof status.terminationRequested !== "boolean")
       throw new WindowsJobHostError("process_control_unavailable", `Supervisor control status is invalid for ${record.processId}.`);
+    if (status.memberEvidence !== undefined && !isMemberEvidence(status.memberEvidence))
+      throw new WindowsJobHostError("process_control_unavailable", `Supervisor member evidence is invalid for ${record.processId}.`);
   }
   private assertOutputEvidence(record: HostRecord, status: SupervisorStatus): void {
     if (!Number.isSafeInteger(status.retainedOutputChunks) || status.retainedOutputChunks < 0 ||
@@ -2224,7 +2284,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     return candidate;
   }
   private snapshot(record: HostRecord): WindowsJobProcessSnapshot {
-    return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes) };
+    return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes),
+      ...(record.memberEvidence ? { memberEvidence: record.memberEvidence } : {}) };
   }
 }
 
@@ -2232,6 +2293,42 @@ export function createWindowsJobProcessHost(options: WindowsJobProcessHostOption
   return new AuthenticatedWindowsJobProcessHost(options);
 }
 
+/** R4/R2: the Runner code of a launch the Job host refused before CreateProcess, when its status carries one. */
+const JOB_HOST_LAUNCH_REFUSAL_CODES = WINDOWS_JOB_LAUNCH_REFUSAL_CODES;
+function launchRefusalCode(status: SupervisorStatus): string | undefined {
+  return typeof status.errorCode === "string" && JOB_HOST_LAUNCH_REFUSAL_CODES.has(status.errorCode) ? status.errorCode : undefined;
+}
+function refusalCodeOf(error: unknown): string | undefined {
+  return error instanceof WindowsJobHostError && JOB_HOST_LAUNCH_REFUSAL_CODES.has(error.code) ? error.code : undefined;
+}
+/** The text a stop shows when a Job held a packaged or unidentified member (R2). */
+export function memberEvidenceDetail(evidence: WindowsJobMemberEvidence): string {
+  const packaged = evidence.entries.find((entry) => entry.evidence === "packaged");
+  if (packaged) {
+    const name = packaged.package ? " (" + packaged.package + ")" : "";
+    return "A packaged (MSIX or Microsoft Store) program" + name + " ran in the Windows Job as a descendant (pid " + packaged.pid +
+      "). Windows creates such a program's children outside the Job, so its processes may still be running; the stop is not proven.";
+  }
+  const members = evidence.count === 1 ? "a member" : evidence.count + " members";
+  return "The Windows Job held " + members + " that could not be identified (" + (evidence.entries[0]?.detail ?? "no detail") +
+    "), so a packaged descendant cannot be ruled out; the stop is not proven.";
+}
+/** R2: a Job that held a packaged or unidentified member is never released (DECISION 2026-09-19 §8.3, cleanup_blocked). */
+function assertNoMemberEvidence(record: HostRecord, status: SupervisorStatus): void {
+  const evidence = record.memberEvidence ?? status.memberEvidence;
+  if (evidence) throw new WindowsJobHostError("process_stop_unproven_packaged_descendant", memberEvidenceDetail(evidence));
+}
+function isMemberEvidence(value: unknown): value is WindowsJobMemberEvidence {
+  if (!value || typeof value !== "object") return false;
+  const evidence = value as { count?: unknown; entries?: unknown };
+  return Number.isSafeInteger(evidence.count) && (evidence.count as number) >= 1 && Array.isArray(evidence.entries) && evidence.entries.length >= 1 &&
+    evidence.entries.every((entry: unknown) => {
+      const item = entry as Partial<WindowsJobMemberEvidenceEntry> | null;
+      return !!item && typeof item === "object" && Number.isSafeInteger(item.pid) && (item.pid as number) >= 0 &&
+        (item.evidence === "packaged" || item.evidence === "unidentified") &&
+        (item.package === null || typeof item.package === "string") && typeof item.detail === "string";
+    });
+}
 function isHostRecord(value: Partial<HostRecord>): value is HostRecord {
   return typeof value.processId === "string" && typeof value.runId === "string" && typeof value.sessionId === "string" && typeof value.startedAt === "string" && typeof value.stdoutPath === "string" && typeof value.stderrPath === "string" && Boolean(value.supervisor);
 }
@@ -2245,13 +2342,16 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
 /**
  * A start status that did not start its workload fails the launch: still starting, stopped with an error, or a
  * terminal status (stopped or exited_unknown) without the workload's pid, which a host that ended before its started
- * line leaves.
+ * line leaves. The caller fails the start with its exact record (WindowsJobStartFailedError); one whose status holds
+ * member evidence or unsettled output is then never verified empty or released, so it stays cleanup-blocked.
  */
 function throwIfStartFailed(status: SupervisorStatus): void {
   if (status.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
   const terminal = status.status === "stopped" || status.status === "exited_unknown";
+  // A coded refusal the Job host raised before CreateProcess keeps its code (R4/R2).
   if ((status.status === "stopped" && status.error) || (terminal && !status.childPid))
-    throw new WindowsJobHostError("process_start_failed", status.error ?? "The Windows Job host ended before it reported that its workload started.");
+    throw new WindowsJobHostError(launchRefusalCode(status) ?? "process_start_failed",
+      status.error ?? "The Windows Job host ended before it reported that its workload started.");
 }
 /** A launcher (supervisor) child process that has neither exited nor been killed. */
 function childAlive(child: ChildProcess): boolean {

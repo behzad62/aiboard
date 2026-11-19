@@ -68,6 +68,15 @@ const deterministicPrTests = [
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
   "runner-v2/test/user-steering-runtime.test.ts",
+  // R3 (packaged descendants, docs/runner-v2/codex-windows-job-escape-2026-11-18.md §4.2): WindowsApps folders leave a
+  // Windows child's PATH, with an injected platform so every host runs it (in memory, about 1 s with the Windows shell
+  // inventory check).
+  "runner-v2/test/child-environment.test.ts",
+  // R2/R4: the Job host's coded refusals (an injected desktop-policy or membership-watch failure, before any spawn),
+  // member evidence and bursts of short-lived processes, one under CPU load; real Job hosts on Windows only. Its own
+  // Windows step at concurrency 1 (asserted below) so its busy loops never run beside the parallel files. Its Store pwsh
+  // cases skip on hosts without the Store's pwsh, such as GitHub's runners.
+  "runner-v2/test/windows-job-packaged-members.test.ts",
   // A test file whose fixture cleanup stays unverified ends after its last test instead of holding the job until it
   // is cancelled: a synthetic held handle, and a real ExecutionHost run whose close is made to fail (child test-runner
   // processes; in PR CI at 0e4673e2 about 20 s on Windows, where the real run holds its birth helper, 16 s on Linux and
@@ -187,6 +196,13 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
     "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
+  const packagedStep = portable.indexOf("      - name: Run Windows Job packaged-member contracts on Windows");
+  assert.ok(packagedStep > 0, "The packaged-member contracts need their own Windows step.");
+  const packagedBlock = portable.slice(packagedStep, portable.indexOf("\n      - name:", packagedStep + 1));
+  assert.match(packagedBlock, /if:\s*runner\.os\s*==\s*'Windows'/);
+  assert.match(packagedBlock, /--test --test-concurrency=1\s+runner-v2\/test\/windows-job-packaged-members\.test\.ts/);
+  assert.equal(portable.slice(0, packagedStep).includes("runner-v2/test/windows-job-packaged-members.test.ts"), false,
+    "The packaged-member contracts' CPU load must not run inside the parallel deterministic step.");
   const birthStep = portable.indexOf("      - name: Run Windows birth helper contracts on Windows");
   assert.ok(birthStep > 0, "Required Windows PR CI must run the locally compiled birth helper contracts.");
   const birthBlock = portable.slice(birthStep, portable.indexOf("\n      - name:", birthStep + 1));

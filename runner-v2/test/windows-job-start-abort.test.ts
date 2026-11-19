@@ -374,7 +374,11 @@ test("a host that died with output retained, before its launcher aborted the sta
   assert.equal(last.retainedOutputBytes, 0, JSON.stringify(last));
   const { processId, startedAt } = failure.startRecord;
   assert.equal((await service.reconcileOwned(processId, owner, fence)).status, "stopped");
-  assert.equal((await service.releaseOwned(processId, owner, startedAt, fence)).ownershipReleased, true);
+  // R2: the host ended without settling its membership watch and without a stop request, so a packaged descendant cannot
+  // be ruled out: that is member evidence, and the recorded stop is still never released.
+  assert.match(JSON.stringify((last as { memberEvidence?: unknown }).memberEvidence), /ended without settling its membership watch/);
+  await assert.rejects(service.releaseOwned(processId, owner, startedAt, fence),
+    (error: unknown) => (error as { code?: unknown }).code === "process_stop_unproven_packaged_descendant");
 });
 
 test("a root named through a plain symbolic link is created inside the Job: only an app execution alias takes the Assign path", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async (t) => {

@@ -169,8 +169,10 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           }
           const prepared = environments.prepare({ workingDirectory: cwd, ambient: options.environment, explicitOverrides: request.environment, runId: run.runId, sessionId: request.identity.sessionId });
           const executable = options.permissionProfile === "full"
-            ? await environments.withChildEnvironment(prepared.capability, environment =>
-                resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment }))
+            // R3: the program itself is looked up on the PATH that keeps WindowsApps, so an installed Store program is
+            // found and pinned to its package's own program (the Job's root); the child's PATH holds no WindowsApps.
+            ? await environments.withChildEnvironment(prepared.capability, (environment, rootProgramEnvironment) =>
+                resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment: rootProgramEnvironment ?? environment }))
             : undefined;
           const launchExecutable = executable?.path ?? imageExecutable!;
           const launchIdentity = executable ?? Object.freeze({ imageExecutable });

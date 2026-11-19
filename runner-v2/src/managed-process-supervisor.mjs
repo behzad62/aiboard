@@ -36,6 +36,17 @@ let pendingInput;
 let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
+// R2: whether the Job host settled its membership watch itself (its workload stopped by itself). Whether it reported its
+// workload started is reportedStarted, below.
+let naturalStopSeen = false;
+// R2: the Job host has been sent its workload (its bootstrap line). Before that it cannot have created a process. It is
+// set just before the line is written, so a write that fails still counts as delivered: that can only record evidence
+// for a host that created nothing (stricter), never skip it.
+let workloadDelivered = false;
+// R2: the unsettled watch is recorded once, whichever of the retained-output branch and the stop reaches it first.
+let unsettledWatchRecorded = false;
+// R2: the Job host reported, before its started line, that it failed before any process was created ("launched": false).
+let launchNotCreated = false;
 let settled = false;
 // A stop was requested before the host reported its workload started (the launcher aborted the start, or failed a
 // claimed spare's start): the workload's output has no reader.
@@ -463,6 +474,7 @@ async function handleSpareClaim(message) {
     status.spareReady = false;
     persistStatus();
     const line = `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(currentJobConfiguration())).toString("base64") })}\n`;
+    workloadDelivered = true;
     await new Promise((resolvePromise, reject) => backendInput.write(line, (error) => error ? reject(error) : resolvePromise()));
     reply(true);
   } catch (error) {
@@ -579,7 +591,9 @@ function launchWindowsJob() {
       // status (the stop recorded later, if proven, replaces it).
       if (!reportedStarted && !settled && !spareUnclaimed) {
         status.status = "exited_unknown";
-        status.error = "The Windows Job host exited before it reported that its workload started.";
+        // A host that reported its own failure (a coded refusal before CreateProcess, R4/R2) is answered with it.
+        status.error = backendFailure?.message ?? "The Windows Job host exited before it reported that its workload started.";
+        if (typeof backendFailure?.code === "string") status.errorCode = backendFailure.code;
         persistStatus();
       }
       // The Assign path's root may still live outside the Job: the empty proof waits until that exact process is gone.
@@ -657,6 +671,7 @@ function launchWindowsJob() {
     persistStatus();
     armSpareIdleTimer();
   } else {
+    workloadDelivered = true;
     backendInput.write(config.interactive
       ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
       : `${JSON.stringify(jobConfiguration)}\n`);
@@ -737,6 +752,8 @@ function tryMarkStopped() {
   }
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
+      // R2: a host that ended without settling its watch is evidence here too, even while its output waits for a reader.
+      recordUnsettledInteractiveWatch();
       status.status = "exited_unknown";
       status.error = "Windows Job output remains unsettled after the job became empty.";
       status.ownershipReleased = false;
@@ -749,15 +766,23 @@ function tryMarkStopped() {
 }
 
 function pollInteractiveJobEvents() {
-  if (!config?.eventPath || !existsSync(config.eventPath)) return;
+  if (readNewJobEvents()) tryMarkStopped();
+}
+
+/** Consumes the complete event lines appended since the last read. False when the journal can no longer be trusted. */
+function readNewJobEvents() {
+  if (!config?.eventPath || !existsSync(config.eventPath)) return true;
   // Incremental: the Job host appends periodic accounting events, so never
   // re-read the whole journal on every 10 ms tick. Only complete lines are consumed.
   const descriptor = openSync(config.eventPath, "r");
   let suffix;
   try {
     const size = fstatSync(descriptor).size;
-    if (size < jobEventBytes) return markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
-    if (size === jobEventBytes) return;
+    if (size < jobEventBytes) {
+      markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
+      return false;
+    }
+    if (size === jobEventBytes) return true;
     const bytes = Buffer.alloc(size - jobEventBytes);
     let read = 0;
     while (read < bytes.byteLength) {
@@ -766,14 +791,14 @@ function pollInteractiveJobEvents() {
       read += count;
     }
     const complete = bytes.subarray(0, read).lastIndexOf(0x0a) + 1;
-    if (complete === 0) return;
+    if (complete === 0) return true;
     jobEventBytes += complete;
     suffix = bytes.subarray(0, complete).toString("utf8");
   } finally {
     closeSync(descriptor);
   }
   for (const line of suffix.split(/\r?\n/)) if (line) handleJobEvent(line);
-  tryMarkStopped();
+  return true;
 }
 
 function handleJobEvent(line) {
@@ -812,12 +837,17 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "natural_stopped") {
+    naturalStopSeen = true;
     status.exitCode = event.exitCode;
     status.jobEmptyProof = true;
     return;
   }
   if (event.type === "stopped") {
     status.jobEmptyProof = true;
+    return;
+  }
+  if (event.type === "member") {
+    recordMemberEvidence(event);
     return;
   }
   if (event.type === "accounting") {
@@ -830,8 +860,51 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "error") {
+    if (event.launched === false && !reportedStarted) launchNotCreated = true;
     backendFailure = new Error(event.error ?? "Windows Job host failed.");
+    // A coded launch refusal from the Job host (raised before CreateProcess) keeps its Runner code.
+    if (typeof event.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(event.code)) backendFailure.code = event.code;
+    // R2: a member event the Job host could not write is itself evidence. The host then fails instead of reporting a
+    // clean stop, and the Job is never verified empty or released.
+    if (event.code === "windows_job_membership_evidence_lost")
+      recordMemberEvidence({ pid: 0, evidence: "unidentified", package: null, detail: event.error ?? "The Job host could not record its membership evidence." });
   }
+}
+
+// R2: evidence that the Job held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify.
+// Windows creates a packaged program's children outside the Job, so the Job becoming empty does not prove that every
+// process the workload started has stopped. The evidence is durable status and is never cleared: the Job host's TS
+// side refuses to verify this Job empty or to release it (DECISION 2026-09-19 §8.3, cleanup_blocked).
+const MEMBER_EVIDENCE_KEEP = 16;
+function recordMemberEvidence(event) {
+  const entry = {
+    pid: Number.isSafeInteger(event.pid) && event.pid >= 0 ? event.pid : 0,
+    evidence: event.evidence === "packaged" ? "packaged" : "unidentified",
+    package: typeof event.package === "string" ? event.package.slice(0, 256) : null,
+    detail: typeof event.detail === "string" ? event.detail.slice(0, 512) : "",
+  };
+  const current = status.memberEvidence ?? { count: 0, entries: [] };
+  status.memberEvidence = {
+    count: current.count + 1,
+    entries: current.entries.length < MEMBER_EVIDENCE_KEEP ? [...current.entries, entry] : current.entries,
+  };
+  persistStatus();
+}
+
+// R2: an interactive Job host settles its membership watch only when its workload ends by itself (natural_stopped);
+// the Runner's own stops end it by a kill it requested. A host that ended with neither (it failed, or could not write
+// its events) never settled the watch, so its evidence may be incomplete: that is itself evidence, and the Job is never
+// verified empty or released. That includes a host that ended before its started line, which it writes only after the
+// workload is resumed. The only exceptions are a host that never received its workload and a host that reported a
+// failure before any process was created (a coded refusal or a CreateProcess failure, "launched": false).
+function recordUnsettledInteractiveWatch() {
+  if (!config?.interactive || naturalStopSeen || interactiveTerminationRequested || unsettledWatchRecorded) return;
+  if (!reportedStarted && (!workloadDelivered || launchNotCreated)) return;
+  unsettledWatchRecorded = true;
+  recordMemberEvidence({
+    pid: 0, evidence: "unidentified", package: null,
+    detail: "The Job host ended without settling its membership watch and without a stop request.",
+  });
 }
 
 function markRunning(pid) {
@@ -843,6 +916,21 @@ function markRunning(pid) {
 }
 
 function markStopped() {
+  // R2: a member event the Job host wrote just before it ended is read before the stop is recorded.
+  if (config?.interactive && !readNewJobEvents()) return;
+  // A Job host that failed before its workload started (a coded launch refusal raised before CreateProcess, R4/R2)
+  // ends as that failure, never as a clean stop of a workload that never ran.
+  if (backendFailure && !reportedStarted) {
+    startupFailed(backendFailure);
+    return;
+  }
+  // R2: a host that ended with no started line, no error and no stop request (its event file could not be written, or
+  // it was killed from outside between resuming the workload and that line) never proved what it ran: a failed start.
+  if (config?.interactive && !reportedStarted && workloadDelivered && !interactiveTerminationRequested) {
+    startupFailed(new Error("The Windows Job host ended before it reported that its workload started, so the Job's ownership is not proven."));
+    return;
+  }
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
@@ -864,11 +952,15 @@ function markOwnershipUncertain(message) {
 
 function startupFailed(error) {
   if (settled) return;
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
   status.error = error instanceof Error ? error.message : String(error);
-  status.ownershipReleased = true;
+  if (typeof error?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)) status.errorCode = error.code;
+  // Stricter-only test seam (refusedStopUnproven): a coded launch refusal's stop is left unproven, its ownership never
+  // released, so its launcher can never release the refused start.
+  status.ownershipReleased = !(config?.refusedStopUnproven === true && typeof status.errorCode === "string");
   persistStatus();
   childExitResolve();
   server.close(() => process.exit(1));
