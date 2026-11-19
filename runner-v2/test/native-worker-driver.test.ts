@@ -1066,6 +1066,7 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
     stateDirectory: state, owners, readWaitMs: 50,
     captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
     browser: { checkAfterStop: async () => browser },
+    oneShotCommands: async () => undefined,
     rerunChecks: async ({ attempt }) => {
       const output = await artifacts.put(new Uint8Array(0), "text/plain", "check output");
       const record = evidence.record({

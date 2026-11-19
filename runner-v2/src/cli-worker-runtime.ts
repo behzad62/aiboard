@@ -838,16 +838,21 @@ export function cliWorkerStateFolder(stateDirectory: string, runId: string, sess
  * browser record of that stop (§3.10). Returns why the stop is not proven, or undefined when it is. The driver's
  * `retryStop` runs the same check for a CLI attempt, so a held re-run attempt re-enters only once its commands settle.
  */
-export async function proveCliStop(deps: Pick<CliWorkerRuntimeDeps, "launcher" | "browser" | "oneShotCommands">, owner: CliWorkerOwner): Promise<string | undefined> {
+export async function proveCliStop(deps: Pick<CliWorkerRuntimeDeps, "launcher" | "browser" | "oneShotCommands" | "rerunChecks">, owner: CliWorkerOwner): Promise<string | undefined> {
   try {
     await deps.launcher.stopOwner(owner);
   } catch (error) {
     return errorMessage(error);
   }
-  // §3.6: the Runner's re-runs are one-shot commands the managed stop does not cover; each must be settled.
+  // §3.6: the Runner's re-runs are one-shot commands the managed stop does not cover; each must be settled. Runtime
+  // deps that re-run checks but cannot read those commands prove nothing about them, as the re-runner holds then too.
   try {
-    const unsettled = await deps.oneShotCommands?.(owner);
-    if (unsettled) return unsettled;
+    if (!deps.oneShotCommands) {
+      if (deps.rerunChecks) return "the Runner cannot check the commands it ran for this attempt";
+    } else {
+      const unsettled = await deps.oneShotCommands(owner);
+      if (unsettled) return unsettled;
+    }
   } catch (error) {
     return `the commands the Runner ran for this attempt could not be checked: ${boundedRecordText(errorMessage(error), 500)}`;
   }

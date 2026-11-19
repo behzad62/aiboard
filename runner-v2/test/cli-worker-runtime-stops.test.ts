@@ -12,6 +12,7 @@ import {
   CLI_COLLECT_WORKTREE_CHANGED,
   CLI_RERUNS_PENDING_PREFIX,
   cliWorkerStateFolder,
+  proveCliStop,
   runCliWorkerAttempt,
   type CliProcessLauncher,
   type CliWorkerLaunchSettings,
@@ -454,4 +455,15 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     assert.equal(session2.live, false);
     assert.match(JSON.stringify(result2), /The Runner could not start the Playwright CLI session for its re-runs, so the browser checks were not re-run: the session's ready wait failed/);
   });
+});
+
+test("a stop proof for runtime deps that re-run checks but cannot read the Runner's commands is unproven", async () => {
+  const stopped: unknown[] = [];
+  const launcher = { stopOwner: async (owner: unknown) => { stopped.push(owner); } } as unknown as CliProcessLauncher;
+  const rerunChecks = (async () => ({ criterionEvidenceLinks: [], notRun: [] })) as unknown as NonNullable<CliWorkerRuntimeDeps["rerunChecks"]>;
+  assert.equal(await proveCliStop({ launcher, rerunChecks }, OWNER), "the Runner cannot check the commands it ran for this attempt");
+  assert.equal(await proveCliStop({ launcher, rerunChecks, oneShotCommands: async () => undefined }, OWNER), undefined);
+  assert.equal(await proveCliStop({ launcher, rerunChecks, oneShotCommands: async () => "1 command(s) are not proven stopped" }, OWNER), "1 command(s) are not proven stopped");
+  assert.equal(await proveCliStop({ launcher }, OWNER), undefined, "no re-runs, no one-shot commands to check");
+  assert.equal(stopped.length, 4, "the managed stop runs first every time");
 });

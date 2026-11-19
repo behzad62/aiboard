@@ -308,6 +308,13 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["ionice", ["-c", "3", "bash", "-c", "x"]], ["su", ["-c", "make test", "build"]], ["script", ["-qc", "npm test", "/dev/null"]],
       ["yarn", ["exec", "sh", "-c", "x"]], ["bunx", ["sh", "-c", "x"]], ["bun", ["x", "sh", "-c", "x"]], ["npx", ["sh", "-c", "x"]],
       ["pnpm", ["dlx", "-p", "pkg", "bash", "-c", "x"]],
+      // The fourth re-check's misses.
+      ["watch", ["npm", "test"]], ["watch", ["-n", "1", "make"]], ["runuser", ["-u", "build", "--", "sh", "-c", "x"]],
+      ["runuser", ["build", "-c", "make test"]], ["chroot", ["/", "sh", "-c", "x"]], ["chroot", ["--userspec=a:b", "/srv", "bash", "-c", "x"]],
+      ["unshare", ["-r", "sh", "-c", "x"]], ["unshare", ["--map-user", "0", "bash", "-c", "x"]], ["taskset", ["0x1", "sh", "-c", "x"]],
+      ["taskset", ["-c", "0-3", "bash", "-c", "x"]], ["chrt", ["-f", "10", "sh", "-c", "x"]], ["chrt", ["10", "sh", "-c", "x"]],
+      ["systemd-run", ["--user", "--scope", "sh", "-c", "x"]], ["systemd-run", ["-p", "MemoryMax=1G", "bash", "-c", "x"]],
+      ["caffeinate", ["-i", "sh", "-c", "x"]], ["caffeinate", ["-t", "60", "bash", "-c", "x"]], ["bun", ["run", "sh", "-c", "x"]],
     ] as Array<[string, string[]]>) {
       assert.ok(cliCheckShellLine({ executable, args }), `${executable} ${JSON.stringify(args)}`);
     }
@@ -322,6 +329,9 @@ describe("CW6 re-runner", { concurrency: CLI_RUNTIME_TEST_CONCURRENCY }, () => {
       ["npm", ["exec", "tsx", "--", "--test"]], ["npm", ["run", "lint"]], ["xargs", ["-n", "1", "node"]],
       ["ionice", ["-c", "3", "node", "--test"]], ["yarn", ["exec", "tsx", "--test"]], ["yarn", ["test"]], ["bunx", ["vitest", "run"]],
       ["bun", ["test"]], ["flock", ["/tmp/lock", "node", "--test"]], ["setsid", ["node", "--test"]],
+      ["runuser", ["-u", "build", "--", "npm", "test"]], ["chroot", ["/srv", "node", "--test"]], ["unshare", ["-r", "node", "--test"]],
+      ["taskset", ["-c", "0-3", "node", "--test"]], ["chrt", ["-f", "10", "node", "--test"]], ["systemd-run", ["--user", "--scope", "npm", "test"]],
+      ["caffeinate", ["-i", "npm", "test"]], ["bun", ["run", "test"]],
       [process.platform === "win32" ? "C:\\Program Files (x86)\\nodejs\\node.exe" : "/opt/my tools/node", ["--test"]],
     ] as Array<[string, string[]]>) {
       assert.equal(cliCheckShellLine({ executable, args }), undefined, `${executable} ${JSON.stringify(args)}`);

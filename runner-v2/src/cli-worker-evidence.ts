@@ -233,6 +233,10 @@ export function createCliCheckRerunner(options: CliCheckRerunnerOptions): CliChe
         rerun = rerunFromResult(base, output, options.evidenceStore, owner.runId, taskId, timeoutMs, before, notRun);
       } catch (error) {
         if (!(error instanceof CliRerunUnrecordedError)) throw error;
+        // The settlement escape. A call the broker stopped waiting for can also end here: when the step after its
+        // timeout throws (the ledger's completion, settleToolBudget, the grant revoke in its finally), the broker reports
+        // tool_execution_failed, not tool_timeout. The store read is then a proof only because the subprocess runtime
+        // refuses a launch whose caller gave it up (PR #242): that stalled call's later claim settles as never launched.
         let unsettled: string | undefined;
         try {
           unsettled = options.oneShotCommands ? await options.oneShotCommands(owner) : "the Runner cannot check the commands it ran";
@@ -605,8 +609,8 @@ function indent(text: string): string {
 const SHELL_OPERATOR = /^(?:&&|\|\||\||;|&|>|>>|<|<<|<<<|[12]>|[12]>>|2>&1|1>&2|&>|&>>)$/;
 /** Shells whose `-c` (in any flag group) runs a command string. */
 const POSIX_SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "csh", "tcsh"]);
-/** Programs that always run what they are given through a shell. */
-const SHELL_RUNNERS = new Set(["wsl"]);
+/** Programs that always run what they are given through a shell (watch runs its arguments with `sh -c`). */
+const SHELL_RUNNERS = new Set(["wsl", "watch"]);
 /**
  * Programs that run their arguments as another program: the check is judged by that program. `values`: the options
  * that take the next argument as their value; `leading`: positional arguments before the program (timeout's duration).
@@ -626,15 +630,24 @@ const WRAPPERS: Readonly<Record<string, { values: readonly string[]; leading?: n
   setsid: { values: [] },
   ionice: { values: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"] },
   flock: { values: ["-w", "--wait", "--timeout", "-E", "--conflict-exit-code"], leading: 1 },
+  runuser: { values: ["-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell", "-w", "--whitelist-environment"] },
+  chroot: { values: ["--userspec", "--groups"], leading: 1 },
+  unshare: { values: ["-S", "--setuid", "-G", "--setgid", "-R", "--root", "-w", "--wd", "--map-user", "--map-group", "--map-users", "--map-groups", "--propagation", "--monotonic", "--boottime", "--load-interp"] },
+  taskset: { values: [], leading: 1 },
+  chrt: { values: ["-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"], leading: 1 },
+  "systemd-run": { values: ["-u", "--unit", "-p", "--property", "--description", "--slice", "-E", "--setenv", "--uid", "--gid", "--nice",
+    "--working-directory", "-H", "--host", "-M", "--machine", "--service-type", "--on-active", "--on-boot", "--on-startup", "--on-unit-active",
+    "--on-unit-inactive", "--on-calendar", "--timer-property", "--path-property", "--socket-property"] },
+  caffeinate: { values: ["-t", "-w"] },
   npx: { values: ["-p", "--package"] },
   pnpx: { values: ["-p", "--package"] },
   bunx: { values: ["-p", "--package"] },
 };
 /** Programs whose `-c` option (alone or in a flag group) runs a command string through a shell. */
-const COMMAND_OPTION_PROGRAMS = new Set(["su", "script", "flock"]);
-/** Package managers whose subcommand runs the program after it: judged by that program. */
+const COMMAND_OPTION_PROGRAMS = new Set(["su", "runuser", "script", "flock"]);
+/** Package managers whose subcommand runs the program after it: judged by that program (`bun run` also runs a binary). */
 const PACKAGE_EXEC_SUBCOMMANDS: Readonly<Record<string, readonly string[]>> = {
-  npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x", "exec"],
+  npm: ["exec", "x"], pnpm: ["exec", "dlx"], yarn: ["exec", "dlx"], bun: ["x", "exec", "run"],
 };
 /** Package runners whose option runs a command string through a shell: npx and npm exec `-c`/`--call`, pnpm's shell mode. */
 function packageRunnerShell(program: string, args: readonly string[]): boolean {
@@ -655,8 +668,9 @@ const POWERSHELL_VALUE_PARAMETERS = ["executionpolicy", "ep", "ex", "version", "
 /**
  * Why a reported check is a shell line, which the Runner does not run (§3.6): its executable holds a command line, an
  * argument is a shell operator (a pipe, `&&`, a redirection), or a shell is given a command string, also through a
- * wrapper (`env`, `timeout`, `nohup`, `sudo`, `xargs`, `setsid`, `flock`, `ionice`, `npx`, …) or a package manager's exec
- * subcommand (`yarn exec`, `bun x`, …), `wsl`, a `-c` command string (`su`, `script`, `flock`), or a package runner's
+ * wrapper (`env`, `timeout`, `nohup`, `sudo`, `xargs`, `setsid`, `flock`, `ionice`, `runuser`, `chroot`, `unshare`,
+ * `taskset`, `chrt`, `systemd-run`, `caffeinate`, `npx`, …) or a package manager's exec subcommand (`yarn exec`, `bun x`,
+ * `bun run`, …), `wsl` and `watch`, a `-c` command string (`su`, `runuser`, `script`, `flock`), or a package runner's
  * shell option (`npx -c`, `npm exec --call`, `pnpm --shell-mode`). Undefined when the check is one program and its
  * arguments.
  */
