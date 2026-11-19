@@ -9,11 +9,19 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
+  SelectLabel,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import type { BuildCrew, BuildCrewMember } from "@/lib/client/build-crew";
+import {
+  CLI_WORKERS_FULL_ACCESS_REASON,
+  cliRuntimeDisplayName,
+  isCliRuntimeId,
+  type CliWorkerCrewOption,
+} from "@/lib/client/cli-workers";
 import type { BuildActionProtocolStatus } from "@/lib/client/build-capabilities";
 import type { BuildRunPolicy, ReasoningEffort } from "@/lib/db/schema";
 import { REASONING_OPTIONS, getReasoningLabel } from "@/lib/orchestrator/config";
@@ -43,6 +51,13 @@ interface BuildCrewPickerProps {
   probeStatus?: (modelId: string) => BuildActionProtocolStatus;
   disabled?: boolean;
   idPrefix?: string;
+  /**
+   * CLI workers set up in Settings (CW9): offered as workers only, never as Architect or reviewer. A row is
+   * unpickable when the CLI is refused on this computer or the Build's access is not Full.
+   */
+  cliWorkers?: CliWorkerCrewOption[];
+  /** The Build's access ceiling: CLI workers need "full" (§3.12). */
+  access?: "ask" | "project" | "full" | null;
 }
 
 const MAX_PARALLEL_WORKERS = 4;
@@ -128,6 +143,7 @@ function EffortSelect({
 function ModelSelect({
   id,
   models,
+  cliWorkers = [],
   value,
   onChange,
   disabled,
@@ -136,6 +152,8 @@ function ModelSelect({
 }: {
   id: string;
   models: BuildCrewPickerModel[];
+  /** Only the worker select passes these. */
+  cliWorkers?: CliWorkerCrewOption[];
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
@@ -153,9 +171,28 @@ function ModelSelect({
             {model.name}
           </SelectItem>
         ))}
+        {cliWorkers.length > 0 && (
+          <SelectGroup>
+            <SelectLabel>CLI workers</SelectLabel>
+            {cliWorkers.map((option) => (
+              <SelectItem key={option.runtimeId} value={option.runtimeId} disabled={Boolean(option.disabledReason)}>
+                {option.name}
+                {option.health.state !== "ready" ? ` (${option.health.label.toLowerCase()})` : ""}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        )}
       </SelectContent>
     </Select>
   );
+}
+
+/** A CLI worker row's health, as Settings shows it. */
+export function CliHealthBadge({ option }: { option: CliWorkerCrewOption | undefined }) {
+  if (!option) return <Badge variant="secondary">CLI · not set up</Badge>;
+  const { state, label, reason } = option.health;
+  const variant = state === "ready" ? "success" : state === "refused" ? "destructive" : state === "unavailable" ? "warning" : "secondary";
+  return <Badge variant={variant} title={reason}>CLI · {label}</Badge>;
 }
 
 function ProbeBadge({ status }: { status?: BuildActionProtocolStatus }) {
@@ -177,9 +214,16 @@ export function BuildCrewPicker({
   probeStatus,
   disabled,
   idPrefix = "crew",
+  cliWorkers = [],
+  access,
 }: BuildCrewPickerProps) {
   const full = guidance === "full";
-  const nameOf = (id: string) => models.find((model) => model.fullId === id)?.name ?? id;
+  // CLI runtimes are workers only (§3.13): never offered as Architect or reviewer.
+  const apiModels = models.filter((model) => !isCliRuntimeId(model.fullId));
+  const apiArchitectModels = architectModels.filter((model) => !isCliRuntimeId(model.fullId));
+  const cliOption = (id: string) => cliWorkers.find((option) => option.runtimeId === id);
+  const nameOf = (id: string) =>
+    models.find((model) => model.fullId === id)?.name ?? cliOption(id)?.name ?? cliRuntimeDisplayName(id) ?? id;
   const [draftWorker, setDraftWorker] = useState<BuildCrewMember>({ modelId: "", reasoningEffort: "default" });
   const reviewer = value.reviewer;
   const reviewerSharesArchitect = reviewer?.modelId === value.architect.modelId;
@@ -203,14 +247,21 @@ export function BuildCrewPicker({
     workers.splice(index + offset, 0, moved!);
     onChange({ ...value, workers });
   };
+  const draftIsCli = isCliRuntimeId(draftWorker.modelId);
+  // A CLI's effort is set in Settings, and one CLI model is one runtime: it is in the crew at most once.
   const duplicateDraft = value.workers.some(
-    (worker) => worker.modelId === draftWorker.modelId && worker.reasoningEffort === draftWorker.reasoningEffort
+    (worker) => worker.modelId === draftWorker.modelId && (draftIsCli || worker.reasoningEffort === draftWorker.reasoningEffort)
   );
+  const draftRefusal = draftIsCli ? cliOption(draftWorker.modelId)?.disabledReason : undefined;
   const addWorker = () => {
-    if (!draftWorker.modelId || duplicateDraft) return;
-    onChange({ ...value, workers: [...value.workers, { ...draftWorker }] });
+    if (!draftWorker.modelId || duplicateDraft || draftRefusal) return;
+    const member: BuildCrewMember = draftIsCli
+      ? { modelId: draftWorker.modelId, reasoningEffort: "default" }
+      : { ...draftWorker };
+    onChange({ ...value, workers: [...value.workers, member] });
     setDraftWorker({ modelId: "", reasoningEffort: draftWorker.reasoningEffort });
   };
+  const cliCrewWorkers = value.workers.filter((worker) => isCliRuntimeId(worker.modelId));
 
   return (
     <div className="space-y-5">
@@ -236,7 +287,7 @@ export function BuildCrewPicker({
           <ModelSelect
             id={`${idPrefix}-architect`}
             label="Architect model"
-            models={architectModels}
+            models={apiArchitectModels}
             value={value.architect.modelId}
             onChange={(modelId) => setArchitect({ modelId })}
             disabled={disabled}
@@ -266,7 +317,7 @@ export function BuildCrewPicker({
           <ModelSelect
             id={`${idPrefix}-reviewer`}
             label="Reviewer model"
-            models={models}
+            models={apiModels}
             value={reviewer?.modelId ?? ""}
             onChange={(modelId) => setReviewer({ modelId })}
             disabled={disabled}
@@ -326,7 +377,10 @@ export function BuildCrewPicker({
           </p>
         ) : (
           <ul className="space-y-2">
-            {value.workers.map((worker, index) => (
+            {value.workers.map((worker, index) => {
+              const cli = isCliRuntimeId(worker.modelId);
+              const option = cli ? cliOption(worker.modelId) : undefined;
+              return (
               <li
                 key={`${worker.modelId}:${index}`}
                 className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_7.5rem]"
@@ -334,15 +388,21 @@ export function BuildCrewPicker({
                 <div className="flex min-w-0 items-center gap-2 rounded-md border bg-background/40 px-3 py-2 text-sm">
                   <span className="w-4 shrink-0 text-xs text-muted-foreground">{index + 1}</span>
                   <span className="truncate">{nameOf(worker.modelId)}</span>
-                  <ProbeBadge status={probeStatus?.(worker.modelId)} />
+                  {cli ? <CliHealthBadge option={option} /> : <ProbeBadge status={probeStatus?.(worker.modelId)} />}
                 </div>
-                <EffortSelect
-                  id={`${idPrefix}-worker-${index}-effort`}
-                  label={`${nameOf(worker.modelId)} reasoning effort`}
-                  value={worker.reasoningEffort}
-                  onChange={(reasoningEffort) => setWorker(index, { reasoningEffort })}
-                  disabled={disabled}
-                />
+                {cli ? (
+                  <span className="px-1 text-xs text-muted-foreground">
+                    {option?.reasoningEffort ? `${option.reasoningEffort} effort` : "CLI default effort"}, set in Settings
+                  </span>
+                ) : (
+                  <EffortSelect
+                    id={`${idPrefix}-worker-${index}-effort`}
+                    label={`${nameOf(worker.modelId)} reasoning effort`}
+                    value={worker.reasoningEffort}
+                    onChange={(reasoningEffort) => setWorker(index, { reasoningEffort })}
+                    disabled={disabled}
+                  />
+                )}
                 <div className="flex items-center justify-end">
                 <Button
                   type="button"
@@ -376,14 +436,16 @@ export function BuildCrewPicker({
                 </Button>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
         <div className="grid items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_7.5rem]">
           <ModelSelect
             id={`${idPrefix}-worker-add`}
             label="Worker model to add"
-            models={models}
+            models={apiModels}
+            cliWorkers={cliWorkers}
             value={draftWorker.modelId}
             onChange={(modelId) => setDraftWorker((draft) => ({ ...draft, modelId }))}
             disabled={disabled}
@@ -394,20 +456,29 @@ export function BuildCrewPicker({
             label="New worker reasoning effort"
             value={draftWorker.reasoningEffort}
             onChange={(reasoningEffort) => setDraftWorker((draft) => ({ ...draft, reasoningEffort }))}
-            disabled={disabled}
+            disabled={disabled || draftIsCli}
           />
           <Button
             type="button"
             variant="outline"
             onClick={addWorker}
-            disabled={disabled || !draftWorker.modelId || duplicateDraft}
+            disabled={disabled || !draftWorker.modelId || duplicateDraft || Boolean(draftRefusal)}
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
             Add
           </Button>
         </div>
         {duplicateDraft && (
-          <p className="text-xs text-muted-foreground">That model is already a worker at this reasoning effort.</p>
+          <p className="text-xs text-muted-foreground">
+            {draftIsCli ? "That CLI model is already a worker." : "That model is already a worker at this reasoning effort."}
+          </p>
+        )}
+        {(cliWorkers.length > 0 || cliCrewWorkers.length > 0) && (
+          <CliCrewNotes
+            options={cliWorkers}
+            crewCliWorkers={cliCrewWorkers.map((worker) => ({ name: nameOf(worker.modelId), option: cliOption(worker.modelId) }))}
+            access={access}
+          />
         )}
         {value.workers.length > 0 && (
           <p className="text-xs text-muted-foreground">
@@ -415,6 +486,57 @@ export function BuildCrewPicker({
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * Why a CLI row can't be picked, and what a picked one still needs: the Build's Full access, a CLI that isn't refused
+ * on this computer, and its setup in Settings. A CLI's use is not counted toward a USD budget (CWD-5).
+ */
+function CliCrewNotes({
+  options,
+  crewCliWorkers,
+  access,
+}: {
+  options: CliWorkerCrewOption[];
+  crewCliWorkers: { name: string; option: CliWorkerCrewOption | undefined }[];
+  access?: "ask" | "project" | "full" | null;
+}) {
+  const refusedByCli = [
+    ...new Map(options.filter((option) => option.health.state === "refused").map((option) => [option.providerId, option])).values(),
+  ];
+  const waiting = crewCliWorkers.filter(
+    (worker) => worker.option && (worker.option.health.state === "unavailable" || worker.option.health.state === "unknown") && worker.option.health.reason
+  );
+  return (
+    <div className="space-y-1.5 rounded-md bg-muted/40 px-3 py-2 text-xs">
+      {access !== "full" && (
+        <p className={crewCliWorkers.length > 0 ? "font-medium text-warning" : undefined}>
+          {CLI_WORKERS_FULL_ACCESS_REASON}{" "}
+          {crewCliWorkers.length > 0
+            ? "Choose Full access for the project folder, or remove the CLI workers, to start this Build."
+            : "Choose Full access for the project folder to pick one."}
+        </p>
+      )}
+      {refusedByCli.map((option) => (
+        <p key={option.providerId}>{option.health.reason}</p>
+      ))}
+      {crewCliWorkers
+        .filter((worker) => !worker.option)
+        .map((worker) => (
+          <p key={worker.name} className="font-medium text-warning">
+            {worker.name} is not turned on in Settings &gt; Providers &gt; CLI workers.
+          </p>
+        ))}
+      {waiting.map((worker) => (
+        <p key={worker.name}>
+          {worker.name}: {worker.option!.health.reason} A Build gives its tasks to the other workers meanwhile.
+        </p>
+      ))}
+      <p className="text-muted-foreground">
+        CLI workers use your own CLI logins. Their use isn&apos;t counted toward a USD budget; the time limits apply.
+      </p>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import type { Discussion, ReasoningEffort } from "@/lib/db/schema";
-import { isCliRuntimeId } from "@/runner-v2/src/cli-crew-policy";
+import { isCliRuntimeId, nativeBuildCliCrewRefusal, type CliCrewPolicyRefusal } from "@/runner-v2/src/cli-crew-policy";
 
 /** One model in one Build role, with the reasoning effort it runs that role at. */
 export interface BuildCrewMember {
@@ -147,6 +147,38 @@ export function selectBuildCrewRuntimes(crew: BuildCrew): BuildCrewRuntimes {
     workerRuntimeIds: workerRuntimeIds.length > 0 ? workerRuntimeIds : [architectRuntimeId],
     verifierRuntimeIds: runtimes.map((runtime) => runtime.runtimeId).filter((runtimeId) => !isCliRuntimeId(runtimeId)),
   };
+}
+
+/**
+ * The CLI crew rule a crew breaks at this access, or null (§3.12, §3.13): the Runner refuses the same crew at the
+ * Build's start, so the composer says so before it is sent.
+ */
+export function buildCrewCliRefusal(
+  crew: BuildCrew,
+  access: "ask" | "project" | "full" | null | undefined,
+): CliCrewPolicyRefusal | null {
+  const selected = selectBuildCrewRuntimes(crew);
+  return nativeBuildCliCrewRefusal({
+    architectRuntimeId: selected.architectRuntimeId,
+    reviewerRuntimeId: selected.reviewerRuntimeId,
+    workerRuntimeIds: selected.workerRuntimeIds,
+    verifierRuntimeIds: selected.verifierRuntimeIds,
+    permissionProfile: access === "full" ? "full" : access === "project" ? "project" : "guarded",
+  });
+}
+
+/**
+ * The access a crew change is checked against (CW9). A Build with a Runner run keeps the access it was made with
+ * (`NativeRunProjection.permissionProfile`), whatever the ceiling says now, so its crew is checked against that; null
+ * until the run is read, which no CLI crew passes. A Build not yet sent uses the chosen ceiling.
+ */
+export function buildCrewCliAccess(
+  discussion: { nativeBuildRunId?: string | null; runnerAccess?: "ask" | "project" | "full" | null },
+  runPermissionProfile: "guarded" | "project" | "full" | null | undefined,
+): "ask" | "project" | "full" | null {
+  if (!discussion.nativeBuildRunId) return discussion.runnerAccess ?? null;
+  if (!runPermissionProfile) return null;
+  return runPermissionProfile === "guarded" ? "ask" : runPermissionProfile;
 }
 
 /** The reviewer shown by default: the first available model that isn't the Architect's. */

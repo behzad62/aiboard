@@ -136,6 +136,7 @@ import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildPauseDescription,
+  cliTaskFailureText,
   nativeBuildFileIdentity,
   nativeBuildRestorationPolicyPatch,
   nativeBuildTaskStatus,
@@ -201,6 +202,8 @@ import {
 import { NativePlanningPanel, NativePlanStartCard } from "@/components/NativePlanningPanel";
 import { LoadingNotice } from "@/components/build/LoadingNotice";
 import { EnvironmentInventoryPanel } from "@/components/build/EnvironmentInventoryPanel";
+import { CliAttemptsPanel, type CliRunningTail } from "@/components/build/CliAttemptsPanel";
+import { cliAttemptViews, cliLiveTails, type CliAttemptView } from "@/lib/client/cli-workers";
 import { VerificationSummary } from "@/components/build/VerificationSummary";
 import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "@/lib/client/build-crew";
 import { requestSpecificationSource } from "@/lib/client/native-planning-view";
@@ -326,9 +329,12 @@ function DiscussionPageInner() {
   const [nativeObservability, setNativeObservability] =
     useState<NativeBuildObservability | null>(null);
   const [nativeActivity, setNativeActivity] = useState<NativeBuildActivity[]>([]);
+  const [nativeCliAttempts, setNativeCliAttempts] = useState<CliAttemptView[]>([]);
   const [nativeProjection, setNativeProjection] =
     useState<NativeBuildProjection | null>(null);
   const [nativeRunState, setNativeRunState] = useState<NativeRunProjection["state"] | undefined>(undefined);
+  /** The run's own access, fixed when it was made: session settings check a CLI crew against it (CW9). */
+  const [nativeRunPermissionProfile, setNativeRunPermissionProfile] = useState<NativeRunProjection["permissionProfile"] | null>(null);
   const [specificationBusy, setSpecificationBusy] = useState(false);
   const [repairIssueBusy, setRepairIssueBusy] = useState(false);
   const [repairIssueError, setRepairIssueError] = useState<string | null>(null);
@@ -1285,8 +1291,14 @@ function DiscussionPageInner() {
         const handoffs = durableBuildHandoffPanels(projection, run.state);
         setNativeProjection(projection);
         setNativeRunState(run.state);
+        setNativeRunPermissionProfile(run.permissionProfile);
         setNativeObservability(observability);
         setNativeActivity(activity);
+        // CLI workers (CW9): each recorded CLI run, with the Runner's re-runs of the checks it reported.
+        setNativeCliAttempts(cliAttemptViews(events, {
+          taskTitles: Object.fromEntries(Object.values(projection.tasks).map((task) => [task.id, task.objective])),
+          evidence: observability.evidence,
+        }));
         setArchitectHandoff(handoffs.architect);
         setVerifierSelection(handoffs.verifier);
         setProjectHandoff(handoffs.project);
@@ -1489,6 +1501,7 @@ function DiscussionPageInner() {
     setNativePermissions([]);
     setNativeObservability(null);
     setNativeProjection(null);
+    setNativeRunPermissionProfile(null);
     nativeTranscriptRef.current = null;
     setNativeTranscript(null);
     setNativeFiles(null);
@@ -1558,6 +1571,7 @@ function DiscussionPageInner() {
     setBuildContextState(EMPTY_BUILD_CONTEXT_PANEL_STATE);
     setNativeObservability(null);
     setNativeProjection(null);
+    setNativeRunPermissionProfile(null);
     nativeTranscriptRef.current = null;
     setNativeTranscript(null);
     setNativeFiles(null);
@@ -2180,7 +2194,7 @@ function DiscussionPageInner() {
           retired: native && nativeProjection ? nativeTaskRetirement(nativeProjection, native) : undefined,
           dependencies: native?.dependencies ?? [],
           attempt: native?.attempt,
-          failureReason: native?.failureReason,
+          failureReason: cliTaskFailureText(native?.failureReason),
           conflictPaths: native?.conflictPaths,
           changeSetId: native?.changeSetId,
           integrationRevision: native?.integrationRevision,
@@ -2951,6 +2965,15 @@ function DiscussionPageInner() {
     ];
 
     const crew = buildCrewFromDiscussion(discussion);
+    const cliRunningTails: CliRunningTail[] = cliLiveTails(liveModelTurns).map((tail) => {
+      const turn = liveModelTurns.find((candidate) => candidate.sessionId === tail.sessionId && candidate.actor.id === tail.workerId);
+      const identity = turn ? nativeActorModelIdentity(turn.actor, turn.sessionId, nativeProjection, nativeObservability?.budget) : null;
+      return {
+        ...tail,
+        name: identity?.modelName ?? "CLI worker",
+        ...(identity?.taskTitle ? { taskTitle: identity.taskTitle } : {}),
+      };
+    });
     const withEffort = (member: { modelId: string; reasoningEffort: Parameters<typeof getReasoningLabel>[0] }) =>
       member.reasoningEffort === "default"
         ? modelLabel(member.modelId)
@@ -3051,6 +3074,7 @@ function DiscussionPageInner() {
             attachments={attachments}
             canEdit={!isActive && !streamConnected}
             onSave={handleSessionSettingsSave}
+            runPermissionProfile={nativeRunPermissionProfile}
             onRunnerChange={handleRunnerChange}
           />
         }
@@ -3103,6 +3127,7 @@ function DiscussionPageInner() {
               )}
             </section>
             <EnvironmentInventoryPanel projection={nativeProjection} />
+            <CliAttemptsPanel attempts={nativeCliAttempts} tails={cliRunningTails} />
             <BuildRunStats
               status={status}
               policy={discussion.buildRunPolicy ?? "finish"}
@@ -3216,6 +3241,7 @@ function DiscussionPageInner() {
               attachments={attachments}
               canEdit={!isActive && !streamConnected}
               onSave={handleSessionSettingsSave}
+              runPermissionProfile={nativeRunPermissionProfile}
               onRunnerChange={handleRunnerChange}
             />
           </div>
@@ -3368,6 +3394,7 @@ function DiscussionPageInner() {
               attachments={attachments}
               canEdit={!isActive && !streamConnected}
               onSave={handleSessionSettingsSave}
+              runPermissionProfile={nativeRunPermissionProfile}
               onRunnerChange={handleRunnerChange}
             />
           </TabsContent>

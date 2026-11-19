@@ -7,6 +7,8 @@ import { buildCrewFromDiscussion, selectBuildCrewRuntimes } from "../lib/client/
 import { BuildWorkspace } from "../components/build/BuildWorkspace";
 import { BuildEventCenter, alertsFromDiagnostics } from "../components/build/BuildEventCenter";
 import { EnvironmentInventoryPanel } from "../components/build/EnvironmentInventoryPanel";
+import { CliAttemptsPanel } from "../components/build/CliAttemptsPanel";
+import { cliAttemptViews } from "../lib/client/cli-workers";
 import { VerificationSummary } from "../components/build/VerificationSummary";
 import { FinalVerificationManifest } from "../components/RunnerV2ObservabilityPanel";
 import type { DiagnosticEntry } from "../components/DiscussionDiagnostics";
@@ -192,4 +194,20 @@ console.log("PASS build UI overhaul: Run details tool inventory");
   const clean = renderToStaticMarkup(createElement(VerificationSummary, { summary: { total: 2, passed: 2, notVerified: [] } }));
   assert.ok(clean.includes("2 of 2 final-verification checks passed.") && clean.includes("Nothing was left unverified."));
   console.log("PASS build UI overhaul: Run details verification summary (VF8)");
+}
+
+// CW9: Run details' CLI workers section renders only for a Build with CLI runs; a CLI run's card names the CLI, its
+// outcome and the Runner's re-runs (scripts/test-cli-workers-ui.mts covers the rest).
+{
+  assert.equal(renderToStaticMarkup(createElement(CliAttemptsPanel, { attempts: [] })), "", "an API-only Build shows no CLI section");
+  const attempts = cliAttemptViews([{
+    sequence: 4, type: "worker.cli_attempt_recorded", occurredAt: "2026-11-18T12:00:00.000Z", actor: { role: "runner", id: "native-worker-driver" },
+    payload: { version: 1, taskId: "t1", attempt: 1, workerId: "w1", sessionId: "s1", runtimeId: "agy:default", providerId: "agy",
+      cliVersion: "1.5.10", exitCode: 0, outcome: "cannot_do", collected: true, replacedCliCommits: 0 },
+  }], { taskTitles: { t1: "Wire the API" } });
+  const section = renderToStaticMarkup(createElement(CliAttemptsPanel, { attempts }));
+  for (const expected of ["CLI workers", "agy", "Wire the API", "1.5.10", "Asked for a replan", "Commits replaced", "none", "Re-runs of its checks"]) {
+    assert.ok(section.includes(expected), expected);
+  }
+  console.log("PASS build UI overhaul: Run details CLI workers (CW9)");
 }

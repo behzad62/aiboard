@@ -8,6 +8,7 @@ import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
 import { ToolRuntimeSettingsPanel } from "@/components/ToolRuntimeSettingsPanel";
 import { BrowserInstallSettings } from "@/components/BrowserInstallSettings";
+import { CliWorkersSettings } from "@/components/CliWorkersSettings";
 import { ExtensionsSettings } from "@/components/extensions/ExtensionsSettings";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
@@ -398,6 +399,8 @@ export default function SettingsPage() {
               </TabsContent>
             </Tabs>
           </div>
+
+          <CliWorkersSettings />
           </HomeGate>
         </TabsContent>
 

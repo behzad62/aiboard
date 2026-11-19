@@ -35,12 +35,18 @@ interface RunnerSetupProps {
   disabled?: boolean;
   pickedFolderName?: string | null;
   onUseBrowserFolder?: () => void;
+  /**
+   * Show the access ceiling for a launcher session too (a Build's crew needs it: CLI workers need Full access). Off
+   * in the Tools tab, where a launcher session's access is not saved and the ceiling would do nothing.
+   */
+  launcherAccessCeiling?: boolean;
 }
 
 export function RunnerSetup({
   onChange,
   initialSelection,
   disabled = false,
+  launcherAccessCeiling = false,
 }: RunnerSetupProps) {
   const [url, setUrl] = useState(initialSelection?.url ?? DEFAULT_RUNNER_V2_URL);
   const [token, setToken] = useState(initialSelection?.token ?? "");
@@ -97,7 +103,14 @@ export function RunnerSetup({
       token: next.token ?? token,
       access: next.access ?? access,
     };
-    onChange?.(selection.token.trim() ? { ...selection, source: "manual" as const } : null);
+    if (selection.token.trim()) {
+      onChange?.({ ...selection, source: "manual" as const });
+      return;
+    }
+    // A launcher session keeps its own connection; only the access ceiling is the owner's choice here.
+    onChange?.(launcher && launcherAccessCeiling
+      ? { url: launcher.url, token: launcher.token, access: selection.access, source: "launcher" as const }
+      : null);
   };
 
   const test = async () => {
@@ -210,7 +223,7 @@ export function RunnerSetup({
           />
         </div>
       </div>
-      {token.trim() && (
+      {(token.trim() || (launcher && launcherAccessCeiling)) && (
         <div className="space-y-1.5">
           <Label className="text-xs">Access ceiling</Label>
           <div className="grid gap-2 sm:grid-cols-3">

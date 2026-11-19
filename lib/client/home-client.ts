@@ -648,6 +648,11 @@ export function homeSupportsCliWorkers(): boolean {
   return state.status === "ready" && state.view.capabilities?.cliWorkers === true;
 }
 
+/** The home's CLI worker entries as last read (CW9: Settings and the crew picker read them; never a writer). */
+export function homeCliWorkerEntries(): Partial<Record<CliWorkerProviderId, HomeCliWorkerEntry>> {
+  return state.status === "ready" ? state.view.config.cliWorkers ?? {} : {};
+}
+
 /**
  * One CLI worker's entry, merged so fields this writer does not name keep their value. The only way the
  * page writes the `cliWorkers` section: a CLI's login stays in the CLI's own files, so no key goes here.

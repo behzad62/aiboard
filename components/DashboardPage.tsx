@@ -28,10 +28,13 @@ import { AttachmentPicker, type AttachmentSummary } from "@/components/Attachmen
 import { DiscussionHistory } from "@/components/DiscussionHistory";
 import { BuildCrewPicker } from "@/components/build/BuildCrewPicker";
 import {
+  buildCrewCliRefusal,
   buildCrewModelIds,
   defaultReviewerModelId,
   type BuildCrew,
 } from "@/lib/client/build-crew";
+import { cliCrewAvailabilityRefusal, isCliRuntimeId } from "@/lib/client/cli-workers";
+import { useCliWorkerCrewOptions } from "@/lib/client/use-cli-worker-checks";
 import type {
   ToolRuntimeRunnerSettings,
   Discussion,
@@ -361,6 +364,13 @@ export default function DashboardPage() {
       ? Boolean(crew?.architect.modelId)
       : Boolean(judgeModelId || effectiveSelectedModels[0]);
   const buildReviewerId = mode === "build" ? crew?.reviewer?.modelId ?? null : null;
+  const cliCrew = useCliWorkerCrewOptions(runner?.access ?? null, { enabled: mode === "build" });
+  // CLI workers: workers only, only at Full access (§3.12, §3.13), and each turned on and checked by the Runner. The
+  // Runner refuses such a crew at the start, after the discussion exists, so Start waits until it would pass.
+  const buildCliRefusal = mode === "build" && crew
+    ? buildCrewCliRefusal(crew, runner?.access ?? null)?.message
+      ?? cliCrewAvailabilityRefusal(crew.workers.map((worker) => worker.modelId), cliCrew)
+    : null;
   const buildWorkerCount = crew?.workers.length ?? 0;
   const buildBudgetEnforceabilityError = useMemo(() => {
     if (mode !== "build") return null;
@@ -376,6 +386,8 @@ export default function DashboardPage() {
           : {}),
       },
     }, runtimeIds.map((runtimeId) => {
+      // A CLI worker is unmetered: its use is not counted toward a USD cap (CWD-5).
+      if (isCliRuntimeId(runtimeId)) return { runtimeId, costBasis: "account_not_metered" as const };
       const { providerId } = parseModelId(runtimeId);
       const hasApiPricing = Boolean(
         getModelPricing(
@@ -410,6 +422,7 @@ export default function DashboardPage() {
     if (mode !== "build" || buildRunPolicy !== "budgeted" || !(buildBudgetUsd > 0)) return null;
     const runtimeIds = crew ? buildCrewModelIds(crew) : [];
     const unpriced = runtimeIds.filter((runtimeId) =>
+      !isCliRuntimeId(runtimeId) &&
       !getModelPricing(runtimeId, data?.settings.modelPricingOverrides, data?.settings.discoveredModelMetadata) &&
       !getProviderDefinition(parseModelId(runtimeId).providerId)?.accountRunner
     );
@@ -429,6 +442,8 @@ export default function DashboardPage() {
           : participatingModelRequirementMessage(mode)
       : !hasJudge
           ? "Choose a judge model."
+          : buildCliRefusal
+            ? buildCliRefusal
           : buildBudgetEnforceabilityError
             ? buildBudgetEnforceabilityError
           : !hasTopic
@@ -441,6 +456,8 @@ export default function DashboardPage() {
   const canStart = !loading && !blockerHint;
 
   const startDiscussion = async () => {
+    // Nothing is created while a blocker stands (a CLI crew the Runner would refuse would leave a dead Build).
+    if (blockerHint) return;
     setLoading(true);
     setError(null);
     try {
@@ -795,6 +812,8 @@ export default function DashboardPage() {
                   runPolicy: buildRunPolicy,
                 }}
                 probeStatus={(modelId) => actionProtocolStatusForId(modelId, capabilityProfiles)}
+                cliWorkers={cliCrew.options}
+                access={runner?.access ?? null}
               />
             )}
 

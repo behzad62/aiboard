@@ -79,6 +79,21 @@ export function knownDefectRepairNote(
   ].join("\n");
 }
 
+/** runner-v2/src/cli-worker-runtime.ts `CLI_COLLECT_PENDING_PREFIX`. */
+export const CLI_COLLECT_PENDING_PREFIX = "cli_collect_pending:";
+/** runner-v2/src/cli-worker-runtime.ts `PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX`. */
+export const PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX = "process_launch_unproven_repeated:";
+/** runner-v2/src/cli-worker-runtime.ts `CLI_RERUNS_PENDING_PREFIX` (CW6). */
+export const CLI_RERUNS_PENDING_PREFIX = "cli_reruns_pending:";
+/** runner-v2/src/native-worker-driver.ts `WORKER_HANDOFF_STOP_PENDING_PREFIX` (CW7). */
+export const WORKER_HANDOFF_STOP_PENDING_PREFIX = "worker_handoff_stop_pending:";
+/** runner-v2/src/cli-worker-runtime.ts `PROCESS_LAUNCH_UNPROVEN_PREFIX`: one launch the Runner could not start fails the attempt. */
+export const PROCESS_LAUNCH_UNPROVEN_PREFIX = "process_launch_unproven:";
+/** runner-v2/src/cli-worker-runtime.ts `CLI_STDIN_UNDELIVERED` (#238). */
+export const CLI_STDIN_UNDELIVERED = "cli_stdin_undelivered";
+/** The deadline failure's code (cli-worker-runtime.ts). */
+export const CLI_ATTEMPT_DEADLINE = "cli_attempt_deadline";
+
 /** The Runner's pauses for a worker's stop, each of which keeps the task's folder and claim. */
 const WORKER_STOP_PAUSES = [
   ["process_stop_unproven:", "unproven"],
@@ -89,6 +104,48 @@ const WORKER_STOP_PAUSES = [
 function workerStopPause(reason: string): { kind: (typeof WORKER_STOP_PAUSES)[number][1]; taskId: string } | undefined {
   const match = WORKER_STOP_PAUSES.find(([prefix]) => reason.startsWith(prefix));
   return match ? { kind: match[1], taskId: reason.slice(match[0].length) } : undefined;
+}
+
+/**
+ * What the owner can do about a CLI launch the Runner could not start (cli-worker-runtime.ts `launchRefusal`,
+ * `cmdLaunchRefusal` and `runnerLaunchRefusalCode`), said in words rather than as the code.
+ */
+export function cliLaunchFailureStep(code: string): string {
+  switch (code) {
+    case "cli_worker_platform_refused":
+      return "This CLI can't run as a worker on this computer's operating system.";
+    case "cli_worker_root_refused":
+      return "This CLI refuses to run as root: start AI Board as a normal user.";
+    case "job_containment_unverified":
+      return "AI Board could not confirm it can contain the CLI's programs on this PC: update AI Board (`aiboard update`) and check Settings > Providers > CLI workers.";
+    case "cli_executable_unknown":
+      return "AI Board could not tell which program to start: set the CLI's program path in Settings > Providers > CLI workers and press Test.";
+    case "windows_batch_argv_unverified":
+    case "cli_launch_argv_unsafe":
+      return "Windows can't safely start this CLI's .cmd launcher: point Settings > Providers > CLI workers at the CLI's .exe and press Test.";
+    default:
+      return `Starting the CLI failed (${code}): check it in Settings > Providers > CLI workers and press Test.`;
+  }
+}
+
+/**
+ * A task's failure reason in words, for the Runner's CLI worker codes (CW5, CW6, #238); any other reason is returned as
+ * it is. The Runner writes each as `<code>: <sentence>` (the launch code as `process_launch_unproven:<code>`).
+ */
+export function cliTaskFailureText(reason: string | undefined): string | undefined {
+  if (!reason) return reason;
+  const rest = (code: string) => reason.slice(code.length).replace(/^:\s*/, "").trim();
+  if (reason.startsWith(PROCESS_LAUNCH_UNPROVEN_PREFIX)) {
+    return `The Runner could not start the CLI worker. ${cliLaunchFailureStep(rest(PROCESS_LAUNCH_UNPROVEN_PREFIX) || "unknown")}`;
+  }
+  if (reason.startsWith(`${CLI_STDIN_UNDELIVERED}:`) || reason === CLI_STDIN_UNDELIVERED) {
+    const why = rest(CLI_STDIN_UNDELIVERED);
+    return `The task never reached the CLI worker: the Runner could not finish writing its prompt${why ? ` (${why.replace(/\.$/, "")})` : ""}. Its programs were stopped and nothing was collected; the CLI's health is unchanged.`;
+  }
+  if (reason.startsWith(`${CLI_ATTEMPT_DEADLINE}:`)) {
+    return `${rest(CLI_ATTEMPT_DEADLINE)} Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.`;
+  }
+  return reason;
 }
 
 /** Plain-language explanation of why a native Build is paused, or null when it is not paused. */
@@ -171,10 +228,55 @@ export function nativeBuildPauseDescription(
   if (reason === "project_handoff_required" || reason.startsWith("project_handoff")) {
     return { waitingForOwner: true, title: "Waiting for you: choose the handoff", detail: "The Build finished. Choose how to hand the result to your project." };
   }
+  const taskName = (taskId: string): string => {
+    const title = taskId ? projection.tasks?.[taskId]?.objective?.trim() : undefined;
+    return title ? `"${title}"` : taskId ? `task ${taskId}` : "a task";
+  };
+  // CLI workers (CW5): the stop after a CLI's result was proven on the last Resume; the next one collects.
+  if (reason.startsWith(CLI_COLLECT_PENDING_PREFIX)) {
+    return {
+      waitingForOwner: false,
+      title: "Paused: a CLI worker's finished work is ready to collect",
+      detail: `Its programs are now stopped; Resume collects what the CLI did on ${taskName(reason.slice(CLI_COLLECT_PENDING_PREFIX.length))}.`,
+    };
+  }
+  // CLI workers (CW6, §3.6): a re-run's stop was unproven; the last Resume proved it, and the next one re-runs the
+  // checks on the tree the CLI left. No CLI starts.
+  if (reason.startsWith(CLI_RERUNS_PENDING_PREFIX)) {
+    return {
+      waitingForOwner: false,
+      title: "Paused: the Runner's checks of a CLI worker's work are ready to run again",
+      detail: `A program from the Runner's re-run of the checks on ${taskName(reason.slice(CLI_RERUNS_PENDING_PREFIX.length))} is now proven stopped. Resume restores the files the CLI left and runs those checks again; it does not start the CLI.`,
+    };
+  }
+  // CLI workers (CW7, §3.9): the API worker before a CLI was not proven stopped; the last Resume proved it, and the
+  // next one starts the CLI on the same attempt.
+  if (reason.startsWith(WORKER_HANDOFF_STOP_PENDING_PREFIX)) {
+    return {
+      waitingForOwner: false,
+      title: "Paused: a CLI worker is ready to take over a task",
+      detail: `The worker that was on ${taskName(reason.slice(WORKER_HANDOFF_STOP_PENDING_PREFIX.length))} is now proven stopped. Resume starts the CLI worker it was handed to, on the same attempt.`,
+    };
+  }
+  if (reason === "worker_cancelled") {
+    return {
+      waitingForOwner: false,
+      title: "Paused: a worker was stopped before it finished",
+      detail: "A worker's attempt was cancelled while it ran, so nothing it was doing was collected. Resume continues the Build, and the task runs again.",
+    };
+  }
+  // CLI workers (CW5, §3.11 case 1): a launch the Runner can't start, after an earlier one in this run, pauses it.
+  if (reason.startsWith(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX)) {
+    const code = reason.slice(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX.length) || "unknown";
+    return {
+      waitingForOwner: false,
+      title: "Paused: the Runner could not start a CLI worker again",
+      detail: `${cliLaunchFailureStep(code)} Then press Resume, or take the CLI worker out of the crew.`,
+    };
+  }
   const stopPause = workerStopPause(reason);
   if (stopPause) {
-    const title = stopPause.taskId ? projection.tasks?.[stopPause.taskId]?.objective?.trim() : undefined;
-    const task = title ? `"${title}"` : stopPause.taskId ? `task ${stopPause.taskId}` : "a task";
+    const task = taskName(stopPause.taskId);
     const failure = projection.pauseReason?.detail;
     const failed = failure ? `What failed: ${failure} ` : "";
     if (stopPause.kind === "unrecorded") {
