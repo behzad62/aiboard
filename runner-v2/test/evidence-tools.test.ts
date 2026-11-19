@@ -8,7 +8,7 @@ import type { AgentMessage, ToolResult } from "../src/agent-contracts.js";
 import { validateCriterionEvidenceLinks } from "../src/acceptance-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { CommandOutputCapture } from "../src/command-output-files.js";
-import { evidenceFactArtifactHashes, evidenceFactSummary, type CommandEvidenceFact } from "../src/evidence-store.js";
+import { evidenceFactArtifactHashes, evidenceFactSummary, RUNNER_RERUN_OF_CLI_CLAIM, type CommandEvidenceFact } from "../src/evidence-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
 import type { GenericProcessResult } from "../src/execution-safety-contracts.js";
 import { encodePng } from "../src/image-inspection.js";
@@ -656,6 +656,38 @@ test("image outputs reach an image-capable model as image input and reach others
     assert.equal(reviewerText.content.some((block) => block.type === "artifact"), false);
     const [inspected] = jsonValue(reviewerText) as Array<{ fact: { outputs: CommandOutputCapture } }>;
     assert.equal(inspected!.fact.outputs.files.find((file) => file.path === "screens/main.png")?.artifactHash, shown[0]!.type === "artifact" ? shown[0]!.hash : "");
+  } finally {
+    store.close();
+    fixture.cleanup();
+  }
+});
+
+test("CW6: only the Runner's re-run instance marks a record as a re-run of a CLI's claim, and each such run is fresh", async () => {
+  const fixture = evidenceFixture();
+  const store = new SqliteEvidenceStore(fixture.database);
+  const artifacts = new ArtifactStore(fixture.artifacts);
+  try {
+    const invoke = async (factSource: typeof RUNNER_RERUN_OF_CLI_CLAIM | undefined, callId: string, extra: Record<string, unknown> = {}) => {
+      const fake = fakeExecution();
+      const registry = new ToolRegistry();
+      for (const tool of createEvidenceTools({ store, artifacts, taskId: "task_a", attempt: 1, execution: fake.execution, ...(factSource ? { factSource } : {}) })) {
+        registry.register(tool);
+      }
+      const result = await registry.invoke({
+        type: "tool_call", callId, name: "run_evidence_command",
+        arguments: { label: "check", command: "fixture", args: [], ...extra },
+      }, { ...workerContext(fixture.workspace), callId, executionGrant: {} as never });
+      return { result, request: fake.requests[0] };
+    };
+    const rerun = await invoke(RUNNER_RERUN_OF_CLI_CLAIM, "rerun");
+    assert.equal(rerun.result.isError, false);
+    assert.equal(rerun.request?.freshExecution, true, "a re-run is never an earlier result");
+    assert.equal((jsonValue(rerun.result) as { fact: CommandEvidenceFact }).fact.source, RUNNER_RERUN_OF_CLI_CLAIM);
+    // The model-facing instance has no such field: a `source` argument is ignored or refused, never recorded.
+    const own = await invoke(undefined, "own", { source: RUNNER_RERUN_OF_CLI_CLAIM });
+    assert.equal(own.request?.freshExecution, undefined);
+    assert.equal(own.result.isError ? undefined : (jsonValue(own.result) as { fact: CommandEvidenceFact }).fact.source, undefined);
+    assert.deepEqual(store.list({ runId: "run_1", taskId: "task_a" }).filter((record) => (record.fact as CommandEvidenceFact).source).length, 1);
   } finally {
     store.close();
     fixture.cleanup();

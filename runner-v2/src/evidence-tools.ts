@@ -9,7 +9,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { CommandEvidenceFact, EvidenceRecord, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
+import type { CommandEvidenceFact, CommandEvidenceSource, EvidenceRecord, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
@@ -19,6 +19,7 @@ import {
 } from "./one-shot-command-executor.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { recordValidationEvidenceSegment } from "./validation-budget.js";
+import { isProcessStopUnprovenError } from "./process-stop-proof.js";
 import {
   captureCommandOutputs,
   COMMAND_OUTPUT_LIMITS,
@@ -60,6 +61,11 @@ export interface EvidenceToolsOptions {
   validationAccounting?: EvidenceValidationAccounting;
   /** Hidden-path policy (benchmark hidden tests): output files there are refused, never read. */
   hiddenPaths?: readonly string[];
+  /**
+   * CW6: stamped on every command fact this tool set records. Only the Runner's own instance for re-running a CLI
+   * worker's checks sets it; no tool input can.
+   */
+  factSource?: CommandEvidenceSource;
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -206,8 +212,9 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           arguments: input.args,
           workingDirectory: cwd,
           timeoutMs: input.timeoutMs,
-          // Kept files must come from this execution, never from a reused earlier result.
-          ...(input.outputs ? { freshExecution: true as const } : {}),
+          // Kept files must come from this execution, never from a reused earlier result; a re-run of a CLI's claim
+          // (CW6) is a run of its own, never an earlier result.
+          ...(input.outputs || options.factSource ? { freshExecution: true as const } : {}),
           context: {
             runId: context.runId,
             sessionId: context.sessionId,
@@ -274,6 +281,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           ...(revision ? { repositoryRevision: revision } : {}),
           ...commandReuseMetadata(execution),
           ...(outputs ? { outputs } : {}),
+          ...(options.factSource ? { source: options.factSource } : {}),
         };
         const record = options.store.record({
           runId: context.runId,
@@ -299,8 +307,9 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           isError: false,
         };
       } catch (error) {
+        // An unproven process stop keeps its classification as a code (CW6's re-runs pause on it, cli-worker-evidence.ts).
         return failure(
-          stableExecutionErrorCode(error) ?? "evidence_command_failed",
+          (isProcessStopUnprovenError(error) ? "process_cleanup_unverified" : stableExecutionErrorCode(error)) ?? "evidence_command_failed",
           error instanceof Error ? error.message : String(error)
         );
       }

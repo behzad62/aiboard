@@ -292,6 +292,7 @@ async function handoffFixture(t: TestContext, label: string, options: FixtureOpt
     host: { platform: "win32", isRoot: false, jobContainment: "verified", windowsBatchArgv: "verified" },
     stateDirectory: state, owners: new CliWorkerOwners(), readWaitMs: 50,
     captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
+    oneShotCommands: async () => undefined,
     rerunChecks: async ({ attempt }) => {
       const output = await artifacts.put(new Uint8Array(0), "text/plain", "check output");
       const record = evidence.record({

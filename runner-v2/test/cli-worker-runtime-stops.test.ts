@@ -10,12 +10,16 @@ import test, { describe } from "node:test";
 import {
   CLI_COLLECT_PENDING_PREFIX,
   CLI_COLLECT_WORKTREE_CHANGED,
+  CLI_RERUNS_PENDING_PREFIX,
   cliWorkerStateFolder,
+  proveCliStop,
   runCliWorkerAttempt,
   type CliProcessLauncher,
   type CliWorkerLaunchSettings,
   type CliWorkerRuntimeDeps,
 } from "../src/cli-worker-runtime.js";
+import { restoreWorkingTree } from "../src/command-evidence-identity.js";
+import { policyGit } from "./support/cli-worker-fixture.js";
 import { FAKE_CLI_SCRIPT, type FakeCliScenario } from "./support/fake-cli.js";
 import { RUN, TASK, SESSION, OWNER, harness, claudeStream, claudeWorking, records, done, CLI_RUNTIME_TEST_CONCURRENCY, type Harness } from "./support/cli-worker-runtime-harness.js";
 
@@ -391,19 +395,38 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
   });
 
   test("CW8: the re-runs of the CLI's browser checks get a session of their own, stopped and proven before anything is submitted", async (t) => {
-    const h = await harness(t, "browser-reruns");
     const reported = { ...done(), checks: BROWSER_CHECKS };
-    // The re-run session's stop not proven: nothing is submitted (case 2).
-    const unprovenLauncher = h.launcher({ cli: "claude-code", stdout: claudeStream(h, reported), actions: [{ write: "value.txt", content: "two\n" }] });
-    const unprovenDeps = withSession(h, unprovenLauncher, { starts: 0, live: false, plan: [] });
+    // The re-run session's stop not proven: nothing is submitted (case 2), and the attempt is held with the CLI's tree.
+    const hu = await harness(t, "browser-reruns-unproven");
+    const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(hu.state, "tree-index"), policyGit, treeId);
+    const unprovenSession: FakeSession = { starts: 0, live: false, plan: [] };
+    const unprovenLauncher = hu.launcher({ cli: "claude-code", stdout: claudeStream(hu, reported), actions: [{ write: "value.txt", content: "two\n" }] });
+    const unprovenDeps = withSession(hu, unprovenLauncher, unprovenSession, { restoreTree });
+    let reruns = 0;
     const unproven = await runCliWorkerAttempt({ ...unprovenDeps, rerunChecks: async (input) => {
+      reruns += 1;
       unprovenLauncher.stopFailures = 1;
-      return await h.rerun(input);
-    } }, h.input());
+      return await hu.rerun(input);
+    } }, hu.input());
     assert.equal(unproven.type, "stop_unproven", JSON.stringify(unproven));
     assert.match((unproven as { reason: string }).reason, /re-ran Claude Code's browser checks in a Playwright CLI session; the stop of that session is not proven/);
-    assert.deepEqual((unproven as { outcome: unknown }).outcome, { type: "failed", reason: "process_stop_unproven" });
-    assert.notEqual((await h.sessions.load(SESSION)).status, "submitted");
+    assert.deepEqual((unproven as { outcome: unknown }).outcome, { type: "paused", reason: `${CLI_RERUNS_PENDING_PREFIX}${TASK}` });
+    assert.notEqual((await hu.sessions.load(SESSION)).status, "submitted");
+    assert.equal(hu.owners.has(OWNER), true, "the owner keeps its depth until the retried stop proves it");
+    // Its next entry (the Resume after the proven stop) re-runs on the CLI's tree in a new re-run session, starting no CLI.
+    const resumed = await runCliWorkerAttempt({ ...unprovenDeps, rerunChecks: async (input) => {
+      reruns += 1;
+      assert.equal(input.browserUnavailable, false);
+      return await hu.rerun(input);
+    } }, hu.input());
+    assert.equal(resumed.type, "submitted", JSON.stringify(resumed));
+    assert.equal(unprovenLauncher.starts.length, 1, "no CLI is started again");
+    assert.equal(reruns, 2);
+    assert.equal(unprovenSession.starts, 3, "the CLI's, the first re-run session, the re-entry's");
+    assert.equal(unprovenSession.live, false);
+    assert.equal(hu.owners.has(OWNER), false);
+
+    const h = await harness(t, "browser-reruns");
 
     // Proven: the re-runs ran with the session up, and it was stopped before the submission.
     const session: FakeSession = { starts: 0, live: false, plan: [] };
@@ -432,4 +455,15 @@ describe("CW8: the owner's browser session", { concurrency: CLI_RUNTIME_TEST_CON
     assert.equal(session2.live, false);
     assert.match(JSON.stringify(result2), /The Runner could not start the Playwright CLI session for its re-runs, so the browser checks were not re-run: the session's ready wait failed/);
   });
+});
+
+test("a stop proof for runtime deps that re-run checks but cannot read the Runner's commands is unproven", async () => {
+  const stopped: unknown[] = [];
+  const launcher = { stopOwner: async (owner: unknown) => { stopped.push(owner); } } as unknown as CliProcessLauncher;
+  const rerunChecks = (async () => ({ criterionEvidenceLinks: [], notRun: [] })) as unknown as NonNullable<CliWorkerRuntimeDeps["rerunChecks"]>;
+  assert.equal(await proveCliStop({ launcher, rerunChecks }, OWNER), "the Runner cannot check the commands it ran for this attempt");
+  assert.equal(await proveCliStop({ launcher, rerunChecks, oneShotCommands: async () => undefined }, OWNER), undefined);
+  assert.equal(await proveCliStop({ launcher, rerunChecks, oneShotCommands: async () => "1 command(s) are not proven stopped" }, OWNER), "1 command(s) are not proven stopped");
+  assert.equal(await proveCliStop({ launcher }, OWNER), undefined, "no re-runs, no one-shot commands to check");
+  assert.equal(stopped.length, 4, "the managed stop runs first every time");
 });

@@ -142,7 +142,10 @@ export function createSubprocessProcessRecoveryRuntime(options: {
   const listInspected = (): readonly RecoveryTarget[] => {
     const rows = options.store.listRowRevisions?.();
     if (!rows) {
-      return (options.store.listRowIds?.() ?? []).flatMap(invocationId => {
+      // A store that cannot list its records lists none of them: never an empty list a caller could read as "nothing
+      // runs" (CW6's stop proof reads it so, cli-worker-evidence.ts createCliOneShotSettlement).
+      if (!options.store.listRowIds) throw new Error("The durable process store cannot list its records.");
+      return options.store.listRowIds().flatMap(invocationId => {
         const value = inspect(invocationId); return value ? [value] : [];
       });
     }
