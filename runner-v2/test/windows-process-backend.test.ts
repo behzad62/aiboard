@@ -346,11 +346,13 @@ import {
   WindowsProcessBackend,
   type WindowsJobProcessService,
 } from "../src/windows-process-backend.js";
-import { createWindowsJobProcessHost, provideWindowsBirthHelperAssembly, WindowsJobHostError } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, provideWindowsBirthHelperAssembly, WindowsJobHostError, WindowsJobStartFailedError } from "../src/windows-job-process-host.js";
 
 import { NativeProcessLaunchBlockedError, type NativeProcessOperations } from "../src/native-process-backend.js";
 import { probeProcessHostSemantics } from "../src/process-host-semantic-probes.js";
 import {
+  failedLaunchIdentity,
+  ProcessLaunchFailedWithIdentityError,
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   parseProcessReconciliation,
@@ -1028,6 +1030,63 @@ test("unverified batch argv rejects Job batch targets without disabling native J
   await backend.launch(request([]));
   assert.equal(launches, 1, "the batch fact must not disable a native executable");
 });
+
+test("a failed Job start goes back with its exact record and holds no lane or fence; other launch errors pass unchanged", async () => {
+  const cause = new WindowsJobHostError("process_start_cancelled", "The launch was cancelled before its workload started.");
+  const started = new WindowsJobStartFailedError("process_start_cancelled", cause.message, { processId: "job-failed-start", startedAt: "2026-11-18T00:00:00.000Z" }, cause);
+  assert.equal(started.cause, cause, "the Job host's start error keeps its cause");
+  assert.equal(Object.keys(started).includes("cause"), false, "the cause is not enumerable");
+  let failure: unknown = started;
+  let forwarded: AbortSignal | undefined;
+  const service: WindowsJobProcessService = {
+    probeActiveJobCreateClose: async () => true,
+    launchOwned: async (input) => { forwarded = input.signal; throw failure; },
+    signalOwned: async (processId) => stoppedJobSnapshot(processId),
+    reconcileOwned: async (processId) => stoppedJobSnapshot(processId),
+    releaseOwned: async (processId) => stoppedJobSnapshot(processId),
+    readOwnedOutput: (_processId, _owner, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+  };
+  const backend = new WindowsJobObjectProcessBackend(service);
+  const cancel = new AbortController();
+  const thrown = await backend.launch({ ...request([]), signal: cancel.signal }).then(() => assert.fail("the start failed"), (error: unknown) => error);
+  assert.equal(forwarded, cancel.signal, "the launch's cancellation reaches the Job host's start wait");
+  assert.ok(thrown instanceof ProcessLaunchFailedWithIdentityError, String(thrown));
+  assert.equal(thrown.cause, started);
+  const identity = failedLaunchIdentity(thrown);
+  assert.ok(identity, "the failure names its exact identity");
+  assert.equal(identity.rootPid, undefined, "a failed start has no root pid");
+  assert.equal(identity.startedAt, "2026-11-18T00:00:00.000Z");
+  const opaque = JSON.parse(Buffer.from(identity.opaqueIdentity, "base64url").toString("utf8")) as { processId?: unknown; runId?: unknown };
+  assert.deepEqual([opaque.processId, opaque.runId], ["job-failed-start", "run"]);
+  const held = backend as unknown as { controls: Map<string, unknown>; writerFences: Map<string, unknown> };
+  assert.equal(held.controls.has("job-failed-start"), false, "a failed start holds no control lane");
+  assert.equal(held.writerFences.has("job-failed-start"), false, "a failed start holds no writer fence");
+  // Any other launch error passes unchanged, with no identity.
+  failure = new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
+  const plain = await backend.launch(request([])).then(() => assert.fail("the start failed"), (error: unknown) => error);
+  assert.equal(plain, failure);
+  assert.equal(failedLaunchIdentity(plain), undefined);
+});
+
+test("failedLaunchIdentity reads only an own, well-formed identity under the exact code", () => {
+  const launchResult = { opaqueIdentity: "opaque", birthFingerprint: { observedAt: "2026-11-18T00:00:00.000Z", discriminator: "birth" }, startedAt: "2026-11-18T00:00:00.000Z" };
+  assert.deepEqual(failedLaunchIdentity(new ProcessLaunchFailedWithIdentityError("failed", launchResult)), launchResult);
+  assert.deepEqual(failedLaunchIdentity({ code: "process_launch_failed_with_identity", launchResult }), launchResult);
+  for (const value of [
+    undefined, null, "process_launch_failed_with_identity",
+    { code: "native_process_launch_cleanup_blocked", launchResult },
+    { code: "process_launch_failed_with_identity" },
+    { code: "process_launch_failed_with_identity", launchResult: { ...launchResult, extra: true } },
+    { code: "process_launch_failed_with_identity", launchResult: { ...launchResult, opaqueIdentity: 7 } },
+    Object.create({ code: "process_launch_failed_with_identity", launchResult }),
+    { code: "process_launch_failed_with_identity", get launchResult() { return launchResult; } },
+    new Proxy({ code: "process_launch_failed_with_identity", launchResult }, {}),
+  ]) assert.equal(failedLaunchIdentity(value), undefined, inspectValue(value));
+});
+
+function inspectValue(value: unknown): string {
+  try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+}
 
 test("Windows terminal membership ignores the exited bootstrap and direct workload while retaining a known descendant", () => {
   const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");

@@ -494,7 +494,8 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW0 | Done 2026-11-17: report docs/runner-v2/cli-workers-spike-2026-11-17.md and fixtures under runner-v2/test/fixtures/cli-workers/; the plan amended (CWD-10, CWD-11) | #224 |
 | CW1 | Done | #222 (a3a1df1c) |
 | CW5a | Done | #223 (730b8e67) |
-| CW0b | Done | #228 (cc7c915b) |
+| CW0b | Done 2026-11-18: report docs/runner-v2/codex-windows-job-escape-2026-11-18.md | #228 (cc7c915b) |
+| CW0b fix (R1–R4, Runner side) | Done 2026-11-19: measured results in the CW0b report §6. Codex stays refused on Windows | #232 (88d60c13) |
 | CW2 | Done | #225 (88f82aa3) |
 | CW3 | Done | #227 (a1b1929e) |
 | CW4 | Done | #226 (dd85ca48) |
@@ -502,5 +503,5 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW6 | Done | #236 (eab536f1) |
 | CW7 | Done | #234, follow-ups #241 |
 | CW8 | Done | #237 |
-| CW9 | In review 2026-11-19; merges only after the Runner release carrying CW5–CW8 and #238, #239, #242 (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
+| CW9 | In review 2026-11-19; the Runner release it needs, 0.3.21 (CW5–CW8, #238, #239, #240, #242, #232), is out, so it can merge (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
 | CW10 | Not started | — |

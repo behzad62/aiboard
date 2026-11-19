@@ -16,10 +16,12 @@ import type { ExecutionInvocationIntent } from "../src/execution-safety-contract
 import {
   createProcessBackendRegistration,
   createProcessBackendRegistry,
+  ProcessLaunchFailedWithIdentityError,
   ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessLaunchRequest,
+  type ProcessLaunchResult,
 } from "../src/process-backend.js";
 import {
   createSubprocessRuntimeKernel,
@@ -415,6 +417,8 @@ async function durableLaunchBlocker(
     readonly leaseDurationMs?: number;
     readonly leaseHeartbeatMs?: number;
   } = {},
+  // "identity": the launch failed naming the exact identity it created (no root pid), as a failed Windows Job start does.
+  failure: "cleanup_blocked" | "identity" = "cleanup_blocked",
 ) {
   const root = await mkdtemp(join(tmpdir(), `runner-v2-${suffix}-`));
   const path = join(root, "process.sqlite");
@@ -437,11 +441,14 @@ async function durableLaunchBlocker(
     await rm(root, { recursive: true, force: true });
   });
   const launchDetail = `owned descendant remains; evidence retained at ${root}`;
-  backend.launchError = Object.assign(new Error(launchDetail), {
-    code: "native_process_launch_cleanup_blocked",
-    evidenceDirectory: root,
-    launchResult: backend.launchValue,
-  });
+  const { rootPid: _rootPid, ...failedIdentity } = backend.launchValue as ProcessLaunchResult;
+  backend.launchError = failure === "identity"
+    ? new ProcessLaunchFailedWithIdentityError(launchDetail, failedIdentity)
+    : Object.assign(new Error(launchDetail), {
+      code: "native_process_launch_cleanup_blocked",
+      evidenceDirectory: root,
+      launchResult: backend.launchValue,
+    });
   backend.reconcileValue = { state: "running" };
   backend.verifyValue = { empty: false, detail: "owned descendant remains" };
   const result = await first.runtime.invoke({
@@ -921,6 +928,69 @@ test("recoverable launch cleanup blocker binds identity and persists without pre
     liveTakeovers,
   );
   assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+});
+
+test("a launch that failed naming its exact identity is bound and blocked for cleanup, never 'nothing to clean up'", async () => {
+  const f = fixture();
+  const { rootPid: _rootPid, ...identity } = f.backend.launchValue as ProcessLaunchResult;
+  f.backend.launchError = new ProcessLaunchFailedWithIdentityError("Windows Job start failed.", identity);
+  f.backend.reconcileValue = { state: "exited" };
+  f.backend.verifyValue = { empty: false, detail: "Windows Job Object still contains active processes." };
+
+  const result = await f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {} });
+
+  const record = f.store.readByInvocation("invoke-1");
+  assert.ok(record);
+  assert.equal(result.outcome, "cleanup_failed");
+  assert.equal(record.state, "cleanup_blocked");
+  assert.equal(record.backendBinding?.opaqueIdentity, "opaque-1");
+  assert.equal(record.backendBinding?.rootPid, undefined, "a failed start binds no root pid");
+  assert.notEqual(record.cleanup.state, "not_required");
+  assert.deepEqual(f.backend.calls.filter((call) => ["reconcile", "verify"].includes(call)), ["reconcile", "verify"]);
+  assert.equal(f.backend.calls.includes("observe"), false);
+  assert.equal(f.backend.calls.includes("release"), false, "nothing is released before emptiness is proven");
+});
+
+test("restart closes a failed start's exact record only after its emptiness is proven", async (t) => {
+  const f = await durableLaunchBlocker(t, "failed-start", {}, "identity");
+  f.clock.current = new Date(f.clock.current.getTime() + 301_000);
+  f.backend.reconcileValue = { state: "exited" };
+  const recovery = runtimeFor({ kind: "sqlite", path: f.path }, f.stateKey, f.backend, f.clock, f.outputs);
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [{ invocationId: "invoke-1", state: "cleanup_blocked" }]);
+  assert.equal(f.backend.calls.includes("release"), false, "unproven emptiness releases nothing");
+  f.backend.verifyValue = { empty: true, proofArtifactId: "failed-start-proof" };
+  assert.deepEqual(await recovery.runtime.reconcileStartup(), [{ invocationId: "invoke-1", state: "cleaned" }]);
+  assert.equal(recovery.readOnlyStore.readByInvocation("invoke-1")?.cleanup.state, "verified_empty");
+  assert.ok(f.backend.calls.includes("release"));
+  assert.equal(f.backend.calls.filter((call) => call === "launch").length, 1);
+  recovery.readOnlyStore.close();
+});
+
+test("a stop during a launch cancels the backend's start wait, and a start that then fails naming its identity is stopped through that binding", async () => {
+  const f = fixture();
+  let releaseLaunch!: () => void;
+  f.backend.launchGate = new Promise<void>((resolve) => { releaseLaunch = resolve; });
+  let launchSignal: AbortSignal | undefined;
+  f.backend.onLaunch = (request) => { launchSignal = request.signal; };
+  const { rootPid: _rootPid, ...identity } = f.backend.launchValue as ProcessLaunchResult;
+  f.backend.launchError = new ProcessLaunchFailedWithIdentityError("The launch was cancelled before its workload started.", identity);
+  f.backend.observeValue = { state: "exited", signal: "SIGINT" };
+  const cancel = new AbortController();
+  const running = f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {}, signal: cancel.signal });
+  for (let attempt = 0; attempt < 100 && !launchSignal; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(launchSignal, "the backend gets the launch's cancellation");
+  assert.equal(launchSignal.aborted, false);
+  cancel.abort();
+  for (let attempt = 0; attempt < 100 && !launchSignal.aborted; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(launchSignal.aborted, true, "the stop cancels the backend's start wait");
+  releaseLaunch();
+  const result = await running;
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(result.outcome, "cancelled", inspect({ result, calls: f.backend.calls }));
+  assert.equal(record?.backendBinding?.opaqueIdentity, "opaque-1");
+  assert.equal(record?.cleanup.state, "verified_empty");
+  assert.ok(f.backend.calls.includes("observe"));
+  assert.ok(f.backend.calls.includes("release"));
 });
 
 test("restart reattests a live launch blocker and retry never relaunches", async (t) => {

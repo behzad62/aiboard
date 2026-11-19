@@ -134,10 +134,12 @@ jobs:
           runner-v2/test/managed-stdin-slow-reader.test.ts
           runner-v2/test/managed-stdin-drain.test.ts
           runner-v2/test/user-steering-runtime.test.ts
+          runner-v2/test/child-environment.test.ts
           runner-v2/test/certified-fixture-retained-exit.test.ts
           runner-v2/test/cli-worker-runtime-outcomes.test.ts
           runner-v2/test/cli-worker-runtime-stops.test.ts
           runner-v2/test/cli-worker-runtime-runs.test.ts
+          runner-v2/test/windows-job-start-abort.test.ts
           runner-v2/test/cli-worker-evidence.test.ts
           runner-v2/test/cli-worker-handoff.test.ts
           runner-v2/test/cli-worker-browser.test.ts
@@ -165,6 +167,15 @@ jobs:
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
           runner-v2/test/managed-refused-launch-windows.test.ts
+      # R2/R4: real Job hosts on Windows (coded launch refusals before any spawn, member evidence, a burst of detached
+      # short-lived processes under CPU load from its own busy loops). Its own step so that load never runs beside the
+      # timing-sensitive parallel files above; its Store pwsh cases skip where the Store's pwsh is absent, as on
+      # GitHub's runners (about 13 s on a Windows PC with them skipped; about 25 s with all of them).
+      - name: Run Windows Job packaged-member contracts on Windows
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/windows-job-packaged-members.test.ts
       - name: Run OCI canonical path contracts
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1

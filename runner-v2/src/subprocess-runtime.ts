@@ -24,6 +24,7 @@ import {
   openSqliteDurableProcessKernel,
   semanticRequestFingerprint,
   durableRecoveryIdentity,
+  persistableScrubDecisions,
   type DurableBackendBinding,
   type DurableEnvironmentAudit,
   type DurableProcessCommand,
@@ -38,6 +39,7 @@ import {
   adoptProcessBackendAfterRestart,
   assertProcessBackendRegistryAuthority,
   parseProcessEmptyVerification,
+  failedLaunchIdentity,
   parseProcessLaunchResult,
   parseProcessObservation,
   parseProcessReconciliation,
@@ -688,7 +690,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       removedNames: [...preparedEnvironment.audit.removedNames],
       explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
       grantedNames: [...preparedEnvironment.audit.grantedNames],
-      scrubDecisions: preparedEnvironment.audit.decisions.map((decision) => ({...decision})),
+      // Only kinds a rollback to 0.3.20 parses (two-step rollout): removed_packaged_alias_path is persisted from the
+      // release after 0.3.21; the in-memory and tool-result audit keep it.
+      scrubDecisions: persistableScrubDecisions(preparedEnvironment.audit.decisions),
     };
     record = this.current(record.invocationId);
     record = this.mutate({
@@ -728,6 +732,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     const reuseMarker = Symbol("no-launch-evidence-reuse");
     const stopPromise = this.stopTrigger(request);
+    // A stop that lands while the backend still waits for its workload to start cancels that wait.
+    const launchCancel = new AbortController();
     const launchPromise = this.fencedEffect(record.invocationId, (fence) =>
       this.options.environments.withChildEnvironment(
         preparedEnvironment.capability,
@@ -747,15 +753,16 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
             // launched below.
             throw new Error("Cancelled, stopped or expired before backend launch; nothing was started.");
           }
-          return await selected.backend.launch(
-            deepFreeze({
+          return await selected.backend.launch(Object.freeze({
+            ...deepFreeze({
               intent: request.intent,
               grant,
               environment: snapshotChildEnvironment(environment),
               outputOwnerId: record.outputOwnerId,
               fence,
             }),
-          );
+            signal: launchCancel.signal,
+          }));
         },
       ),
     );
@@ -807,6 +814,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     }
     if (first.kind === "stop") {
       record = this.requestStopLatest(record.invocationId, first.stop.reason);
+      launchCancel.abort();
       try {
         rawLaunch = await launchPromise;
         if (isReuse(rawLaunch)) {
@@ -814,6 +822,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           return resultFromRecord(this.current(record.invocationId));
         }
       } catch (error) {
+        // A start this stop cancelled that names the exact identity it created: the stop goes on with that identity
+        // (bound, observed, verified empty and released) like any stopped process, never "nothing was launched".
+        const identity = failedLaunchIdentity(error);
+        if (identity) rawLaunch = identity;
+        else {
         const blocked = recoverableLaunchBlocker(error);
         if (blocked)
           return await this.persistLaunchCleanupBlocker(record, output, selected, blocked);
@@ -827,6 +840,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           "Process launch was not proven.",
           { cause: error },
         );
+        }
       }
     } else rawLaunch = first.value;
     let launch;
@@ -2565,8 +2579,11 @@ function recoverableLaunchBlocker(error: unknown): {
   const code = descriptors.code;
   const launchResult = descriptors.launchResult;
   const message = descriptors.message;
+  // A failed launch that names the exact identity it created (process_launch_failed_with_identity) is kept the same
+  // way: bound, reconciled and verified, never closed as "nothing was launched".
   if (
-    !code || !("value" in code) || code.value !== "native_process_launch_cleanup_blocked" ||
+    !code || !("value" in code) ||
+    (code.value !== "native_process_launch_cleanup_blocked" && code.value !== "process_launch_failed_with_identity") ||
     !launchResult || !("value" in launchResult)
   ) return undefined;
   const launch = parseProcessLaunchResult(launchResult.value);

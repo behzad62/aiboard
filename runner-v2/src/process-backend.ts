@@ -127,6 +127,11 @@ export interface ProcessLaunchRequest {
   readonly environment: Readonly<Record<string, string>>;
   readonly outputOwnerId: string;
   readonly fence: ProcessEffectFence;
+  /**
+   * Cancels a launch still waiting for its workload to start (a stop or cancellation of the call). A backend that
+   * honours it fails the launch like any other failed start, with the exact identity it created, if any.
+   */
+  readonly signal?: AbortSignal;
 }
 export interface ProcessBackend {
   probe(fence?: ProcessEffectFence): Promise<unknown>;
@@ -292,7 +297,28 @@ export function parseProcessBackendProbe(value: unknown): ParsedProcessBackendPr
     lifecycle: freeze(parseExecutionLifecycleAttestation(o.lifecycle)),
     capabilities: freeze(parseExecutionSafetyCapabilities(record(o.capabilities))),
   });
-}export function parseProcessLaunchResult(value: unknown): ProcessLaunchResult {
+}
+/**
+ * A launch that failed after the backend gave it an exact, durable identity (a start its host aborted, after the
+ * host's record existed). The caller binds `launchResult` and settles it through the backend's normal reconcile,
+ * verify-empty and release, so a failed start is released only on that proof, never assumed to have left nothing.
+ */
+export class ProcessLaunchFailedWithIdentityError extends Error {
+  readonly code = "process_launch_failed_with_identity";
+  constructor(message: string, readonly launchResult: ProcessLaunchResult, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ProcessLaunchFailedWithIdentityError";
+  }
+}
+/** The exact identity a failed launch carries (own data properties only, never a proxy), or undefined. */
+export function failedLaunchIdentity(error: unknown): ProcessLaunchResult | undefined {
+  if (typeof error !== "object" || error === null || nodeTypes.isProxy(error)) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(error);
+  const code = descriptors.code, launchResult = descriptors.launchResult;
+  if (!code || !("value" in code) || code.value !== "process_launch_failed_with_identity" || !launchResult || !("value" in launchResult)) return undefined;
+  try { return parseProcessLaunchResult(launchResult.value); } catch { return undefined; }
+}
+export function parseProcessLaunchResult(value: unknown): ProcessLaunchResult {
   const o = record(value);
   keys(o, ["opaqueIdentity", "birthFingerprint", "rootPid", "startedAt"]);
   const birth = record(o.birthFingerprint);

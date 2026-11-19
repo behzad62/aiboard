@@ -6,7 +6,7 @@ import type { ManagedOutputReadResult } from "./managed-process-output.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { SESSION_HOST_COMMAND, SESSION_HOST_SCRIPT } from "./shell-session-host.js";
 import { BASH_SESSION_HOST_COMMAND, BASH_SESSION_HOST_SCRIPT } from "./shell-session-bash-host.js";
-import { bashExecutable, isStoreAppAlias, pwshExecutable } from "./shell-inventory.js";
+import { bashExecutable, pwshExecutable } from "./shell-inventory.js";
 
 /**
  * Shell sessions: process.run with shellSession runs its script in a PowerShell or bash that stays up between calls, so
@@ -110,7 +110,7 @@ export class ShellSessions {
       throw new ManagedProcessError("invalid_arguments", `A session's first command can be at most ${FIRST_COMMAND_MAX_BYTES / 1024} KiB; start the session with a short command, then send this one.`);
     }
     const snapshot = await this.service.start({
-      ...launch(command.shell),
+      ...sessionLaunch(command.shell),
       ...(command.cwd ? { cwd: command.cwd } : {}),
       env: { ...command.env, AIBOARD_SESSION_NONCE: nonce, AIBOARD_SESSION_FIRST: first,
         AIBOARD_SESSION_HOST: command.shell === "bash" ? BASH_SESSION_HOST_SCRIPT : SESSION_HOST_SCRIPT },
@@ -197,11 +197,14 @@ export function shellSessionsFor(service: ManagedProcessService): ShellSessions 
 }
 
 /**
- * The shell a session runs in. A managed launch pins its program by its real path and contents, which a Microsoft Store
- * app's pwsh (an app execution alias under WindowsApps) does not have, so that pwsh starts through cmd.exe, which
- * follows the alias. The Job host's desktop app policy keeps it in the Job (shell-inventory.ts pwshExecutable).
+ * The shell a session runs in. pwsh is always the Job's own root, as process.run's pwsh is (command-line.ts): for the
+ * Microsoft Store's pwsh, an app execution alias under WindowsApps, the managed launch pins the package's real program
+ * (language-server-executable.ts canonicalExecutablePath) and the Job host starts it with the desktop app policy, which
+ * keeps a packaged root's children in the Job (PR #167). It never starts through cmd.exe: a packaged program that a
+ * descendant starts has its children created outside the Job, where a stop cannot reach them (#167's measured gap;
+ * docs/runner-v2/codex-windows-job-escape-2026-11-18.md).
  */
-function launch(shell: SessionShell): { command: string; args: string[] } {
+export function sessionLaunch(shell: SessionShell): { command: string; args: string[] } {
   // Git Bash on Windows without its profile, which can cd to the home folder; a login shell elsewhere, as process.run's bash.
   if (shell === "bash") {
     return process.platform === "win32"
@@ -210,8 +213,7 @@ function launch(shell: SessionShell): { command: string; args: string[] } {
   }
   const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", SESSION_HOST_COMMAND];
   if (shell === "powershell") return { command: "powershell.exe", args };
-  const pwsh = pwshExecutable() ?? "pwsh.exe";
-  return isStoreAppAlias(pwsh) ? { command: "cmd.exe", args: ["/d", "/c", "pwsh.exe", ...args] } : { command: pwsh, args };
+  return { command: pwshExecutable() ?? "pwsh.exe", args };
 }
 
 function sessionKey(context: ToolExecutionContext, name: string): string {

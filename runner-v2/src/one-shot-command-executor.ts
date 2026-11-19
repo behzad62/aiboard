@@ -11,7 +11,8 @@ import {
 } from "./execution-lifecycle-policy.js";
 import { createHash } from "node:crypto";
 import type { PermissionProfile } from "./contracts.js";
-import type { ChildEnvironmentFactory } from "./child-environment.js";
+import { isWindowsAppsPathEntry, type ChildEnvironmentFactory } from "./child-environment.js";
+import { packagedRootProgram } from "./language-server-executable.js";
 import { BoundedOutputSpool } from "./bounded-output-spool.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -187,7 +188,7 @@ export function createRuntimeBackedOneShotCommandExecutor(
         request.context.sessionId,
         request.context.callId,
       );
-      const originalIntent: ExecutionInvocationIntent = Object.freeze({
+      let originalIntent: ExecutionInvocationIntent = Object.freeze({
         invocationId,
         runId: request.context.runId,
         sessionId: request.context.sessionId,
@@ -220,7 +221,14 @@ export function createRuntimeBackedOneShotCommandExecutor(
       try {
         const prepared = options.environments.prepare({ workingDirectory: request.workingDirectory, ambient: options.ambientEnvironment, explicitOverrides: request.explicitEnvironment, runId: originalIntent.runId, ...(originalIntent.sessionId ? { sessionId: originalIntent.sessionId } : {}), invocationId });
         childEnvironmentAudit = prepared.audit;
-        effectiveEnvironment = options.environments.withChildEnvironment(prepared.capability, (environment) => environment);
+        let rootProgramEnvironment: Readonly<Record<string, string>> | undefined;
+        effectiveEnvironment = options.environments.withChildEnvironment(prepared.capability, (environment, root) => { rootProgramEnvironment = root; return environment; });
+        // R3: a check's own program that is a Microsoft Store program is found on the PATH the child lost and started
+        // as the Job's root, pinned to its package's own program (the child's PATH still holds no WindowsApps folder).
+        if (options.permissionProfile === "full" && rootProgramEnvironment && rootProgramEnvironment !== effectiveEnvironment) {
+          const pinned = await packagedRootProgram(request.executable, request.workingDirectory, rootProgramEnvironment, isWindowsAppsPathEntry);
+          if (pinned) originalIntent = Object.freeze({ ...originalIntent, executable: pinned });
+        }
         selection = await options.isolation.acquire({
           permissionProfile: options.permissionProfile, intent: originalIntent, grant: claims, environment: effectiveEnvironment,
         });

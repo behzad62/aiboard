@@ -36,7 +36,34 @@ let pendingInput;
 let childExitResolve;
 let stopping = false;
 let interactiveTerminationRequested = false;
+// R2: whether the Job host settled its membership watch itself (its workload stopped by itself). Whether it reported its
+// workload started is reportedStarted, below.
+let naturalStopSeen = false;
+// R2: the Job host has been sent its workload (its bootstrap line). Before that it cannot have created a process. It is
+// set just before the line is written, so a write that fails still counts as delivered: that can only record evidence
+// for a host that created nothing (stricter), never skip it.
+let workloadDelivered = false;
+// R2: the unsettled watch is recorded once, whichever of the retained-output branch and the stop reaches it first.
+let unsettledWatchRecorded = false;
+// R2: the Job host reported, before its started line, that it failed before any process was created ("launched": false).
+let launchNotCreated = false;
 let settled = false;
+// A stop was requested before the host reported its workload started (the launcher aborted the start, or failed a
+// claimed spare's start): the workload's output has no reader.
+let startupAborted = false;
+// The host reported its workload started (its started line).
+let reportedStarted = false;
+// The Assign path's suspended root (assign_pending: pid and creation time), until the host reports started. If the
+// host dies first, that exact process is ended here (endRoot), never a process by its pid alone.
+let pendingRoot = null;
+// The Assign path's intent (assign_intent: the host's pid and creation time, and the time it was written), until the
+// host reports started. If the host dies before it reported the root's identity, the root is the host's child created
+// after that time and before the host's exit, and exactly that process is ended (endRoot).
+let assignIntent = null;
+// An assign_intent or assign_pending line that failed validation: if the host then dies before it reported started with
+// no valid root named, the root cannot be named, so the stop stays unproven.
+let assignEventMalformed = false;
+let pendingRootEnd;
 let backendFailure;
 const retainedOutput = [];
 const outputOffsets = { stdout: 0, stderr: 0 };
@@ -394,6 +421,7 @@ function currentJobConfiguration() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
 }
 
@@ -446,6 +474,7 @@ async function handleSpareClaim(message) {
     status.spareReady = false;
     persistStatus();
     const line = `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(currentJobConfiguration())).toString("base64") })}\n`;
+    workloadDelivered = true;
     await new Promise((resolvePromise, reject) => backendInput.write(line, (error) => error ? reject(error) : resolvePromise()));
     reply(true);
   } catch (error) {
@@ -556,24 +585,64 @@ function launchWindowsJob() {
   }
   backend.once("error", (error) => startupFailed(error));
   backend.once("exit", () => {
+    if (config.interactive) {
+      pollInteractiveJobEvents();
+      // A host that ended before its started line: its launcher stops waiting at once on this terminal, unproven
+      // status (the stop recorded later, if proven, replaces it).
+      if (!reportedStarted && !settled && !spareUnclaimed) {
+        status.status = "exited_unknown";
+        // A host that reported its own failure (a coded refusal before CreateProcess, R4/R2) is answered with it.
+        status.error = backendFailure?.message ?? "The Windows Job host exited before it reported that its workload started.";
+        if (typeof backendFailure?.code === "string") status.errorCode = backendFailure.code;
+        persistStatus();
+      }
+      // The Assign path's root may still live outside the Job: the empty proof waits until that exact process is gone.
+      // Its reported identity names it; before that report, the intent does (the host's child created after it).
+      if (!pendingRoot && !assignIntent && assignEventMalformed && !reportedStarted) {
+        // The host named its Assign-path root in a line that failed validation: that root cannot be named here, so it
+        // may still live outside the Job, and the stop stays unproven.
+        status.status = "exited_unknown";
+        status.error = "The Windows Job host's Assign-path root could not be named; its stop is unproven.";
+        persistStatus();
+        return;
+      }
+      if ((pendingRoot || assignIntent) && !reportedStarted) {
+        const root = pendingRoot ? { pid: pendingRoot.pid, creationTime: pendingRoot.creationTime }
+          : { ...assignIntent, hostExitedAt: fileTimeNow() };
+        pendingRootEnd = endRoot(root).then((ended) => {
+          if (!ended) return;
+          status.jobEmptyProof = true;
+          tryMarkStopped();
+        });
+        return;
+      }
+    }
     // Process exit closes the Job host's kill-on-close handle even if bounded
     // retained output keeps stdio pending. That is the exact empty proof.
     status.jobEmptyProof = true;
   });
   backend.once("close", (exitCode) => {
-    if (config.interactive) pollInteractiveJobEvents();
-    backendInput = undefined;
-    if (settled) return;
-    if (backendFailure) {
-      startupFailed(backendFailure);
-      return;
-    }
-    if (status.jobEmptyProof) {
-      tryMarkStopped();
-      return;
-    }
-    status.exitCode = exitCode;
-    markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
+    const closed = () => {
+      if (config.interactive) pollInteractiveJobEvents();
+      backendInput = undefined;
+      if (settled) return;
+      if (backendFailure) {
+        startupFailed(backendFailure);
+        return;
+      }
+      if (status.jobEmptyProof) {
+        tryMarkStopped();
+        return;
+      }
+      status.exitCode = exitCode;
+      markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
+    };
+    // Stricter-only test faults: the host's close reaches this supervisor late, as on a loaded host
+    // (slow_start_late_close), or after its exit, as while a handle to its pipes is still held
+    // (host_exit_after_create: the exit, not the close, must end the launcher's wait).
+    if (config.injectedFault === "slow_start_late_close") setTimeout(closed, 1_000);
+    else if (config.injectedFault === "host_exit_after_create") setTimeout(closed, 2_000);
+    else closed();
   });
   // PX-2c note: this literal is intentionally inline (not the shared
   // currentJobConfiguration() below): windows-job-supervisor-input.test.ts
@@ -588,6 +657,7 @@ function launchWindowsJob() {
     eventPath: config.eventPath,
     helperAssemblyPath: config.helperAssemblyPath,
     helperAssemblySha256: config.helperAssemblySha256,
+    ...(typeof config.injectedFault === "string" ? { injectedFault: config.injectedFault } : {}),
   };
   if (config.spare === true) {
     // PX-2c: the supervisor (node) and the Job host (PowerShell) have booted
@@ -601,6 +671,7 @@ function launchWindowsJob() {
     persistStatus();
     armSpareIdleTimer();
   } else {
+    workloadDelivered = true;
     backendInput.write(config.interactive
       ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
       : `${JSON.stringify(jobConfiguration)}\n`);
@@ -609,6 +680,15 @@ function launchWindowsJob() {
 
 function drainInteractiveOutput(stream, readable) {
   if (!config?.interactive || !readable || readable.destroyed) return;
+  // An aborted start's output has no reader: every byte is read and dropped, past the retained bound too, so its
+  // streams reach their end and the stop can be recorded.
+  if (startupAborted) {
+    let dropped = false;
+    for (let chunk = readable.read(); chunk !== null; chunk = readable.read()) dropped = true;
+    if (dropped && !status.outputDiscarded) { status.outputDiscarded = true; persistStatus(); }
+    readable.read(0);
+    return;
+  }
   const maximumChunks = config.maxRetainedOutputChunks ?? 16;
   const maximumBytes = config.maxRetainedOutputBytes ?? 256 * 1024;
   const retainedBytes = retainedOutputByteLength();
@@ -661,8 +741,19 @@ function publishRetainedOutputStatus() {
 function tryMarkStopped() {
   if (!status.jobEmptyProof) return;
   if (config.interactive && (!interactiveStdoutEnded || !interactiveStderrEnded)) return;
+  // An aborted start: its launcher gave up before the workload was reported started, so nobody reads its output. The
+  // Job is empty and both streams ended; bytes held for a reader that will never come are dropped, never a reason to
+  // leave the stop unrecorded.
+  if (startupAborted && retainedOutput.length > 0) {
+    retainedOutput.length = 0;
+    // The launcher reads these counts (and the discard) to settle the record's own output offsets.
+    status.outputDiscarded = true;
+    publishRetainedOutputStatus();
+  }
   if (retainedOutput.length > 0) {
     if (status.status !== "exited_unknown" || status.error !== "Windows Job output remains unsettled after the job became empty.") {
+      // R2: a host that ended without settling its watch is evidence here too, even while its output waits for a reader.
+      recordUnsettledInteractiveWatch();
       status.status = "exited_unknown";
       status.error = "Windows Job output remains unsettled after the job became empty.";
       status.ownershipReleased = false;
@@ -675,15 +766,23 @@ function tryMarkStopped() {
 }
 
 function pollInteractiveJobEvents() {
-  if (!config?.eventPath || !existsSync(config.eventPath)) return;
+  if (readNewJobEvents()) tryMarkStopped();
+}
+
+/** Consumes the complete event lines appended since the last read. False when the journal can no longer be trusted. */
+function readNewJobEvents() {
+  if (!config?.eventPath || !existsSync(config.eventPath)) return true;
   // Incremental: the Job host appends periodic accounting events, so never
   // re-read the whole journal on every 10 ms tick. Only complete lines are consumed.
   const descriptor = openSync(config.eventPath, "r");
   let suffix;
   try {
     const size = fstatSync(descriptor).size;
-    if (size < jobEventBytes) return markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
-    if (size === jobEventBytes) return;
+    if (size < jobEventBytes) {
+      markOwnershipUncertain("Windows Job event evidence shrank unexpectedly.");
+      return false;
+    }
+    if (size === jobEventBytes) return true;
     const bytes = Buffer.alloc(size - jobEventBytes);
     let read = 0;
     while (read < bytes.byteLength) {
@@ -692,14 +791,14 @@ function pollInteractiveJobEvents() {
       read += count;
     }
     const complete = bytes.subarray(0, read).lastIndexOf(0x0a) + 1;
-    if (complete === 0) return;
+    if (complete === 0) return true;
     jobEventBytes += complete;
     suffix = bytes.subarray(0, complete).toString("utf8");
   } finally {
     closeSync(descriptor);
   }
   for (const line of suffix.split(/\r?\n/)) if (line) handleJobEvent(line);
-  tryMarkStopped();
+  return true;
 }
 
 function handleJobEvent(line) {
@@ -711,7 +810,23 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "started") {
+    pendingRoot = null;
+    assignIntent = null;
     markRunning(event.pid);
+    return;
+  }
+  if (event.type === "assign_intent") {
+    const tick = /^[1-9][0-9]{0,19}$/;
+    if (backend && event.hostPid === backend.pid && typeof event.hostCreationTime === "string" && tick.test(event.hostCreationTime) &&
+        typeof event.at === "string" && tick.test(event.at))
+      assignIntent = { hostPid: event.hostPid, hostCreationTime: event.hostCreationTime, at: event.at };
+    else malformedAssignEvent(line);
+    return;
+  }
+  if (event.type === "assign_pending") {
+    if (Number.isSafeInteger(event.pid) && event.pid > 0 && typeof event.creationTime === "string" && /^[1-9][0-9]{0,19}$/.test(event.creationTime))
+      pendingRoot = { pid: event.pid, creationTime: event.creationTime };
+    else malformedAssignEvent(line);
     return;
   }
   if (event.type === "root_exited") {
@@ -722,12 +837,17 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "natural_stopped") {
+    naturalStopSeen = true;
     status.exitCode = event.exitCode;
     status.jobEmptyProof = true;
     return;
   }
   if (event.type === "stopped") {
     status.jobEmptyProof = true;
+    return;
+  }
+  if (event.type === "member") {
+    recordMemberEvidence(event);
     return;
   }
   if (event.type === "accounting") {
@@ -740,11 +860,55 @@ function handleJobEvent(line) {
     return;
   }
   if (event.type === "error") {
+    if (event.launched === false && !reportedStarted) launchNotCreated = true;
     backendFailure = new Error(event.error ?? "Windows Job host failed.");
+    // A coded launch refusal from the Job host (raised before CreateProcess) keeps its Runner code.
+    if (typeof event.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(event.code)) backendFailure.code = event.code;
+    // R2: a member event the Job host could not write is itself evidence. The host then fails instead of reporting a
+    // clean stop, and the Job is never verified empty or released.
+    if (event.code === "windows_job_membership_evidence_lost")
+      recordMemberEvidence({ pid: 0, evidence: "unidentified", package: null, detail: event.error ?? "The Job host could not record its membership evidence." });
   }
 }
 
+// R2: evidence that the Job held a packaged (MSIX / Microsoft Store) descendant, or a member it could not identify.
+// Windows creates a packaged program's children outside the Job, so the Job becoming empty does not prove that every
+// process the workload started has stopped. The evidence is durable status and is never cleared: the Job host's TS
+// side refuses to verify this Job empty or to release it (DECISION 2026-09-19 §8.3, cleanup_blocked).
+const MEMBER_EVIDENCE_KEEP = 16;
+function recordMemberEvidence(event) {
+  const entry = {
+    pid: Number.isSafeInteger(event.pid) && event.pid >= 0 ? event.pid : 0,
+    evidence: event.evidence === "packaged" ? "packaged" : "unidentified",
+    package: typeof event.package === "string" ? event.package.slice(0, 256) : null,
+    detail: typeof event.detail === "string" ? event.detail.slice(0, 512) : "",
+  };
+  const current = status.memberEvidence ?? { count: 0, entries: [] };
+  status.memberEvidence = {
+    count: current.count + 1,
+    entries: current.entries.length < MEMBER_EVIDENCE_KEEP ? [...current.entries, entry] : current.entries,
+  };
+  persistStatus();
+}
+
+// R2: an interactive Job host settles its membership watch only when its workload ends by itself (natural_stopped);
+// the Runner's own stops end it by a kill it requested. A host that ended with neither (it failed, or could not write
+// its events) never settled the watch, so its evidence may be incomplete: that is itself evidence, and the Job is never
+// verified empty or released. That includes a host that ended before its started line, which it writes only after the
+// workload is resumed. The only exceptions are a host that never received its workload and a host that reported a
+// failure before any process was created (a coded refusal or a CreateProcess failure, "launched": false).
+function recordUnsettledInteractiveWatch() {
+  if (!config?.interactive || naturalStopSeen || interactiveTerminationRequested || unsettledWatchRecorded) return;
+  if (!reportedStarted && (!workloadDelivered || launchNotCreated)) return;
+  unsettledWatchRecorded = true;
+  recordMemberEvidence({
+    pid: 0, evidence: "unidentified", package: null,
+    detail: "The Job host ended without settling its membership watch and without a stop request.",
+  });
+}
+
 function markRunning(pid) {
+  reportedStarted = true;
   status.childPid = pid ?? 0;
   status.status = "running";
   status.error = null;
@@ -752,6 +916,21 @@ function markRunning(pid) {
 }
 
 function markStopped() {
+  // R2: a member event the Job host wrote just before it ended is read before the stop is recorded.
+  if (config?.interactive && !readNewJobEvents()) return;
+  // A Job host that failed before its workload started (a coded launch refusal raised before CreateProcess, R4/R2)
+  // ends as that failure, never as a clean stop of a workload that never ran.
+  if (backendFailure && !reportedStarted) {
+    startupFailed(backendFailure);
+    return;
+  }
+  // R2: a host that ended with no started line, no error and no stop request (its event file could not be written, or
+  // it was killed from outside between resuming the workload and that line) never proved what it ran: a failed start.
+  if (config?.interactive && !reportedStarted && workloadDelivered && !interactiveTerminationRequested) {
+    startupFailed(new Error("The Windows Job host ended before it reported that its workload started, so the Job's ownership is not proven."));
+    return;
+  }
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
@@ -773,11 +952,15 @@ function markOwnershipUncertain(message) {
 
 function startupFailed(error) {
   if (settled) return;
+  recordUnsettledInteractiveWatch();
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
   status.error = error instanceof Error ? error.message : String(error);
-  status.ownershipReleased = true;
+  if (typeof error?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)) status.errorCode = error.code;
+  // Stricter-only test seam (refusedStopUnproven): a coded launch refusal's stop is left unproven, its ownership never
+  // released, so its launcher can never release the refused start.
+  status.ownershipReleased = !(config?.refusedStopUnproven === true && typeof status.errorCode === "string");
   persistStatus();
   childExitResolve();
   server.close(() => process.exit(1));
@@ -786,11 +969,12 @@ function startupFailed(error) {
 async function stopOwnedTree(signal, requestedDeadline) {
   if (status.status === "stopped") return;
   stopping = true;
+  if (!reportedStarted) markStartupAborted();
   const deadlineMs = Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, requestedDeadline || config.stopDeadlineMs || MAX_STOP_DEADLINE_MS));
   if (config.interactive) {
     // The interactive host dedicates its stdin to the child. Its exact process
     // exit closes the kill-on-close Job handle; the exit listener records proof.
-    if (!status.jobEmptyProof && !interactiveTerminationRequested) {
+    if (!status.jobEmptyProof && !interactiveTerminationRequested && backend.exitCode === null && backend.signalCode === null) {
       interactiveTerminationRequested = true;
       status.terminationRequested = true;
       persistStatus();
@@ -826,7 +1010,15 @@ async function abortStartup(message) {
   if (!message || message.token !== config.token) return;
   try {
     if (status.port > 0 && backend) {
+      markStartupAborted();
       await stopOwnedTree("SIGKILL", config.stopDeadlineMs);
+      // The kill ends the host, and its exit (a kill-on-close Job) is the exact empty proof: wait for it and record the
+      // stop before acknowledging, so the aborted launch's record ends stopped with proof, never `starting`. Bounded by
+      // the stop deadline; a host that outlives it leaves the record unproven, as before.
+      if (config.interactive) await waitForExit(Math.max(250, Math.min(MAX_STOP_DEADLINE_MS, config.stopDeadlineMs || MAX_STOP_DEADLINE_MS)));
+      // An Assign-path root being ended by its exact identity finishes before this supervisor exits (its own children
+      // end with it).
+      if (pendingRootEnd) await pendingRootEnd;
     } else {
       stopping = true;
       settled = true;
@@ -838,6 +1030,129 @@ async function abortStartup(message) {
     process.send?.({ type: "abort_ack", token: config.token, status: status.status });
   } finally {
     server.close(() => process.exit(0));
+  }
+}
+
+/**
+ * A stop requested before the host reported its workload started: the workload's output has no reader. Its streams are
+ * drained and dropped from here on, and a host that already died with output retained gets its stop recorded.
+ */
+function markStartupAborted() {
+  startupAborted = true;
+  if (config?.interactive && backend) {
+    drainInteractiveOutput("stdout", backend.stdout);
+    drainInteractiveOutput("stderr", backend.stderr);
+  }
+  tryMarkStopped();
+}
+
+function malformedAssignEvent(line) {
+  assignEventMalformed = true;
+  try { appendFileSync(config.stderrPath, `Malformed Assign-path event from the Job host: ${line.slice(0, 2000)}
+`); } catch {}
+}
+
+/**
+ * The host's exit time as FILETIME ticks (100 ns since 1601), as a decimal string: the end of the intent's window.
+ * Date.now() has millisecond precision, so it is rounded up by 1 ms, which can only widen the window past the exit.
+ * Node closes its handle to the host just before it emits 'exit', so from then on the host's pid can be reused. What
+ * covers that is endRoot's narrowing: a live process that now has the host's pid ends the window at its own creation
+ * time, so none of its children can match. The 1 ms adds at most 1 ms in which a reuser that already exited could have
+ * started a child. The window assumes the clock does not move backwards between the intent and the create; if it is
+ * set back, the root's creation time falls before the intent, it is not matched, and the stop stays unproven.
+ */
+function fileTimeNow() {
+  return String((BigInt(Date.now()) + 1n) * 10_000n + 116_444_736_000_000_000n);
+}
+
+/**
+ * How long the PowerShell that ends an Assign-path root may take to start: a ceiling for a start that hangs, never the
+ * expected time. It is the same cold PowerShell start the Job host makes, measured 2026-11-18 at up to 32.9 s cold under
+ * 40 busy loops on a 16-core host (about 1.8 times that on the PR 240 reviewer's host), and the same ceiling as the
+ * launcher's start wait (windows-job-process-host.ts DEFAULT_START_CEILING_MS). Once it reports ready, ending the root
+ * takes a Kill and a bounded WaitForExit.
+ */
+const ROOT_ENDER_START_CEILING_MS = 120_000;
+const ROOT_ENDER_ACTION_CEILING_MS = 60_000;
+
+/**
+ * Ends the Assign path's root after its host died before assigning it, and returns true when it is gone. The root is
+ * exactly one process:
+ * - with a reported identity: the process with this pid AND this creation time (a reused pid is left alone);
+ * - with only the intent: the host's child (ParentProcessId = the host's pid) created at or after the intent and before
+ *   the host's exit. If a process now has the host's pid with another creation time, the pid was reused, and the window
+ *   ends at that process's creation, so none of its children can match. A host that is somehow still alive (its pid and
+ *   creation time) leaves the stop unproven.
+ * While it runs, the durable status carries rootEnding, which extends the launcher's bounded waits. The wait follows
+ * progress: up to ROOT_ENDER_START_CEILING_MS for the PowerShell to report ready, then ROOT_ENDER_ACTION_CEILING_MS for
+ * the result. Any failure leaves the stop unproven.
+ */
+async function endRoot(root) {
+  // Each script stops on any error and answers "alive" (unproven), never "gone": a failed or unreadable query proves
+  // nothing. A process is killed only after its exact identity was read and matched. GetProcessById's
+  // ArgumentException is the one "no such process" answer.
+  // Stricter-only test fault (rootEnderFault "query_fails"): the identity read, or the child query, fails.
+  const queryFails = config.rootEnderFault === "query_fails";
+  const exactScript = () => `$ErrorActionPreference = 'Stop'; try { ` +
+    `$p = $null; try { $p = [System.Diagnostics.Process]::GetProcessById(${root.pid}) } catch [System.ArgumentException] { 'gone'; exit 0 }; ` +
+    (queryFails ? `throw 'injected identity read failure'; ` : "") +
+    `if ($p.StartTime.ToFileTimeUtc() -ne [long]'${root.creationTime}') { 'gone'; exit 0 }; ` +
+    `$p.Kill(); if ($p.WaitForExit(30000)) { 'gone' } else { 'alive' } ` +
+    `} catch { 'alive: ' + $_.Exception.Message; exit 0 }`;
+  const intentScript = () => `$ErrorActionPreference = 'Stop'; try { ` +
+    `$from = [long]'${root.at}'; $to = [long]'${root.hostExitedAt}'; $hostPid = ${root.hostPid}; ` +
+    `$h = $null; try { $h = [System.Diagnostics.Process]::GetProcessById($hostPid) } catch [System.ArgumentException] { }; ` +
+    `if ($null -ne $h) { $t = $h.StartTime.ToFileTimeUtc(); if ($t -eq [long]'${root.hostCreationTime}') { 'alive: the host still runs'; exit 0 }; if ($t -lt $to) { $to = $t } }; ` +
+    `$alive = $false; ` +
+    `foreach ($c in @(Get-CimInstance ${queryFails ? "Win32_AiboardInjectedMissingClass" : "Win32_Process"} -Filter "ParentProcessId = $hostPid")) { ` +
+    `$p = $null; try { $p = [System.Diagnostics.Process]::GetProcessById([int]$c.ProcessId) } catch [System.ArgumentException] { continue }; ` +
+    `$t = $p.StartTime.ToFileTimeUtc(); ` +
+    `if ($t -lt $from -or $t -gt $to) { continue }; ` +
+    `$p.Kill(); if (-not $p.WaitForExit(30000)) { $alive = $true } }; ` +
+    `if ($alive) { 'alive' } else { 'gone' } ` +
+    `} catch { 'alive: ' + $_.Exception.Message; exit 0 }`;
+  const valid = /^[1-9][0-9]{0,19}$/;
+  const exact = root.pid !== undefined;
+  if (exact ? !(Number.isSafeInteger(root.pid) && root.pid > 0 && valid.test(root.creationTime))
+    : !(Number.isSafeInteger(root.hostPid) && root.hostPid > 0 && valid.test(root.at) && valid.test(root.hostExitedAt) && valid.test(root.hostCreationTime))) return false;
+  const script = `[Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); ${exact ? exactScript() : intentScript()}`;
+  status.rootEnding = true;
+  // Which identity named the root: the reported one, or only the intent (evidence for tests and diagnostics).
+  status.rootEndedBy = exact ? "identity" : "intent";
+  persistStatus();
+  try {
+    return await new Promise((resolvePromise) => {
+      let output = "";
+      let child;
+      let timer;
+      const finish = (value) => { clearTimeout(timer); resolvePromise(value); };
+      try {
+        child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "ignore"] });
+      } catch {
+        resolvePromise(false);
+        return;
+      }
+      timer = setTimeout(() => { child.kill(); finish(false); }, ROOT_ENDER_START_CEILING_MS);
+      let ready = false;
+      child.stdout.on("data", (chunk) => {
+        output += chunk.toString("utf8");
+        if (!ready && /^ready\r?\n/.test(output)) {
+          ready = true;
+          clearTimeout(timer);
+          timer = setTimeout(() => { child.kill(); finish(false); }, ROOT_ENDER_ACTION_CEILING_MS);
+        }
+      });
+      child.once("error", () => finish(false));
+      child.once("close", (code) => {
+        const gone = code === 0 && output.replace(/^ready\r?\n/, "").trim() === "gone";
+        // Diagnostic only: why an Assign-path root was not proven gone.
+        if (!gone) try { appendFileSync(config.stderrPath, `Assign-path root end was not proven (exit ${code}): ${output.slice(0, 2000)}\n`); } catch {}
+        finish(gone);
+      });
+    });
+  } finally {
+    status.rootEnding = false;
+    persistStatus();
   }
 }
 
