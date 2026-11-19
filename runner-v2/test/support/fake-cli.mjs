@@ -34,8 +34,8 @@
 // allows no breakaway, it is still inside that Job; on POSIX it has left the process group, as a CLI's setsid commands
 // do (CW0), so a POSIX test of it shows what the Runner cannot prove stopped.
 //
-// The grandchild's command line carries a token the record names. Windows gives a freed process ID to the next process
-// at once, so a test that finds the ID still answering asks whether that process is the grandchild (fake-cli.ts
+// The grandchild's command line carries a token the record names. Windows can give a freed process ID to a later process
+// within seconds, so a test that finds the ID still answering asks whether that process is the grandchild (fake-cli.ts
 // fakeGrandchildAlive) before calling it alive.
 //
 // The run's order: argv is checked against expectArgs before stdin is read (a mismatch exits 64 at once, never waiting

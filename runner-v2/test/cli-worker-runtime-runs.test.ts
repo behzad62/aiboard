@@ -165,7 +165,7 @@ describe("CW5 loop: runs over time and the managed launcher", { concurrency: CLI
     const ran = JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord;
     // The owner's depth registration reaches the CLI through the run binding's per-owner environment (§3.11).
     assert.equal(ran.mcpDepth, "2");
-    if (windows) assert.equal(fakeGrandchildAlive(ran), false, "the owner's stop proved the detached grandchild stopped");
+    if (windows) assert.equal(await fakeGrandchildAlive(ran), false, "the owner's stop proved the detached grandchild stopped");
     } finally {
       // The host too, not only the run's binding: its Job host and fact probe keep pipes open, and on GitHub's Windows
       // image an unclosed host kept this file's process alive after its last test (CI run 44307474932).

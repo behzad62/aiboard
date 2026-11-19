@@ -78,7 +78,7 @@ const PROCESS_HOST_FACTS = process.platform === "win32"
   ? { processHostFacts: { portableDuplex: "unavailable", windowsBatchArgv: "unavailable", exactTreeBirth: "verified", jobContainment: "verified" } as const }
   : {};
 
-test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2, the Test folder goes after the verified stop, and a timed-out Test's tree is stopped", { timeout: 120_000 }, async () => {
+test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2, the Test folder goes after the verified stop, and a timed-out Test's tree is stopped", { timeout: 120_000 }, async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-processes-")));
   const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
   for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
@@ -114,6 +114,8 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
   const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), windowsJobHost: sharedJobHost, ...PROCESS_HOST_FACTS });
   const notes: string[] = [];
   const trace = () => `\nprocesses:\n  ${notes.join("\n  ")}`;
+  // A step at its bound can outlast the test's own timeout; node:test then aborts this signal, and the trace still prints.
+  t.signal.addEventListener("abort", () => console.error(`the test was aborted${trace()}`), { once: true });
   let bodyFailed = false;
   try {
     // The passing Test ends on its result event, so its deadline is only a bound; the hanging one waits it out.
@@ -156,7 +158,7 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     assert.equal(timedOut.stopVerified, true);
     const hanging = JSON.parse(readFileSync(join(scenarios, "hanging-run.json"), "utf8")) as FakeCliRecord;
     assert.ok(hanging.grandchildPid, "the fake started its child");
-    assert.equal(fakeGrandchildAlive(hanging), false, "the CLI's own child was stopped with it");
+    assert.equal(await fakeGrandchildAlive(hanging), false, "the CLI's own child was stopped with it");
     assert.deepEqual(readdirSync(tests), []);
 
     // Checks and Tests leave no history: each binding's run root and process records went with it after its proven
@@ -181,16 +183,27 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
     assert.deepEqual(holding, [], "no file under the state folder holds an account field");
   } catch (error) {
     bodyFailed = true;
+    console.error(`the test failed${trace()}`);
     throw error;
   } finally {
+    let closed = false;
     try {
       await host.close();
+      closed = true;
     } catch (error) {
       // A close that fails after the body failed must not hide the body's error (CI runs 44349809623 and 44350732167
-      // showed only the close). Either way its nested causes are printed in full; the folders stay, as nothing was proven.
+      // showed only the close). Either way its nested causes are printed in full.
       console.error(`host.close failed${bodyFailed ? " after the test had already failed" : ""}: ${inspect(error, { depth: Infinity })}${trace()}`);
       if (!bodyFailed) throw error;
     }
-    rmSync(root, { recursive: true, force: true });
+    // The folders stay when the stop was not proven: a process may still hold or write them.
+    if (closed) {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch (error) {
+        if (!bodyFailed) throw error;
+        console.error(`the test folder could not be removed: ${inspect(error)}`);
+      }
+    }
   }
 });

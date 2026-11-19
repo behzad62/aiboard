@@ -3,14 +3,16 @@
  * naming a scenario file. fake-cli.mjs documents the scenario's fields, and why on Windows a test injects
  * `[process.execPath, FAKE_CLI_SCRIPT]` where the resolved CLI would go rather than hiding the fake behind a `.cmd`.
  */
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { promisify } from "node:util";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const FAKE_CLI_SCRIPT = fileURLToPath(new URL("./fake-cli.mjs", import.meta.url));
 export const CLI_FIXTURES = fileURLToPath(new URL("../fixtures/cli-workers/", import.meta.url));
 export const FAKE_CLI_SCENARIO_ENV = "AIBOARD_FAKE_CLI_SCENARIO";
+const execFileAsync = promisify(execFile);
 
 export interface FakeCliResponse {
   args: string[];
@@ -52,12 +54,12 @@ export interface FakeCliRecord {
 }
 
 /**
- * Whether the fake's grandchild still runs. Windows gives a freed process ID to the next process at once, so on Windows
- * an ID that still answers counts only when that process's command line carries the grandchild's token (CI run
- * 44515741684: after a proven stop the ID still answered). A grandchild that really outlived the stop still counts.
- * POSIX hands out IDs in sequence, so there the ID decides.
+ * Whether the fake's grandchild still runs. Windows can give a freed process ID to a later process within seconds, so
+ * on Windows an ID that still answers counts only when that process's command line carries the grandchild's token (CI
+ * run 44515741684: after a proven stop the ID still answered). A grandchild that really outlived the stop still counts,
+ * and a query that fails throws rather than calling it stopped. POSIX hands out IDs in sequence, so there the ID decides.
  */
-export function fakeGrandchildAlive(record: FakeCliRecord): boolean {
+export async function fakeGrandchildAlive(record: FakeCliRecord): Promise<boolean> {
   const pid = record.grandchildPid;
   if (!pid) throw new Error("The fake recorded no grandchild.");
   try {
@@ -67,9 +69,13 @@ export function fakeGrandchildAlive(record: FakeCliRecord): boolean {
   }
   if (process.platform !== "win32") return true;
   if (!record.grandchildToken) throw new Error("The fake recorded no grandchild token.");
-  const commandLine = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-    `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`], { encoding: "utf8", windowsHide: true });
-  return commandLine.includes(record.grandchildToken);
+  // Async, so a slow query never blocks the event loop and node:test's own timeout still applies.
+  const { stdout: commandLine } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop).CommandLine`], { encoding: "utf8", windowsHide: true });
+  if (commandLine.includes(record.grandchildToken)) return true;
+  // Which of the two it was (a later process on the ID, or the grandchild gone between the calls), for the CI log.
+  console.error(`fakeGrandchildAlive: ID ${pid} answered without the grandchild's token; it now runs: ${commandLine.trim() ? JSON.stringify(commandLine.trim()) : "(no process)"}`);
+  return false;
 }
 
 /** A fixture's path; scenario paths may be absolute, so tests point straight into the fixtures folder. */
