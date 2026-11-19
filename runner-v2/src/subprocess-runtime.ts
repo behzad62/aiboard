@@ -24,6 +24,7 @@ import {
   openSqliteDurableProcessKernel,
   semanticRequestFingerprint,
   durableRecoveryIdentity,
+  persistableScrubDecisions,
   type DurableBackendBinding,
   type DurableEnvironmentAudit,
   type DurableProcessCommand,
@@ -689,7 +690,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       removedNames: [...preparedEnvironment.audit.removedNames],
       explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
       grantedNames: [...preparedEnvironment.audit.grantedNames],
-      scrubDecisions: preparedEnvironment.audit.decisions.map((decision) => ({...decision})),
+      // Only kinds a rollback to 0.3.20 parses (two-step rollout): removed_packaged_alias_path is persisted from the
+      // release after 0.3.21; the in-memory and tool-result audit keep it.
+      scrubDecisions: persistableScrubDecisions(preparedEnvironment.audit.decisions),
     };
     record = this.current(record.invocationId);
     record = this.mutate({
