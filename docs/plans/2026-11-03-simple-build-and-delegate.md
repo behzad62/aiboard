@@ -943,15 +943,16 @@ aiboard exec apply <task id>
 
 **Status (2026-11-19): CLI workers are built** (docs/plans/2026-11-14-cli-workers.md §8, CW0–CW10).
 - They shipped in Runner 0.3.21 and 0.3.22, and the web pages went live at main 0534f29e.
-- v1 runs Claude Code and agy as Build workers on Windows. Codex CLI is refused on Windows until its Job escape is fixed, and every CLI is refused on Linux and macOS (CWD-10, CWD-11).
-- Each item above holds:
+- v1 runs Claude Code and agy as Build workers on Windows. Codex CLI is refused on Windows while its Job escape is still being traced, and every CLI is refused on Linux and macOS (CWD-10, CWD-11).
+- The items above that CLI workers own hold:
   - their settings are the home's `cliWorkers` section;
   - their configs are keyless and pass through as pushed;
   - Full access only;
-  - the depth rule (`AIBOARD_MCP_DEPTH=2`);
+  - a CLI runs at `AIBOARD_MCP_DEPTH=2`;
   - one commit-undo step for SB4b to reuse;
-  - re-runs bounded by the task's validation budget, at most 10 minutes each;
+  - each re-run's timeout is the task's remaining validation budget, clamped to 1–10 minutes;
   - browsing through the Runner's Playwright CLI.
+- "No tasks on a CLI" and `aiboard exec`'s depth refusal are SB's and DX's to build.
 - Next (OD-33): an AIBoard Build with CLI workers builds SB1–SB9 and DX1–DX6. It is also the owner's real run of each CLI for the CW10 gate.
 
 ### 6.6 CLI: the AIBoard home

@@ -50,7 +50,11 @@ Builds browse through the Playwright CLI bundled with the Runner: workers, the A
 
 CLI workers follow `docs/plans/2026-11-14-cli-workers.md`. Claude Code and agy (Codex CLI is refused) run as Build workers through the `cli` transport (`runner-v2/src/cli-worker-*.ts`):
 - **Where they may run:** as workers only, never the Architect, a reviewer or a verifier; only under Full access; v1 is Windows only, so they are refused on Linux and macOS.
-- **Launch:** a CLI starts only through the managed process host (`createManagedCliProcessLauncher` in `cli-worker-runtime.ts`), and every process it started must be proven stopped before the Runner collects its work. An unproven stop pauses the Build with the claim kept. The task8 audit keeps raw launches out of the `cli-worker-*` modules.
+- **Launch:** a CLI starts only through the managed process host:
+  - Build workers through `createManagedCliProcessLauncher` in `cli-worker-runtime.ts`;
+  - free checks and Tests through `createExecutionHostCliWorkerProcesses` in `cli-worker-processes.ts`.
+
+  Every process it started must be proven stopped before the Runner collects its work, and an unproven stop pauses the Build with the claim kept. The task8 audit keeps raw launches out of the `cli-worker-*` modules. The crew rules, which the web imports too, are in `cli-crew-policy.ts`.
 - **Collect:** the Runner undoes the CLI's commits, restores `docs/project`, re-runs the checks the CLI reports, and submits through the shared path.
 - **Prompt and logins:** model text never goes in argv; the prompt goes on stdin. The CLI's login stays in its own files.
 - **Tests:** they use fake CLIs (`runner-v2/test/support/fake-cli.mjs`), never a real CLI or a real prompt.
