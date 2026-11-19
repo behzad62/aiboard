@@ -67,6 +67,26 @@ export class ChildCliLauncher implements CliProcessLauncher {
     };
   }
 
+  /**
+   * Ends every child this launcher started and waits until each has exited. On Windows a child that is still exiting
+   * keeps its working folder (the test's worktree) open, so the test's temp folder cannot be removed until it is gone;
+   * a loaded host takes longer than rmSync's retries (a case 2 test failed its cleanup with EPERM so). This waits on
+   * the exits themselves; `ceilingMs` only stops a child that never exits from holding the test up.
+   */
+  async settle(ceilingMs = 60_000): Promise<void> {
+    await Promise.all(this.children.map(async (child) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      let timer: NodeJS.Timeout | undefined;
+      const exited = new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+        timer = setTimeout(resolve, ceilingMs);
+      });
+      child.kill();
+      await exited;
+      clearTimeout(timer);
+    }));
+  }
+
   async stopOwner(): Promise<void> {
     this.stops += 1;
     for (const child of this.children) if (child.exitCode === null && child.signalCode === null) child.kill();

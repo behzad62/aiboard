@@ -87,6 +87,14 @@ const FIELDS = new Set([
   "replacedCliCommits", "restoredProjectDocs", "projectChangedDuringAttempt", "usage", "browser", "stopFailure",
 ]);
 
+/**
+ * The CLI session a runtime picked up again resumes: its own latest recorded one. Matched by runtime, never by provider:
+ * another model of the same CLI starts its own session and gets the handoff instead (CW7).
+ */
+export function resumableCliSession(records: readonly CliAttemptRecord[], runtimeId: string): string | undefined {
+  return [...records].reverse().find((record) => record.runtimeId === runtimeId && record.cliSessionId)?.cliSessionId;
+}
+
 /** Text as a record keeps it: one string, cut to `limit` characters. */
 export function boundedRecordText(text: string, limit = TEXT_MAX): string {
   const trimmed = text.trim();

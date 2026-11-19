@@ -64,9 +64,13 @@ const grantValue = (
 class Clock implements SubprocessRuntimeClock {
   current = new Date("2026-01-01T00:00:00.000Z");
   readonly sleeps: number[] = [];
+  firstSleepGate?: Promise<void>;
   now = () => new Date(this.current);
   sleep = async (ms: number) => {
     this.sleeps.push(ms);
+    const gate = this.firstSleepGate;
+    this.firstSleepGate = undefined;
+    await gate;
     this.current = new Date(this.current.getTime() + ms);
   };
 }
@@ -205,9 +209,11 @@ class Backend implements ProcessBackend {
   onVerify?: () => void;
   onReconcile?: () => void;
   onRelease?: () => void;
+  onProbe?: () => void;
   probe = async (fence?: unknown) => {
     this.calls.push("probe");
     if (fence) this.fences.push(fence);
+    this.onProbe?.();
     return this.probeValue;
   };
   observe = async (
@@ -287,6 +293,18 @@ function deferred() {
   });
   return { promise, resolve };
 }
+// A deadline the fixture's clock reaches only once the backend's launch has started: the runtime refuses a launch
+// whose deadline already passed, so a test of the stop of a launched process lets it launch first.
+function deadlineAfterLaunch(f: { clock: Clock; backend: Backend }) {
+  const launched = deferred();
+  f.clock.firstSleepGate = launched.promise;
+  const onLaunch = f.backend.onLaunch;
+  f.backend.onLaunch = (request) => {
+    onLaunch?.(request);
+    launched.resolve();
+  };
+}
+
 function pendingEffectOf(record: unknown):
   | { family: string; phase: string; fencingToken: number }
   | undefined {
@@ -722,8 +740,75 @@ test("durable claim and output owner exist before first await so immediate cance
     "cancelled",
   );
   gate.resolve();
-  const result = await operation;
-  assert.equal(result.outcome, "cancelled");
+  await assert.rejects(operation, (error: SubprocessRuntimeError) => error.code === "launch_not_proven");
+  assert.equal(f.backend.calls.includes("launch"), false, "a cancel before the launch means no launch");
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(record?.state, "launch_not_proven");
+  assert.equal(record?.backendBinding, undefined);
+  assert.deepEqual(record?.cleanup, { state: "not_required" });
+});
+
+test("an abort during the backend probe refuses the launch: the probe ran, the launch never did", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  f.backend.onProbe = () => controller.abort();
+  await assert.rejects(
+    f.runtime.invoke({ intent: intent(), grantId: "grant-invoke-1", ambientEnvironment: {}, signal: controller.signal }),
+    (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+  );
+  assert.equal(f.backend.calls.includes("probe"), true, "the backend was probed");
+  assert.equal(f.backend.calls.includes("launch"), false, "nothing launched");
+  const record = f.store.readByInvocation("invoke-1");
+  assert.equal(record?.state, "launch_not_proven");
+  assert.equal(record?.backendBinding, undefined);
+  assert.deepEqual(record?.cleanup, { state: "not_required" });
+  assert.deepEqual(pendingEffectsOf(record), []);
+});
+
+test("an abort or a cancel during the prepared environment's callback refuses the launch", async () => {
+  for (const how of ["signal", "cancel"] as const) {
+    const f = fixture();
+    const controller = new AbortController();
+    let observed = false;
+    await assert.rejects(
+      f.runtime.invoke({
+        intent: intent(),
+        grantId: "grant-invoke-1",
+        ambientEnvironment: {},
+        signal: controller.signal,
+        onPreparedEnvironment: async () => {
+          observed = true;
+          if (how === "signal") controller.abort();
+          else assert.equal(await f.runtime.cancel("invoke-1"), true);
+        },
+      }),
+      (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+      how,
+    );
+    assert.equal(observed, true, how);
+    assert.equal(f.backend.calls.includes("probe"), true, how);
+    assert.equal(f.backend.calls.includes("launch"), false, `${how}: nothing launched`);
+    const record = f.store.readByInvocation("invoke-1");
+    assert.equal(record?.state, "launch_not_proven", how);
+    assert.equal(record?.backendBinding, undefined, how);
+    assert.deepEqual(record?.cleanup, { state: "not_required" }, how);
+    assert.deepEqual(pendingEffectsOf(record), [], how);
+  }
+});
+
+test("a deadline that passed before the launch refuses it", async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.runtime.invoke({
+      intent: intent(),
+      grantId: "grant-invoke-1",
+      ambientEnvironment: {},
+      deadline: new Date("2026-01-01T00:00:00.000Z"),
+    }),
+    (error: SubprocessRuntimeError) => error.code === "launch_not_proven",
+  );
+  assert.equal(f.backend.calls.includes("launch"), false);
+  assert.equal(f.store.readByInvocation("invoke-1")?.state, "launch_not_proven");
 });
 
 test("crash-safe output intent precedes idempotent prepare and prepare failure is durable", async () => {
@@ -2906,7 +2991,9 @@ test("expired bound active observation blocks takeover reconciliation until its 
 });
 
 test("deadline is runtime-owned and persists interrupt terminate force escalation before effects", async () => {
-  const { runtime, store, backend } = fixture();
+  const f = fixture();
+  const { runtime, store, backend } = f;
+  deadlineAfterLaunch(f);
   backend.signalValues = [
     { state: "running" },
     { state: "running" },
@@ -2938,13 +3025,14 @@ test("cancellation during launch queues durable stop and signals only after iden
   const { runtime, store, backend } = fixture();
   const gate = deferred();
   backend.launchGate = gate.promise;
+  const launched = deferred();
+  backend.onLaunch = () => launched.resolve();
   const running = runtime.invoke({
     intent: intent(),
     grantId: "grant-invoke-1",
     ambientEnvironment: {},
   });
-  await Promise.resolve();
-  await Promise.resolve();
+  await launched.promise;
   const cancellation = runtime.cancel("invoke-1");
   assert.equal(
     backend.calls.some((call) => call.startsWith("signal:")),
@@ -3012,6 +3100,7 @@ test("fresh attestation mismatch blocks cancellation authority before signal", a
 
 test("restart preserves durable timeout precedence after observation loss", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   let rejectObservation!: (error: Error) => void;
   f.backend.observeGate = new Promise<void>((_resolve, reject) => {
     rejectObservation = reject;
@@ -3040,6 +3129,7 @@ test("restart preserves durable timeout precedence after observation loss", asyn
 
 test("backend-unavailable with durable stop cannot bypass an ambiguous observation when backend returns", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   let rejectObservation!: (error: Error) => void;
   f.backend.observeGate = new Promise<void>((_resolve, reject) => {
     rejectObservation = reject;
@@ -3088,6 +3178,7 @@ test("grant controller authority is scoped to exactly one kernel", async () => {
 
 test("durable timeout and cancellation outrank later cleanup failure", async () => {
   const f = fixture();
+  deadlineAfterLaunch(f);
   f.backend.verifyValue = { empty: false, detail: "descendant remains" };
   const result = await f.runtime.invoke({
     intent: intent(),

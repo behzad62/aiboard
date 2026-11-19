@@ -57,6 +57,13 @@ const deterministicPrTests = [
   // and 10 s on macOS, and 61 s on Windows inside this parallel step.
   "runner-v2/test/control-server-cli-workers.test.ts",
   "runner-v2/test/cli-worker-processes.test.ts",
+  // The adaptive stdin write bound on this host's real backend (Job or process group): a stop during an undrained
+  // write, a reader's exit and the ceiling, with fake readers and injected host facts (about 20 s on a Windows PC with
+  // the 6 s late reader, which runs on Windows only; about 13 s in Linux Docker).
+  "runner-v2/test/managed-stdin-slow-reader.test.ts",
+  // The Job drain loop against a fake supervisor that counts polls, the supervisor's wait parsing from its source, and
+  // on Windows a real supervisor's sequence refusals (about 5 s on Windows, 3 s elsewhere).
+  "runner-v2/test/managed-stdin-drain.test.ts",
   // User steering and Architect questions in the Build runtime: guidance, question resume and supersession across
   // restarts, with scripted drivers and a temporary scheduler store (no process, about 2 s). It was outside PR CI
   // and went stale unseen after 516c7b6e.
@@ -74,6 +81,21 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
+  // CW6: the re-runner of a CLI's reported checks alone, on a temporary Git worktree with a scripted one-shot executor
+  // (no CLI, no command process): the record, the timeout rule, shell lines, missing tools and the restore. Its tests run
+  // four at a time with async fixture Git: about 12 s run alone on a busy Windows PC. The CLI-loop half,
+  // cli-worker-evidence-loop.test.ts (the fake CLI and the production executor, about 18 s), is left to the full suite.
+  "runner-v2/test/cli-worker-evidence.test.ts",
+  // CW7: failover across the CLI boundary and the handoff both ways, with the fake CLI as a child and a scripted API
+  // model (no real CLI, no prompt): 14 tests, the twelve driver tests side by side as CW5's are: about 42 s run alone on Windows.
+  "runner-v2/test/cli-worker-handoff.test.ts",
+  // CW8: the CLI worker's browser session end to end through the real ExecutionHost (the Job or the process group),
+  // with a stand-in daemon and client behind the real shims (no browser, no real CLI): two tests side by side and one
+  // unit test, with the host's process facts injected on Windows; about 14 s on a loaded Windows PC run alone.
+  "runner-v2/test/cli-worker-browser.test.ts",
+  // The one-shot command executor over a fake runtime, plus one test over the real subprocess runtime: a call its
+  // caller gave up before the claim never launches. Seven tests, about 0.7 s.
+  "runner-v2/test/one-shot-command-executor.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
   "runner-v2/test/package-parity.test.ts",

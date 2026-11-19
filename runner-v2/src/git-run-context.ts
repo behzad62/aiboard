@@ -1,4 +1,4 @@
-import { bindWorkingTreeCapture, captureWorkingTreeIdentity, type WorkingTreeIdentity } from "./command-evidence-identity.js";
+import { bindWorkingTreeCapture, bindWorkingTreeRestore, captureWorkingTreeIdentity, restoreWorkingTree, type WorkingTreeIdentity } from "./command-evidence-identity.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
@@ -71,6 +71,11 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
     bindWorkingTreeCapture(result.run, async (cwd) => {
       const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
       return await captureWorkingTreeIdentity(cwd, root, result.run);
+    });
+    // CW6: the same private root for the restore of files a CLI worker's re-run changed.
+    bindWorkingTreeRestore(result.run, async (cwd, treeId) => {
+      const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
+      return await restoreWorkingTree(cwd, root, result.run, treeId);
     });
     return result;
   };

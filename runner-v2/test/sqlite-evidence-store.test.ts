@@ -371,3 +371,31 @@ function hasAttemptColumn(database: DatabaseSync): boolean {
   return (database.prepare("PRAGMA table_info(evidence_records)").all() as Array<{ name?: unknown }>)
     .some((column) => column.name === "attempt");
 }
+
+test("CW7: an attempt's evidence lists the newest of that attempt's records, oldest first, past older attempts and the limit", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-evidence-attempt-"));
+  const store = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  try {
+    const runId = "run_attempts";
+    const taskId = "task_attempts";
+    const fact: CommandEvidenceFact = {
+      kind: "command", label: "check", command: "node", args: ["--test"], cwd: "/w",
+      startedAt: "2026-11-18T00:00:00.000Z", finishedAt: "2026-11-18T00:00:01.000Z",
+      exitCode: 0, signal: null, timedOut: false, cancelled: false, outputTruncated: false,
+      stdoutArtifactHash: "a".repeat(64), stderrArtifactHash: "b".repeat(64),
+    };
+    const record = (attempt: number, index: number) => store.record({
+      runId, taskId, actor: { role: "worker", id: "w" }, fact: { ...fact, label: `check ${attempt}.${index}` },
+      createdAt: "2026-11-18T00:00:02.000Z", idempotencyKey: `e:${attempt}:${index}`, attempt,
+    }).id;
+    const first = Array.from({ length: 5 }, (_, index) => record(1, index));
+    const second = Array.from({ length: 4 }, (_, index) => record(2, index));
+    assert.deepEqual(store.list({ runId, taskId, attempt: 2, limit: 3 }).map((entry) => entry.id), second.slice(1));
+    assert.deepEqual(store.list({ runId, taskId, attempt: 1 }).map((entry) => entry.id), first);
+    // Without an attempt the list is unchanged: the oldest first, up to the limit.
+    assert.deepEqual(store.list({ runId, taskId, limit: 3 }).map((entry) => entry.id), first.slice(0, 3));
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -36,10 +36,10 @@ import {
 } from "../src/worker-identity.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 import { emptyProjectionForTest } from "./support/projection-fixtures.js";
-import { captureWorkingTreeIdentity } from "../src/command-evidence-identity.js";
+import { captureWorkingTreeIdentity, restoreWorkingTree } from "../src/command-evidence-identity.js";
 import { CliWorkerOwners, type CliWorkerRuntimeDeps } from "../src/cli-worker-runtime.js";
 import { runGit } from "./support/git-fixture.js";
-import { FAKE_CLI_SCRIPT, writeFakeCliScenario, type FakeCliScenario } from "./support/fake-cli.js";
+import { FAKE_CLI_SCRIPT, cliFixture, writeFakeCliScenario, type FakeCliScenario } from "./support/fake-cli.js";
 import { ChildCliLauncher, cliDoneResult, writeClaudeStream } from "./support/cli-worker-fixture.js";
 
 class ScriptedModel implements AgentModel {
@@ -1009,13 +1009,16 @@ function emptyArtifactHash(): string {
 // ---------------------------------------------------------------------------------------------------------------
 // CW5: the driver's CLI branch (docs/plans/2026-11-14-cli-workers.md §3.5, §3.11), with the fake CLI as a child.
 
-async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean } = {}) {
+async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<FakeCliScenario, "cli" | "stdout"> & { structured?: Record<string, unknown> | null; working?: boolean; stdoutFixture?: string } = {}) {
   // Git reports the worktree by its real path (macOS /private/var, a Windows 8.3 name spelled out), as the launcher
   // gives the Runner its project and state folders: realpathSync.native expands 8.3 names, plain realpathSync does not.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), `aiboard-native-worker-cli-${label}-`)));
   // Registered before anything can throw (the worktree, the stores), so a failed setup still removes the folder.
   const closers: Array<() => void> = [];
-  t.after(() => {
+  const cleanup: { settleLauncher?: () => Promise<void> } = {};
+  t.after(async () => {
+    // The fake CLI has exited before its working folder (the worktree) is removed.
+    await cleanup.settleLauncher?.();
     for (const close of closers.reverse()) close();
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
@@ -1037,9 +1040,10 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
   const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
   closers.push(() => { sessions.close(); ledger.close(); scheduler.close(); evidence.close(); memory.close(); });
   seedRunningTask(scheduler);
-  const { structured = cliDoneResult(), working, ...rest } = scenario;
-  const stdout = writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
+  const { structured = cliDoneResult(), working, stdoutFixture, ...rest } = scenario;
+  const stdout = stdoutFixture ?? writeClaudeStream(join(fake, "claude.jsonl"), structured, working ? { working: true } : {});
   const launcher = new ChildCliLauncher(writeFakeCliScenario(fake, { cli: "claude-code", stdout, ...rest }));
+  cleanup.settleLauncher = () => launcher.settle();
   const cli: AgentRuntimeCandidate = { runtimeId: "claude-code:default", providerId: "claude-code", modelId: "sonnet", capabilities: ["code"], priority: 1, workerOnly: true };
   const api: AgentRuntimeCandidate = { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 2 };
   const health = new ProviderHealthRegistry();
@@ -1062,6 +1066,7 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
     stateDirectory: state, owners, readWaitMs: 50,
     captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGit),
     browser: { checkAfterStop: async () => browser },
+    oneShotCommands: async () => undefined,
     rerunChecks: async ({ attempt }) => {
       const output = await artifacts.put(new Uint8Array(0), "text/plain", "check output");
       const record = evidence.record({
@@ -1097,7 +1102,9 @@ async function cliDriverFixture(t: TestContext, label: string, scenario: Omit<Fa
     cliWorkers: { runtimes: new Map([[cli.runtimeId, { runtimeId: cli.runtimeId, providerId: "claude-code", model: "sonnet" }]]), runtime: { ...runtime, ...runtimeOverrides } },
   });
   const assignment = { runId: "run_1", task: rebuildTask(scheduler), attempt: 1, workerId: "worker_task_a_1", workspacePath: workspace.path };
-  return { driver, assignment, launcher, health, apiModel, owners, scheduler, setBrowser: (status: "exited" | "escaped") => { browser = status; }, armEscapeOnStop: (armed: boolean) => { escapeOnStop = armed; }, closes };
+  // The production restore (native-build-factory.ts restoreWorkingTreeForRunner), with the fixture's Git.
+  const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, join(state, "tree-index"), runGit, treeId);
+  return { driver, assignment, launcher, health, apiModel, owners, scheduler, runtime, restoreTree, setBrowser: (status: "exited" | "escaped") => { browser = status; }, armEscapeOnStop: (armed: boolean) => { escapeOnStop = armed; }, closes };
 }
 
 test("CW5: a mixed crew assigns the task to the CLI worker, whose done result is submitted", async (t) => {
@@ -1127,6 +1134,130 @@ test("CW5 §3.7: the same attempt run again finds the worktree its CLI left deta
     assert.match((again as { reason: string }).reason, new RegExp(`^cli_history_rewritten:${label}: `));
     assert.equal(fixture.launcher.starts.length, 1, "no CLI is started in it");
   }
+});
+
+test("CW6 §3.6: a re-run whose stop is unproven holds the attempt; after retryStop the driver's next run restores the CLI's tree and re-runs, starting no CLI", async (t) => {
+  const fixture = await cliDriverFixture(t, "reruns-held", { actions: [{ write: "value.txt", content: "two\n" }] });
+  let entries = 0;
+  const driver = fixture.driver({
+    restoreTree: fixture.restoreTree,
+    rerunChecks: async (input) => {
+      entries += 1;
+      if (entries > 1) return await fixture.runtime.rerunChecks!(input);
+      // The first entry's re-run changes a file, and its processes are not proven gone.
+      writeFileSync(join(input.workspace.path, "value.txt"), "changed by a re-run\n");
+      throw Object.assign(new Error("Shared managed cleanup did not prove release."), { code: "process_cleanup_unverified" });
+    },
+  });
+  const held = await driver.run(fixture.assignment);
+  assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+  assert.deepEqual((held as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_reruns_pending:task_a" });
+  assert.match((held as { reason: string }).reason, /did not prove its processes stopped/);
+  const owner = { runId: "run_1", sessionId: "worker:run_1:task_a:1" };
+  assert.equal(fixture.owners.has(owner), true, "the owner keeps its depth until the retried stop proves it");
+  await driver.retryStop(fixture.assignment);
+  assert.equal(fixture.owners.has(owner), false);
+  // The Resume's run of the same attempt: the re-run's change is put back, the re-runs run again, the work is submitted.
+  const resumed = await driver.run(fixture.assignment);
+  assert.equal(resumed.type, "submitted", JSON.stringify(resumed));
+  assert.equal(readFileSync(join(fixture.assignment.workspacePath, "value.txt"), "utf8"), "two\n");
+  assert.equal(entries, 2);
+  assert.equal(fixture.launcher.starts.length, 1, "no CLI is started again");
+});
+
+test("CW6 §3.6 B2: a held re-run whose one-shot command stays unsettled stays held across Resumes; once it settles, the attempt re-enters", async (t) => {
+  const fixture = await cliDriverFixture(t, "reruns-oneshot", { actions: [{ write: "value.txt", content: "two\n" }] });
+  // The subprocess store's record of the first re-run: cleanup_blocked from that re-run until the runtime's
+  // reconciliation settles it.
+  let blocked = false;
+  let checks = 0;
+  let entries = 0;
+  const driver = fixture.driver({
+    restoreTree: fixture.restoreTree,
+    oneShotCommands: async (owner) => {
+      checks += 1;
+      assert.deepEqual(owner, { runId: "run_1", sessionId: "worker:run_1:task_a:1", actor: { role: "worker", id: "worker_task_a_1" } });
+      return blocked ? "1 command(s) the Runner ran for this attempt are not proven stopped: inv-1 (cleanup_blocked, cleanup failed)" : undefined;
+    },
+    rerunChecks: async (input) => {
+      entries += 1;
+      if (entries > 1) return await fixture.runtime.rerunChecks!(input);
+      // A re-run whose terminate failed: the broker reports backend_unavailable, and the store holds it cleanup_blocked.
+      blocked = true;
+      throw Object.assign(new Error("The re-run of node --test ended without a record that its processes stopped (backend_unavailable)."), { code: "process_cleanup_unverified" });
+    },
+  });
+  const held = await driver.run(fixture.assignment);
+  assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+  assert.deepEqual((held as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_reruns_pending:task_a" });
+  assert.match((held as { reason: string }).reason, /inv-1 \(cleanup_blocked/, "the driver's own stop names the unsettled command");
+  // Each Resume retries the stop, and the unsettled command keeps it unproven: nothing re-enters.
+  for (let resume = 0; resume < 2; resume += 1) {
+    await assert.rejects(driver.retryStop(fixture.assignment), /not proven stopped: inv-1 \(cleanup_blocked/);
+  }
+  assert.equal(entries, 1);
+  blocked = false;
+  await driver.retryStop(fixture.assignment);
+  const resumed = await driver.run(fixture.assignment);
+  assert.equal(resumed.type, "submitted", JSON.stringify(resumed));
+  assert.equal(entries, 2);
+  assert.equal(readFileSync(join(fixture.assignment.workspacePath, "value.txt"), "utf8"), "two\n");
+  assert.equal(fixture.launcher.starts.length, 1, "no CLI is started again");
+  assert.ok(checks >= 4);
+});
+
+test("CW6 with CW8: a re-run browser session whose stop is unproven holds the attempt through the same re-entry", async (t) => {
+  const fixture = await cliDriverFixture(t, "reruns-session-held", {
+    actions: [{ write: "value.txt", content: "two\n" }],
+    structured: { ...cliDoneResult(), checks: [{ label: "screenshot", executable: "playwright-cli", args: ["--json", "screenshot"] }] },
+  });
+  let browser: "exited" | "escaped" = "exited";
+  let sessions = 0, reruns = 0;
+  const driver = fixture.driver({
+    restoreTree: fixture.restoreTree,
+    browser: {
+      start: async () => { sessions += 1; return { status: "started", note: "A browser is running for this task." }; },
+      checkAfterStop: async () => browser,
+    },
+    rerunChecks: async (input) => {
+      reruns += 1;
+      assert.equal(input.browserUnavailable, false, "the re-runs get the session");
+      // The first re-run session's browser outlives its stop.
+      if (reruns === 1) browser = "escaped";
+      return await fixture.runtime.rerunChecks!(input);
+    },
+  });
+  const held = await driver.run(fixture.assignment);
+  assert.equal(held.type, "stop_unproven", JSON.stringify(held));
+  assert.deepEqual((held as { outcome?: unknown }).outcome, { type: "paused", reason: "cli_reruns_pending:task_a" });
+  assert.match((held as { reason: string }).reason, /re-ran Claude Code's browser checks in a Playwright CLI session; the stop of that session is not proven/);
+  // Still running: the retried stop stays unproven, and nothing runs.
+  await assert.rejects(driver.retryStop(fixture.assignment), /still running/);
+  browser = "exited";
+  await driver.retryStop(fixture.assignment);
+  const resumed = await driver.run(fixture.assignment);
+  assert.equal(resumed.type, "submitted", JSON.stringify(resumed));
+  assert.equal(reruns, 2);
+  assert.equal(sessions, 3, "the CLI's session, the first re-run session, the re-entry's");
+  assert.equal(fixture.launcher.starts.length, 1, "no CLI is started again");
+});
+
+test("CW8: a CLI attempt that throws after its browser session started has that browser checked at its stop", async (t) => {
+  const fixture = await cliDriverFixture(t, "browser-throw");
+  // An uncoded launch failure: the CLI branch throws, and only the driver's own stop runs after it.
+  fixture.launcher.startError = new Error("The CLI could not be launched.");
+  let browser: "escaped" | "exited" = "escaped";
+  const driver = fixture.driver({ browser: {
+    start: async () => ({ status: "started", note: "A browser is running for this task." }),
+    checkAfterStop: async () => browser,
+  } });
+  const outcome = await driver.run(fixture.assignment);
+  assert.equal(outcome.type, "stop_unproven", JSON.stringify(outcome));
+  assert.match((outcome as { reason: string }).reason, /The CLI worker's stop is not proven: the browser the CLI's session ran is still running/);
+  assert.deepEqual((outcome as { outcome: unknown }).outcome, { type: "failed", reason: "The CLI could not be launched." });
+  // Its browser gone, the same failure stands as thrown.
+  browser = "exited";
+  await assert.rejects(driver.run(fixture.assignment), /The CLI could not be launched/);
 });
 
 test("CW5: case 1 fails the attempt and leaves the CLI's health untouched", async (t) => {
@@ -1164,4 +1295,20 @@ test("CW5: an unproven stop keeps the collect pending, and retryStop proves the 
   const collected = await driver.run(fixture.assignment);
   assert.equal(collected.type, "submitted", JSON.stringify(collected));
   assert.equal(fixture.launcher.starts.length, 1);
+});
+
+test("CW7: a CLI out of usage with no healthy worker left pauses all_worker_runtimes_unavailable, its cause recorded", async (t) => {
+  const fixture = await cliDriverFixture(t, "no-healthy", { stdoutFixture: cliFixture("claude-code/usage-limit.synthetic.stdout.jsonl"), exitCode: 1 });
+  // The crew's API worker is out already.
+  fixture.health.recordFailure("primary", { kind: "authentication", message: "invalid key" });
+  const outcome = await fixture.driver().run(fixture.assignment);
+  assert.deepEqual(outcome, { type: "paused", reason: "all_worker_runtimes_unavailable" });
+  assert.equal(fixture.launcher.starts.length, 1);
+  assert.equal(fixture.apiModel.requests.length, 0);
+  const state = fixture.health.get("claude-code");
+  assert.equal(state.status, "cooldown");
+  assert.equal(state.failureKind, "usage_limit");
+  // The health change is durable, as an API worker's is.
+  const changes = fixture.scheduler.readRun("run_1").filter((event) => event.type === "provider.health_changed");
+  assert.deepEqual(changes.map((event) => (event.payload.state as { providerId: string }).providerId), ["claude-code"]);
 });

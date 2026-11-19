@@ -9,13 +9,14 @@ import type { OpaqueExecutionGrant } from "../src/execution-grants.js";
 import { ManagedProcessError, ManagedProcessService, type ManagedOutputEvidence, type ManagedProcessSnapshot } from "../src/managed-process.js";
 import { decodeOutputCursor, encodeOutputCursor, sliceOutput, utf8CompleteLength } from "../src/managed-process-output.js";
 import { createManagedProcessTools } from "../src/managed-process-tools.js";
+import { MANAGED_INPUT_WRITE_CEILING_MS } from "../src/managed-process-contracts.js";
 
 type Write = { bytes: string; closeInput: boolean };
 interface Hooks { write?: (request: Write) => Promise<void> }
 
-async function fixture(t: TestContext, hooks: Hooks = {}, root?: string) {
+async function fixture(t: TestContext, hooks: Hooks = {}, root?: string, serviceOptions: { inputWriteCeilingMs?: number } = {}) {
   root ??= await mkdtemp(join(tmpdir(), "managed-io-"));
-  const delivered: Write[] = []; let call = 0; let ids = 0;
+  const delivered: Write[] = [], timeouts: number[] = []; let call = 0; let ids = 0;
   let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), status: ManagedProcessSnapshot["status"] = "running";
   const snapshot = (processId: string): ManagedProcessSnapshot => ({ processId, pid: 42, status, exitCode: status === "running" ? null : 0, signal: null,
     startedAt: "2026-10-26T00:00:00.000Z", updatedAt: "2026-10-26T00:00:00.000Z", stdout: "", stderr: "" });
@@ -24,7 +25,8 @@ async function fixture(t: TestContext, hooks: Hooks = {}, root?: string) {
     async start(request: { identity: { processId: string } }) { return snapshot(request.identity.processId); },
     async observe(target: { processId: string }) { return snapshot(target.processId); },
     async stop(target: { processId: string }) { status = "stopped"; return snapshot(target.processId); },
-    async writeInput(_target: unknown, _context: unknown, request: { bytes: Uint8Array; closeInput: boolean }) {
+    async writeInput(_target: unknown, _context: unknown, request: { bytes: Uint8Array; closeInput: boolean; timeoutMs: number }) {
+      timeouts.push(request.timeoutMs);
       const value = { bytes: Buffer.from(request.bytes).toString("utf8"), closeInput: request.closeInput };
       await hooks.write?.(value);
       delivered.push(value); return { inputClosed: request.closeInput };
@@ -36,10 +38,10 @@ async function fixture(t: TestContext, hooks: Hooks = {}, root?: string) {
       ] };
     },
   };
-  const service = new ManagedProcessService({ stateDirectory: join(root, "state"), runtime, idFactory: () => `p${++ids}` } as unknown as ConstructorParameters<typeof ManagedProcessService>[0]);
+  const service = new ManagedProcessService({ stateDirectory: join(root, "state"), runtime, idFactory: () => `p${++ids}`, ...serviceOptions } as unknown as ConstructorParameters<typeof ManagedProcessService>[0]);
   const context = (toolName: string, actorId = "worker"): ToolExecutionContext => ({ runId: "run", sessionId: "agent", actor: { role: "worker", id: actorId },
     workspacePath: root!, callId: `call-${++call}`, toolName, executionGrant: Object.freeze({}) as OpaqueExecutionGrant });
-  return { root, service, delivered, context, emit(stream: "stdout" | "stderr", text: string | Buffer) {
+  return { root, service, delivered, timeouts, context, emit(stream: "stdout" | "stderr", text: string | Buffer) {
     const bytes = Buffer.isBuffer(text) ? text : Buffer.from(text);
     if (stream === "stdout") stdout = Buffer.concat([stdout, bytes]); else stderr = Buffer.concat([stderr, bytes]);
   }, exit() { status = "stopped"; }, async close() { await service.close().catch(() => undefined); } };
@@ -63,6 +65,27 @@ test("write_stdin is ordered, acknowledged, idempotent per writeId and conflicts
     assert.doesNotMatch(record, /alpha|beta/, "the durable journal holds digests and lengths, never input bytes");
     assert.match(record, /"writeId":"w1"/);
   } finally { await f.close(); await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("every stdin write is bounded by the write ceiling, which a service may lower but never raise", async t => {
+  const f = await fixture(t);
+  try {
+    const repl = await f.service.start({ command: "repl", interactive: true }, f.context("process.start"), f.root);
+    await f.service.writeInput(repl.processId, { writeId: "w1", data: "x" }, f.context("process.write_stdin"));
+    await f.service.writeInput(repl.processId, { writeId: "w2", closeInput: true }, f.context("process.write_stdin"));
+    assert.deepEqual(f.timeouts, [MANAGED_INPUT_WRITE_CEILING_MS, MANAGED_INPUT_WRITE_CEILING_MS]);
+  } finally { await f.close(); await rm(f.root, { recursive: true, force: true }); }
+  const lowered = await fixture(t, {}, undefined, { inputWriteCeilingMs: 2_000 });
+  try {
+    const repl = await lowered.service.start({ command: "repl", interactive: true }, lowered.context("process.start"), lowered.root);
+    await lowered.service.writeInput(repl.processId, { writeId: "w1", data: "x" }, lowered.context("process.write_stdin"));
+    assert.deepEqual(lowered.timeouts, [2_000]);
+  } finally { await lowered.close(); await rm(lowered.root, { recursive: true, force: true }); }
+  const root = await mkdtemp(join(tmpdir(), "managed-io-"));
+  try {
+    for (const inputWriteCeilingMs of [0, MANAGED_INPUT_WRITE_CEILING_MS + 1, 1.5])
+      assert.throws(() => new ManagedProcessService({ stateDirectory: join(root, "state"), inputWriteCeilingMs }), (error: unknown) => error instanceof ManagedProcessError && error.code === "invalid_arguments");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("write_stdin refuses non-interactive processes, foreign owners and invalid input before delivery", async t => {
