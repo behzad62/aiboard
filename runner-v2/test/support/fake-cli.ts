@@ -3,6 +3,7 @@
  * naming a scenario file. fake-cli.mjs documents the scenario's fields, and why on Windows a test injects
  * `[process.execPath, FAKE_CLI_SCRIPT]` where the resolved CLI would go rather than hiding the fake behind a `.cmd`.
  */
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,9 +44,32 @@ export interface FakeCliRecord {
   stdin: string;
   cwd: string;
   grandchildPid?: number;
+  /** The token in the grandchild's command line, so a test tells it from a later process given the same ID. */
+  grandchildToken?: string;
   mcpDepth?: string | null;
   /** The `run` actions' commands, in order, with their exit codes and output. */
   runs?: Array<{ args: string[]; exitCode: number | null; stdout: string; stderr: string }>;
+}
+
+/**
+ * Whether the fake's grandchild still runs. Windows gives a freed process ID to the next process at once, so on Windows
+ * an ID that still answers counts only when that process's command line carries the grandchild's token (CI run
+ * 44515741684: after a proven stop the ID still answered). A grandchild that really outlived the stop still counts.
+ * POSIX hands out IDs in sequence, so there the ID decides.
+ */
+export function fakeGrandchildAlive(record: FakeCliRecord): boolean {
+  const pid = record.grandchildPid;
+  if (!pid) throw new Error("The fake recorded no grandchild.");
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "win32") return true;
+  if (!record.grandchildToken) throw new Error("The fake recorded no grandchild token.");
+  const commandLine = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`], { encoding: "utf8", windowsHide: true });
+  return commandLine.includes(record.grandchildToken);
 }
 
 /** A fixture's path; scenario paths may be absolute, so tests point straight into the fixtures folder. */

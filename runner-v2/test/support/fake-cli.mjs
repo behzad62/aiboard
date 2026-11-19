@@ -18,7 +18,7 @@
 //   "grandchildDetached": false,                    // see below: true for a "grandchild proven stopped" test
 //   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" },  // in the cwd, before output
 //               { "run": ["playwright-cli", "--json", "goto", "http://…"] }],  // a command on PATH, as the CLI's shell runs it
-//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, mcpDepth?, runs? } before any output
+//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, grandchildToken?, mcpDepth?, runs? } before any output
 //   "recordMcpDepth": false                         // true: the record carries AIBOARD_MCP_DEPTH, the only variable it reads
 // }
 //
@@ -34,10 +34,15 @@
 // allows no breakaway, it is still inside that Job; on POSIX it has left the process group, as a CLI's setsid commands
 // do (CW0), so a POSIX test of it shows what the Runner cannot prove stopped.
 //
+// The grandchild's command line carries a token the record names. Windows gives a freed process ID to the next process
+// at once, so a test that finds the ID still answering asks whether that process is the grandchild (fake-cli.ts
+// fakeGrandchildAlive) before calling it alive.
+//
 // The run's order: argv is checked against expectArgs before stdin is read (a mismatch exits 64 at once, never waiting
 // on an open stdin); then stdin is read to EOF and, for agy, refused as agy would before anything else; then Codex's
 // -o file is created empty, the grandchild started, the actions run, the record written, and the output replayed.
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
@@ -77,16 +82,17 @@ async function run() {
   const outputPath = outputFlag >= 0 && argv[outputFlag + 1] ? argv[outputFlag + 1] : undefined;
   // Codex creates its -o file at once; it is still 0 bytes when the run fails or is killed (CW0).
   if (outputPath) writeFileSync(outputPath, "");
-  let grandchild;
+  let grandchild, grandchildToken;
   if (scenario.grandchildMs > 0) {
-    grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)})`],
+    grandchildToken = `aiboard-fake-grandchild-${randomUUID()}`;
+    grandchild = spawn(process.execPath, ["-e", `setTimeout(() => {}, ${Number(scenario.grandchildMs)}); // ${grandchildToken}`],
       { stdio: "ignore", detached: scenario.grandchildDetached === true });
   }
   const runs = [];
   for (const action of scenario.actions ?? []) act(action, runs);
   if (scenario.record) {
     writeFileSync(at(scenario.record), JSON.stringify({
-      argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid } : {}), ...(runs.length ? { runs } : {}),
+      argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid, grandchildToken } : {}), ...(runs.length ? { runs } : {}),
       // Only this one variable of the environment is ever written down.
       ...(scenario.recordMcpDepth === true ? { mcpDepth: process.env.AIBOARD_MCP_DEPTH ?? null } : {}),
     }, null, 2));
