@@ -17,6 +17,7 @@ import {
   nativeBuildAttachmentIdentityPatch,
   nativeBuildDiscussionStatus,
   nativeBuildPauseDescription,
+  cliTaskFailureText,
   nativeTaskRetirement,
   nativeTaskVerificationState,
   orderVerifierCandidates,
@@ -1511,6 +1512,59 @@ assert.deepEqual(
   for (const pause of [collect, untitled, launch]) {
     assert.doesNotMatch(pause!.detail, /^Reason:|could not be proven stopped/);
   }
+}
+
+// CLI workers (CW6, CW7): the two pauses that wait for a second Resume after a proven stop, like cli_collect_pending;
+// both keep Resume available and say what the next Resume does.
+{
+  const tasks = { "task-3": { objective: "Fix the search box" } };
+  const reruns = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: "cli_reruns_pending:task-3", taskId: "task-3" }, tasks } as never);
+  assert.equal(reruns?.waitingForOwner, false, "Resume re-runs the checks");
+  assert.equal(
+    `${reruns?.title}. ${reruns?.detail}`,
+    "Paused: the Runner's checks of a CLI worker's work are ready to run again. A program from the Runner's re-run of the checks on \"Fix the search box\" is now proven stopped. Resume restores the files the CLI left and runs those checks again; it does not start the CLI.",
+  );
+  const handoff = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: "worker_handoff_stop_pending:task-3", taskId: "task-3" }, tasks } as never);
+  assert.equal(handoff?.waitingForOwner, false, "Resume starts the CLI");
+  assert.equal(
+    `${handoff?.title}. ${handoff?.detail}`,
+    "Paused: a CLI worker is ready to take over a task. The worker that was on \"Fix the search box\" is now proven stopped. Resume starts the CLI worker it was handed to, on the same attempt.",
+  );
+  const untitled = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: "worker_handoff_stop_pending:task-8" } } as never);
+  assert.match(untitled!.detail, /on task task-8 is now proven stopped/);
+  // #238: a cancel while the prompt was going in pauses the run with worker_cancelled.
+  const cancelled = nativeBuildPauseDescription({ status: "paused", pauseReason: { reason: "worker_cancelled" } } as never);
+  assert.equal(cancelled?.waitingForOwner, false);
+  assert.equal(
+    `${cancelled?.title}. ${cancelled?.detail}`,
+    "Paused: a worker was stopped before it finished. A worker's attempt was cancelled while it ran, so nothing it was doing was collected. Resume continues the Build, and the task runs again.",
+  );
+  for (const pause of [reruns, handoff, untitled, cancelled]) {
+    assert.doesNotMatch(pause!.detail, /^Reason:|could not be proven stopped|cli_reruns_pending|worker_handoff_stop_pending|worker_cancelled/);
+  }
+}
+
+// CLI workers (#238, CW5): a task's CLI failure reason in words; any other reason is shown as it is.
+{
+  assert.equal(
+    cliTaskFailureText("cli_stdin_undelivered: the managed stdin write did not finish within its bound."),
+    "The task never reached the CLI worker: the Runner could not finish writing its prompt (the managed stdin write did not finish within its bound). Its programs were stopped and nothing was collected; the CLI's health is unchanged.",
+  );
+  assert.equal(
+    cliTaskFailureText("cli_attempt_deadline: Codex CLI did not finish within its time limit for one attempt (its prompt was still being delivered)."),
+    "Codex CLI did not finish within its time limit for one attempt (its prompt was still being delivered). Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.",
+  );
+  assert.equal(
+    cliTaskFailureText("cli_attempt_deadline: Claude Code reached its time limit for one attempt before its fix round."),
+    "Claude Code reached its time limit for one attempt before its fix round. Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.",
+  );
+  assert.equal(
+    cliTaskFailureText("process_launch_unproven:cli_executable_unknown"),
+    "The Runner could not start the CLI worker. AI Board could not tell which program to start: set the CLI's program path in Settings > Providers > CLI workers and press Test.",
+  );
+  assert.equal(cliTaskFailureText("cli_checks_failing: npm test still fails"), "cli_checks_failing: npm test still fails");
+  assert.equal(cliTaskFailureText(undefined), undefined);
+  assert.match(readFileSync("app/discussion/discussion-client.tsx", "utf8"), /failureReason: cliTaskFailureText\(native\?\.failureReason\)/, "the task view shows the words");
 }
 
 // Tunnel run: four never-closed verifier sessions and a waiting Architect were all shown as

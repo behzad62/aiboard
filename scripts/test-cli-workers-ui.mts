@@ -15,11 +15,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { CliWorkerFreeChecks, CliWorkerLastTest, CliWorkerPanel } from "../components/CliWorkersSettings";
 import { BuildCrewPicker } from "../components/build/BuildCrewPicker";
-import { CliAttemptCard, CliAttemptsPanel } from "../components/build/CliAttemptsPanel";
+import { CliAttemptCard, CliAttemptsPanel, cliRerunNote } from "../components/build/CliAttemptsPanel";
 import { buildCrewCliAccess, buildCrewCliRefusal, selectBuildCrewRuntimes, type BuildCrew } from "../lib/client/build-crew";
 import {
   CLI_ATTEMPT_MINUTES,
   CLI_LIVE_TURN_BASE,
+  CLI_RERUN_TIMEOUT_CAP_MS,
   CLI_TEST_OUTCOMES,
   CLI_WORKERS_FULL_ACCESS_REASON,
   CLI_WORKERS_UPDATE_MESSAGE,
@@ -38,6 +39,7 @@ import {
   parseCliWorkerCheck,
   parseCliWorkerChecks,
   runCliWorkerTest,
+  type CliAttemptView,
 } from "../lib/client/cli-workers";
 import type { HomeCliWorkerEntry } from "../lib/client/home-client";
 import type { NativeBuildEvent, NativeBuildObservability } from "../lib/client/runner-v2";
@@ -53,11 +55,24 @@ import {
 } from "../runner-v2/src/cli-worker-config";
 import {
   CLI_COLLECT_PENDING_PREFIX as RUNNER_COLLECT,
+  CLI_RERUNS_PENDING_PREFIX as RUNNER_RERUNS_PENDING,
+  CLI_STDIN_UNDELIVERED as RUNNER_STDIN_UNDELIVERED,
   LIVE_TURN_BASE as RUNNER_LIVE_TURN_BASE,
+  PROCESS_LAUNCH_UNPROVEN_PREFIX as RUNNER_LAUNCH_UNPROVEN,
   PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX as RUNNER_REPEATED,
 } from "../runner-v2/src/cli-worker-runtime";
+import { CLI_RERUN_TIMEOUT_CAP_MS as RUNNER_RERUN_CAP } from "../runner-v2/src/cli-worker-evidence";
+import { RUNNER_RERUN_OF_CLI_CLAIM } from "../runner-v2/src/evidence-store";
+import { WORKER_HANDOFF_STOP_PENDING_PREFIX as RUNNER_HANDOFF_STOP_PENDING } from "../runner-v2/src/native-worker-driver";
 import { validateProviderConfigs } from "../runner-v2/src/provider-config-store";
-import { CLI_COLLECT_PENDING_PREFIX, PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX } from "../lib/client/discussion-live-state";
+import {
+  CLI_COLLECT_PENDING_PREFIX,
+  CLI_RERUNS_PENDING_PREFIX,
+  CLI_STDIN_UNDELIVERED,
+  PROCESS_LAUNCH_UNPROVEN_PREFIX,
+  PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX,
+  WORKER_HANDOFF_STOP_PENDING_PREFIX,
+} from "../lib/client/discussion-live-state";
 import { LOCAL_RUNNER_SESSIONS_STORAGE_KEY } from "../lib/client/local-runner-handoff";
 import {
   __exportClientStoreForPersistenceForTests,
@@ -122,6 +137,12 @@ const RAW_CHECKS = {
   }
   assert.equal(CLI_COLLECT_PENDING_PREFIX, RUNNER_COLLECT);
   assert.equal(PROCESS_LAUNCH_UNPROVEN_REPEATED_PREFIX, RUNNER_REPEATED);
+  assert.equal(CLI_RERUNS_PENDING_PREFIX, RUNNER_RERUNS_PENDING, "CW6's re-run pause");
+  assert.equal(WORKER_HANDOFF_STOP_PENDING_PREFIX, RUNNER_HANDOFF_STOP_PENDING, "CW7's handoff pause");
+  assert.equal(PROCESS_LAUNCH_UNPROVEN_PREFIX, RUNNER_LAUNCH_UNPROVEN);
+  assert.equal(CLI_STDIN_UNDELIVERED, RUNNER_STDIN_UNDELIVERED, "#238's prompt-delivery failure");
+  assert.equal(CLI_RERUN_TIMEOUT_CAP_MS, RUNNER_RERUN_CAP, "a re-run timed out under the cap was cut short by the budget");
+  assert.equal(RUNNER_RERUN_OF_CLI_CLAIM, "runner_rerun_of_cli_claim", "the re-run source the card reads");
   assert.equal(CLI_LIVE_TURN_BASE, RUNNER_LIVE_TURN_BASE, "a CLI run's live tail turn numbers");
   assert.equal(getModelDisplayName("claude-code:default"), "Claude Code · CLI default");
   assert.equal(getModelDisplayName("codex-cli:gpt-6-codex"), "Codex CLI · gpt-6-codex");
@@ -570,6 +591,60 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.match(picker, /<SelectGroup>\s*<SelectLabel>CLI workers<\/SelectLabel>/, "the CLI workers group has a real label");
   assert.match(readFileSync("components/ui/select.tsx", "utf8"), /const SelectLabel = React\.forwardRef/);
   pass("the consent note moves focus to its button, and the crew picker's CLI group is labelled");
+}
+
+// ------------------------------------------------------------------ Run details: CW6's re-runs after a fix round, and CW7's takeover
+{
+  const event = (sequence: number, type: string, payload: Record<string, unknown>, actor = { role: "runner", id: "native-worker-driver" }): NativeBuildEvent => ({
+    sequence, type, occurredAt: `2026-11-19T10:${String(sequence).padStart(2, "0")}:00.000Z`, actor, payload,
+  });
+  const run = { version: 1, taskId: "task-4", attempt: 1, workerId: "worker-2", sessionId: "session-4", runtimeId: "codex-cli:default", providerId: "codex-cli", exitCode: 0, collected: true };
+  const rerun = (id: string, createdAt: string, fact: Record<string, unknown>) => ({
+    id, runId: "run-1", taskId: "task-4", attempt: 1, actor: { role: "worker", id: "worker-2" }, createdAt,
+    fact: { kind: "command", label: id, command: "npm", args: ["test"], cwd: ".", exitCode: 1, signal: null, timedOut: false, cancelled: false,
+      startedAt: createdAt, finishedAt: createdAt, cleanup: { state: "verified_empty" }, source: RUNNER_RERUN_OF_CLI_CLAIM, ...fact },
+  });
+  const minutes = (at: string, count: number) => new Date(Date.parse(at) + count * 60_000).toISOString();
+  const events = [
+    // CW7: an API worker stopped on a rate limit and the Codex CLI took the attempt over.
+    event(1, "worker.runtime_assigned", { taskId: "task-4", attempt: 1, sessionId: "session-4", runtimeId: "openai:gpt-6" }),
+    event(2, "worker.runtime_assigned", { taskId: "task-4", attempt: 1, sessionId: "session-4", runtimeId: "codex-cli:default",
+      handoff: { fromRuntimeId: "openai:gpt-6", failureKind: "rate_limit", message: "429 from the provider" } }),
+    event(3, "worker.cli_attempt_recorded", { ...run, outcome: "done", summary: "first run" }),
+    event(6, "worker.cli_attempt_recorded", { ...run, outcome: "done", summary: "fix round" }),
+    event(9, "task.transitioned", { taskId: "task-4", status: "submitted", patch: {} }, { role: "runner", id: "scheduler" }),
+  ];
+  const first = "2026-11-19T10:04:00.000Z";
+  const second = "2026-11-19T10:07:00.000Z";
+  const evidence = [
+    rerun("unit tests", first, { exitCode: 1 }),
+    rerun("e2e", first, { exitCode: null, timedOut: true, finishedAt: minutes(first, 2) }),
+    rerun("unit tests again", second, { exitCode: 1 }),
+    rerun("e2e again", second, { exitCode: null, timedOut: true, finishedAt: minutes(second, 2) }),
+    rerun("lint", second, { exitCode: null, timedOut: true, finishedAt: minutes(second, 10) }),
+    rerun("leftover", second, { exitCode: 0, cleanup: { state: "failed", detail: "a child is alive" } }),
+  ];
+  const views = cliAttemptViews(events, { evidence: evidence as never });
+  assert.deepEqual(views.map((view) => [view.summary, view.fixRound ?? false, view.submittedAfter ?? false]), [["fix round", true, true], ["first run", false, false]]);
+  assert.deepEqual(views[1]!.takeover, { from: "openai:gpt-6", failure: "rate-limited", message: "429 from the provider" }, "the first CLI run after the switch says whose work it took over");
+  assert.equal(views[0]!.takeover, undefined, "only the first run after the switch");
+  const byLabel = (view: CliAttemptView) => Object.fromEntries(view.reruns.map((entry) => [entry.label, cliRerunNote(entry, view)]));
+  assert.deepEqual(byLabel(views[1]!), {
+    "unit tests": "exit 1",
+    e2e: "cut short by the task's validation budget (not a pass, not a failure)",
+  }, "before the fix round a gap is only a gap");
+  assert.deepEqual(byLabel(views[0]!), {
+    "unit tests again": "Known defect: still fails after the fix round (exit 1); the work was submitted with it",
+    "e2e again": "Not verified by the Runner: the task's validation budget cut it short (not a pass, not a failure)",
+    lint: "Known defect: still fails after the fix round (timed out); the work was submitted with it",
+    leftover: "its programs were not proven stopped",
+  }, "after the fix round, the submission's known defects and not-verified checks read as the Runner's concerns say");
+  const unsubmitted = cliAttemptViews(events.slice(0, 4), { evidence: evidence as never });
+  assert.equal(cliRerunNote(unsubmitted[0]!.reruns[0]!, unsubmitted[0]!), "still fails after the fix round (exit 1)", "not called a known defect unless the work was submitted");
+  const card = renderToStaticMarkup(createElement(CliAttemptCard, { attempt: views[1]! }));
+  assert.match(card, /Took over this attempt from openai:gpt-6, which stopped: rate-limited \(429 from the provider\)/);
+  assert.match(renderToStaticMarkup(createElement(CliAttemptCard, { attempt: views[0]! })), /Fix round: the Runner/);
+  pass("Run details: a fix round's known defects and not-verified checks, a re-run's unproven stop, and the CW7 takeover");
 }
 
 console.log(`PASS CLI workers UI (${checks} checks)`);

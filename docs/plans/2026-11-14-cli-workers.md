@@ -499,6 +499,8 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW3 | Done | #227 (a1b1929e) |
 | CW4 | Done | #226 (dd85ca48) |
 | CW5 | Done | #231 (64ca8fee) |
-| CW6–CW8 | Implemented on their own branches; not on main as of 2026-11-18 | — |
-| CW9 | In review 2026-11-18; merges only after the Runner release carrying CW5–CW8 (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
+| CW6 | Done | #236 (eab536f1) |
+| CW7 | Done | #234, follow-ups #241 |
+| CW8 | Done | #237 |
+| CW9 | In review 2026-11-19; merges only after the Runner release carrying CW5–CW8 and #238, #239, #242 (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
 | CW10 | Not started | — |

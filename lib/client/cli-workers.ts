@@ -14,6 +14,7 @@
  */
 
 import { isCliRuntimeId } from "@/runner-v2/src/cli-crew-policy";
+import { runtimeModelId } from "./build-crew";
 import { CLI_DEFAULT_MODEL_ID, CLI_WORKER_DISPLAY_NAMES, cliRuntimeDisplayName } from "@/lib/providers/cli-workers";
 import type { CliWorkerProviderId, HomeCliWorkerEntry } from "./home-client";
 import type { NativeBuildEvent, NativeBuildObservability, NativeProviderConfig, NativeRunnerConnection } from "./runner-v2";
@@ -462,6 +463,13 @@ export function cliNativeProviderConfig(
  */
 export const CLI_LIVE_TURN_BASE = 1_000_000;
 
+/**
+ * cli-worker-evidence.ts `CLI_RERUN_TIMEOUT_CAP_MS`: a re-run's longest time limit. A re-run that timed out sooner was
+ * cut short by the task's validation budget, which the Runner counts as not run, never as a failure (§3.6). The record
+ * keeps no time limit, so the page reads it from how long the re-run ran (pinned equal in scripts/test-cli-workers-ui.mts).
+ */
+export const CLI_RERUN_TIMEOUT_CAP_MS = 10 * 60_000;
+
 export type CliAttemptOutcome = "done" | "needs_decision" | "cannot_do" | "failure" | "stopped";
 
 export interface CliRerunView {
@@ -472,6 +480,18 @@ export interface CliRerunView {
   timedOut: boolean;
   passed: boolean;
   at: string;
+  /** Timed out under the ten-minute cap: the task's validation budget cut it short (not run, not a failure). */
+  budgetCut: boolean;
+  /** Its cleanup was not verified empty: the Runner could not prove its programs stopped. */
+  stopUnproven: boolean;
+  cancelled: boolean;
+}
+
+/** CW7: the worker this CLI took the attempt over from, and why that one stopped (`worker.runtime_assigned` handoff). */
+export interface CliTakeoverView {
+  from: string;
+  failure: string;
+  message?: string;
 }
 
 export interface CliAttemptView {
@@ -506,6 +526,12 @@ export interface CliAttemptView {
   runNumber: number;
   /** Collected later, once its programs were proven stopped (an earlier record said `collected: false`). */
   collectedAfterStop?: boolean;
+  /** The CLI's fix round (CW6): the run after a `done` run of the same attempt whose re-runs left a gap. */
+  fixRound?: boolean;
+  /** The task was submitted right after this run, so its failing or cut-short re-runs went in with the work. */
+  submittedAfter?: boolean;
+  /** The first run after a switch from another worker (CW7). */
+  takeover?: CliTakeoverView;
 }
 
 const OUTCOME_LABELS: Record<CliAttemptOutcome, string> = {
@@ -540,11 +566,18 @@ function isCliRerun(evidence: Evidence): boolean {
 
 function rerunView(evidence: Evidence): CliRerunView | null {
   if (evidence.fact.kind !== "command") return null;
-  const fact = evidence.fact as { label?: unknown; command?: unknown; args?: unknown; exitCode?: unknown; timedOut?: unknown };
+  const fact = evidence.fact as {
+    label?: unknown; command?: unknown; args?: unknown; exitCode?: unknown; timedOut?: unknown; cancelled?: unknown;
+    startedAt?: unknown; finishedAt?: unknown; cleanup?: unknown;
+  };
   const args = Array.isArray(fact.args) ? fact.args.filter((arg): arg is string => typeof arg === "string") : [];
   const command = [typeof fact.command === "string" ? fact.command : "", ...args].join(" ").trim();
   const exitCode = typeof fact.exitCode === "number" ? fact.exitCode : null;
   const timedOut = fact.timedOut === true;
+  const ranMs = typeof fact.startedAt === "string" && typeof fact.finishedAt === "string"
+    ? Date.parse(fact.finishedAt) - Date.parse(fact.startedAt)
+    : Number.NaN;
+  const cleanupState = isRecord(fact.cleanup) ? fact.cleanup.state : undefined;
   return {
     id: evidence.id,
     label: (typeof fact.label === "string" && fact.label.trim()) || command || evidence.id,
@@ -553,6 +586,9 @@ function rerunView(evidence: Evidence): CliRerunView | null {
     timedOut,
     passed: exitCode === 0 && !timedOut,
     at: evidence.createdAt,
+    budgetCut: timedOut && Number.isFinite(ranMs) && ranMs < CLI_RERUN_TIMEOUT_CAP_MS,
+    stopUnproven: cleanupState !== undefined && cleanupState !== "verified_empty",
+    cancelled: fact.cancelled === true,
   };
 }
 
@@ -646,6 +682,7 @@ export function cliAttemptViews(
   }
   const shown = attempts.filter((attempt) => !replaced.has(attempt));
   for (const attempt of shown) delete (attempt as { resultDigest?: string }).resultDigest;
+  markRunContext(shown, events);
   attempts.length = 0;
   attempts.push(...shown);
   for (const evidence of options.evidence ?? []) {
@@ -657,6 +694,47 @@ export function cliAttemptViews(
     owner?.reruns.push(view);
   }
   return attempts.reverse();
+}
+
+/**
+ * The fix round, the submission after a run, and the takeover (CW6, CW7), read from the run's own events: a fix round
+ * follows a collected `done` run of the same attempt and session; a `task.transitioned` to `submitted` with no CLI run
+ * of the task in between follows this run; a `worker.runtime_assigned` with a `handoff` for this runtime, with no run of
+ * the session in between, is this run's takeover.
+ */
+function markRunContext(shown: CliAttemptView[], events: readonly NativeBuildEvent[]): void {
+  const group = (attempt: CliAttemptView) => `${attempt.taskId}\u0000${attempt.attempt}\u0000${attempt.sessionId}`;
+  const previous = new Map<string, CliAttemptView>();
+  for (const attempt of shown) {
+    const before = previous.get(group(attempt));
+    if (before?.outcome === "done" && before.collected) attempt.fixRound = true;
+    previous.set(group(attempt), attempt);
+  }
+  const submissions = events
+    .filter((event) => event.type === "task.transitioned" && event.payload.status === "submitted" && typeof event.payload.taskId === "string")
+    .map((event) => ({ taskId: event.payload.taskId as string, sequence: event.sequence }));
+  for (const attempt of shown) {
+    const next = shown.find((other) => other !== attempt && other.taskId === attempt.taskId && other.sequence > attempt.sequence);
+    if (submissions.some((submission) => submission.taskId === attempt.taskId && submission.sequence > attempt.sequence &&
+      (!next || submission.sequence < next.sequence))) attempt.submittedAfter = true;
+  }
+  const assignments = events.filter((event) => event.type === "worker.runtime_assigned");
+  for (const attempt of shown) {
+    const assignment = assignments.filter((event) => event.sequence < attempt.sequence && event.payload.taskId === attempt.taskId &&
+      event.payload.attempt === attempt.attempt && event.payload.sessionId === attempt.sessionId).at(-1);
+    if (!assignment || assignment.payload.runtimeId !== attempt.runtimeId || !isRecord(assignment.payload.handoff)) continue;
+    if (shown.some((other) => group(other) === group(attempt) && other.sequence > assignment.sequence && other.sequence < attempt.sequence)) continue;
+    const handoff = assignment.payload.handoff;
+    const from = text(handoff.fromRuntimeId, 512);
+    const kind = text(handoff.failureKind, 64);
+    if (!from || !kind) continue;
+    const message = text(handoff.message, 600);
+    attempt.takeover = {
+      from: cliRuntimeDisplayName(from) ?? runtimeModelId(from),
+      failure: FAILURE_LABELS[kind] ?? kind.replaceAll("_", " "),
+      ...(message && message !== "no message" ? { message } : {}),
+    };
+  }
 }
 
 /** The live tail of a CLI run (CW5 publishes the CLI's stdout as `tool` deltas on a turn past CLI_LIVE_TURN_BASE). */

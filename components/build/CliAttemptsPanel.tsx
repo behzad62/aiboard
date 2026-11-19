@@ -19,16 +19,37 @@ function outcomeVariant(attempt: CliAttemptView): "success" | "warning" | "destr
   return "warning";
 }
 
-function Rerun({ rerun }: { rerun: CliRerunView }) {
-  const Icon = rerun.passed ? CheckCircle2 : rerun.timedOut ? Clock3 : XCircle;
+/**
+ * What one re-run says (CW6, §3.6). After the fix round, with the work submitted, a re-run that still fails is the
+ * submission's known defect and one the budget cut short leaves its check not verified by the Runner; the Architect's
+ * review sees both as concerns on the submission.
+ */
+export function cliRerunNote(rerun: CliRerunView, attempt: Pick<CliAttemptView, "fixRound" | "submittedAfter">): string {
+  const shipped = attempt.fixRound && attempt.submittedAfter;
+  if (rerun.stopUnproven) return "its programs were not proven stopped";
+  if (rerun.cancelled) return "cancelled, not re-run";
+  if (rerun.budgetCut) {
+    return shipped
+      ? "Not verified by the Runner: the task's validation budget cut it short (not a pass, not a failure)"
+      : "cut short by the task's validation budget (not a pass, not a failure)";
+  }
+  const result = rerun.timedOut ? "timed out" : rerun.exitCode === null ? "" : `exit ${rerun.exitCode}`;
+  if (rerun.passed) return result;
+  if (shipped) return `Known defect: still fails after the fix round (${result || "failed"}); the work was submitted with it`;
+  if (attempt.fixRound) return `still fails after the fix round (${result || "failed"})`;
+  return result;
+}
+
+function Rerun({ rerun, attempt }: { rerun: CliRerunView; attempt: CliAttemptView }) {
+  const unsettled = rerun.budgetCut || rerun.cancelled || rerun.stopUnproven || (!rerun.passed && rerun.timedOut);
+  const Icon = rerun.passed ? CheckCircle2 : unsettled ? Clock3 : XCircle;
+  const note = cliRerunNote(rerun, attempt);
   return (
     <li className="flex min-w-0 items-start gap-1.5">
-      <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", rerun.passed ? "text-success" : rerun.timedOut ? "text-warning" : "text-destructive")} aria-hidden="true" />
+      <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", rerun.passed ? "text-success" : unsettled ? "text-warning" : "text-destructive")} aria-hidden="true" />
       <span className="min-w-0 break-words">
         {rerun.label}
-        <span className="text-muted-foreground">
-          {rerun.timedOut ? " · timed out" : rerun.exitCode === null ? "" : ` · exit ${rerun.exitCode}`}
-        </span>
+        {note && <span className="text-muted-foreground">{` · ${note}`}</span>}
       </span>
     </li>
   );
@@ -90,6 +111,17 @@ export function CliAttemptCard({ attempt, tail }: { attempt: CliAttemptView; tai
           {attempt.stopFailure ? ` ${attempt.stopFailure}` : ""}
         </p>
       )}
+      {attempt.takeover && (
+        <p className="text-muted-foreground">
+          Took over this attempt from {attempt.takeover.from}, which stopped: {attempt.takeover.failure}
+          {attempt.takeover.message ? ` (${attempt.takeover.message})` : ""}. The CLI was told what that worker had done.
+        </p>
+      )}
+      {attempt.fixRound && (
+        <p className="text-muted-foreground">
+          Fix round: the Runner&apos;s re-runs of the previous run&apos;s checks left a gap, so the CLI got one more run on this attempt.
+        </p>
+      )}
       {attempt.collectedAfterStop && (
         <p className="text-muted-foreground">
           Collected after its programs were proven stopped.
@@ -112,7 +144,7 @@ export function CliAttemptCard({ attempt, tail }: { attempt: CliAttemptView; tai
       <div className="space-y-1">
         <p className="font-medium">Re-runs of its checks</p>
         {attempt.reruns.length > 0 ? (
-          <ul className="space-y-1">{attempt.reruns.map((rerun) => <Rerun key={rerun.id} rerun={rerun} />)}</ul>
+          <ul className="space-y-1">{attempt.reruns.map((rerun) => <Rerun key={rerun.id} rerun={rerun} attempt={attempt} />)}</ul>
         ) : (
           <p className="text-muted-foreground">
             {attempt.outcome === "done" && attempt.collected
