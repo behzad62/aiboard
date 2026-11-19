@@ -958,7 +958,9 @@ function startupFailed(error) {
   status.status = "stopped";
   status.error = error instanceof Error ? error.message : String(error);
   if (typeof error?.code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(error.code)) status.errorCode = error.code;
-  status.ownershipReleased = true;
+  // Stricter-only test seam (refusedStopUnproven): a coded launch refusal's stop is left unproven, its ownership never
+  // released, so its launcher can never release the refused start.
+  status.ownershipReleased = !(config?.refusedStopUnproven === true && typeof status.errorCode === "string");
   persistStatus();
   childExitResolve();
   server.close(() => process.exit(1));

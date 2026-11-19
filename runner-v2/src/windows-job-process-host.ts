@@ -209,6 +209,11 @@ export interface WindowsJobProcessHostOptions {
    * read, or the host's child list), which must leave the stop unproven.
    */
   readonly injectedRootEnderFault?: "query_fails";
+  /**
+   * Test seam, stricter-only: the supervisor leaves a coded launch refusal's stop unproven (its ownership never
+   * released), so the refused start is never released and fails with its exact record.
+   */
+  readonly injectedRefusedStopUnproven?: true;
   /** Test seam: ends every start wait, as its ceiling would, once aborted (a test aborts it when the supervisor listens). */
   readonly startWaitSignal?: AbortSignal;
 }
@@ -780,6 +785,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly startDeadlineMs: number;
   private readonly injectedLaunchFault: WindowsJobInjectedLaunchFault | undefined;
   private readonly injectedRootEnderFault: "query_fails" | undefined;
+  private readonly injectedRefusedStopUnproven: boolean;
   private readonly startWaitSignal: AbortSignal | undefined;
   private readonly controlDeadlineMs: number;
   private readonly stopDeadlineMs: number;
@@ -823,6 +829,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_CEILING_MS;
     this.injectedLaunchFault = options.injectedLaunchFault;
     this.injectedRootEnderFault = options.injectedRootEnderFault;
+    this.injectedRefusedStopUnproven = options.injectedRefusedStopUnproven === true;
     this.startWaitSignal = options.startWaitSignal;
     this.controlDeadlineMs = options.controlDeadlineMs ?? DEFAULT_CONTROL_DEADLINE_MS;
     this.stopDeadlineMs = options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
@@ -1004,6 +1011,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
+        ...(this.injectedRefusedStopUnproven ? { refusedStopUnproven: true } : {}),
       }));
       const status = await waitForSupervisor(record.supervisor, processId, this.startDeadlineMs, () => childAlive(launcher), this.startSignal(input));
       await this.applyStatus(record, status);
@@ -1178,6 +1186,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
         ...(this.injectedLaunchFault ? { injectedFault: this.injectedLaunchFault } : {}),
         ...(this.injectedRootEnderFault ? { rootEnderFault: this.injectedRootEnderFault } : {}),
+        ...(this.injectedRefusedStopUnproven ? { refusedStopUnproven: true } : {}),
         spare: true,
         ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
       }));

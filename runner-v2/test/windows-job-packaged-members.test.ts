@@ -26,7 +26,7 @@ import {
   type ProcessEffectFence,
   type ProcessLaunchResult,
 } from "../src/process-backend.js";
-import { createWindowsJobProcessHost, type WindowsJobInjectedLaunchFault } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, WindowsJobStartFailedError, type WindowsJobInjectedLaunchFault } from "../src/windows-job-process-host.js";
 import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
 import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 import { CONTAINED_STOP_CONFIRMATION } from "../src/managed-process-tools.js";
@@ -124,8 +124,33 @@ for (const fault of ["desktop_policy_initialize", "desktop_policy_update", "memb
     const terminal = supervisorStatusLines(join(root, "job-host")).filter((line) => line.status === "exited_unknown" || line.status === "stopped");
     assert.ok(terminal.some((line) => line.status === "exited_unknown"), `the host's exit was recorded: ${JSON.stringify(terminal)}`);
     assert.ok(terminal.every((line) => line.errorCode === code), `every terminal status keeps ${code}: ${JSON.stringify(terminal)}`);
+    // The refused start was released on its proven stop: its record is the released tombstone, nothing left to clean up.
+    const records = jobHostRecords(join(root, "job-host"));
+    assert.equal(records.length, 1, JSON.stringify(records));
+    assert.equal(typeof records[0]!.backendOwnershipReleasedAt, "string", `the refused record is released: ${JSON.stringify(records[0])}`);
   });
 }
+
+// A refusal whose stop is not proven (the stricter-only seam leaves the supervisor's ownership unreleased) is never
+// released: the launch fails with its exact record, as any other failed start, and the record stays held.
+test("R2/R4: a refused launch whose stop is not proven fails with its exact record and stays held", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  const root = join(ownRoot, "refuse-unproven");
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const service = createWindowsJobProcessHost({ stateDirectory: join(root, "job-host"), injectedLaunchFault: "membership_watch", injectedRefusedStopUnproven: true });
+  const owner = { runId: "run-refuse-unproven", sessionId: "session-refuse-unproven" };
+  const failure = await (service as unknown as { launchOwned(input: Record<string, unknown>): Promise<unknown> }).launchOwned({
+    ...owner, command: process.execPath, args: ["-e", "0"], workingDirectory: workspace, environment: allowedEnv(), interactive: true, fence,
+  }).then(() => assert.fail("the launch was refused"), (error: unknown) => error);
+  assert.ok(failure instanceof WindowsJobStartFailedError, String(failure));
+  assert.equal(failure.code, "windows_job_membership_watch_unavailable", failure.message);
+  const records = jobHostRecords(join(root, "job-host"));
+  assert.equal(records.length, 1, JSON.stringify(records));
+  assert.equal(failure.startRecord.processId, records[0]!.processId);
+  assert.equal(failure.startRecord.startedAt, records[0]!.startedAt);
+  assert.equal(records[0]!.backendOwnershipReleasedAt, undefined, "an unproven refused start is never released");
+  await assert.rejects(service.releaseOwned(failure.startRecord.processId, owner, failure.startRecord.startedAt, fence));
+});
 
 // A spare host refuses the same way when it is claimed (the policy and the watch start only with the claimed call), and
 // the claim keeps the refusal's code rather than a generic start failure.
@@ -148,6 +173,9 @@ test("R2/R4: a claimed spare refuses with the coded refusal before any spawn", {
     assert.equal(service.spareStats!().fallbacks, 0, "the call was the spare's claim, not a fresh launch");
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(existsSync(marker), false, "the refused workload must never have started");
+    // The claimed spare's refused start was released on its proven stop.
+    const released = jobHostRecords(join(root, "job-host")).filter((record) => typeof record.backendOwnershipReleasedAt === "string");
+    assert.equal(released.length, 1, `the claimed record is released: ${JSON.stringify(jobHostRecords(join(root, "job-host")))}`);
   } finally {
     await service.retireSpare?.().catch(() => undefined);
   }
@@ -315,7 +343,9 @@ test("R2: a host that ends before its started line fails the launch and keeps ev
   const marker = join(root, "ran.txt");
   await assert.rejects(
     launch(process.execPath, ["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setTimeout(() => {}, 60000)`]),
-    blockedStart(/ended before it reported that its workload started/),
+    // The launcher fails on the first terminal status it reads: the one written at the host's exit ("exited before"), or
+    // the failed start recorded after it ("ended before").
+    blockedStart(/(?:ended|exited) before it reported that its workload started/),
   );
   assert.equal(existsSync(marker), true, "the workload ran before the host ended");
   assert.doesNotMatch(readJobEvents(join(root, "job-host")), /"type":"(started|error|natural_stopped)"/, "the host wrote no lifecycle line");
@@ -348,6 +378,12 @@ test("R2: process.run whose Job host ends before its started line is cleanup-blo
 });
 
 /** Each Job record's supervisor status lines (supervisor.jsonl), oldest first, for this test's single record. */
+/** The Job host's durable records (one JSON file per process), as written. */
+function jobHostRecords(jobHostDirectory: string): Record<string, unknown>[] {
+  return readdirSync(jobHostDirectory).filter((name) => name.endsWith(".json"))
+    .map((name) => JSON.parse(readFileSync(join(jobHostDirectory, name), "utf8")) as Record<string, unknown>);
+}
+
 function supervisorStatusLines(jobHostDirectory: string): Record<string, unknown>[] {
   const records = readdirSync(jobHostDirectory).filter((name) => name.endsWith(".json"));
   assert.equal(records.length, 1, `one Job record: ${records.join(", ")}`);
