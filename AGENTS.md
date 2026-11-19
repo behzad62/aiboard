@@ -54,7 +54,7 @@ CLI workers follow `docs/plans/2026-11-14-cli-workers.md`. Claude Code and agy (
   - Build workers through `createManagedCliProcessLauncher` in `cli-worker-runtime.ts`;
   - free checks and Tests through `createExecutionHostCliWorkerProcesses` in `cli-worker-processes.ts`.
 
-  Every process it started must be proven stopped before the Runner collects its work, and an unproven stop pauses the Build with the claim kept. The task8 audit keeps raw launches out of the `cli-worker-*` modules. The crew rules, which the web imports too, are in `cli-crew-policy.ts`.
+  Every process it started must be proven stopped before the Runner collects its work, and an unproven stop pauses the Build with the claim kept. The task8 audit keeps raw launches out of the `cli-worker-*` modules. The host-free crew rules (workers only, Full access), which the web imports too, are in `cli-crew-policy.ts`; `cli-worker-crew.ts` adds the per-OS, root and `.cmd` refusals.
 - **Collect:** the Runner undoes the CLI's commits, restores `docs/project`, re-runs the checks the CLI reports, and submits through the shared path.
 - **Prompt and logins:** model text never goes in argv; the prompt goes on stdin. The CLI's login stays in its own files.
 - **Tests:** they use fake CLIs (`runner-v2/test/support/fake-cli.mjs`), never a real CLI or a real prompt.

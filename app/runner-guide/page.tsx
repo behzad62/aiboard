@@ -187,7 +187,7 @@ aiboard models disable <provider:model>`}
         <pre className="overflow-x-auto rounded-lg border bg-muted p-4 text-sm">aiboard browser install</pre>
         <p className="text-sm text-muted-foreground">
           The CLI uses an installed Google Chrome first, then Microsoft Edge, then Playwright&apos;s Chromium. A Build
-          never downloads a browser: <code>aiboard browser install</code> or the Install browser button in Settings,
+          never downloads a browser: <code>aiboard browser install</code> or the Install browser button in Settings &gt;
           Tools, downloads Chromium only when you choose to. On Linux, Chromium&apos;s system libraries need root, so the
           Runner prints the command for you to run.
         </p>
@@ -209,11 +209,14 @@ aiboard models disable <provider:model>`}
         </p>
         <p>
           CLI workers are workers only, never the Architect, a reviewer or a verifier. They need Full Access, because a
-          CLI runs commands as you with its own permission prompts turned off. So it can reach what you can:
+          CLI runs commands as you with its own permission prompts turned off. So it can reach what you can, and:
         </p>
         <ul className="list-disc space-y-1 pl-6">
-          <li>the Runner undoes the CLI&apos;s local commits, but not a push or a write outside the worktree;</li>
-          <li>it reports the changes it sees in your project folder;</li>
+          <li>the Runner can&apos;t undo a push or a write outside the worktree;</li>
+          <li>
+            the Runner tells the Architect when your project folder&apos;s Git state (HEAD, index or changed files)
+            changed while the CLI ran;
+          </li>
           <li>your own CLI setup (hooks, MCP servers, plugins, instruction files) runs in Builds too.</li>
         </ul>
         <p>The Runner starts the CLI in the task&apos;s worktree. When the CLI finishes, the Runner:</p>
@@ -227,14 +230,16 @@ aiboard models disable <provider:model>`}
           </li>
           <li>runs the checks the CLI reports again itself;</li>
           <li>
-            when those checks pass, submits the work for review like any worker&apos;s. If one fails, the CLI gets one
-            fix round, and then the attempt fails. A question, or a &quot;can&apos;t do this&quot;, goes to the
-            Architect.
+            when every criterion has a passing check, submits the work for review like any worker&apos;s. If a check
+            fails, or a criterion has no passing check, the CLI gets one fix round. If a criterion still has none after
+            it, the attempt fails, unless the time budget cut its check short: the work then goes on, with that
+            criterion marked not verified. A question, or a &quot;can&apos;t do this&quot;, goes to the Architect.
           </li>
         </ul>
         <p>
-          A stop it can&apos;t prove pauses the Build and keeps the task&apos;s work. Run details names what is still
-          running: stop it, then Resume. Collecting the CLI&apos;s work can take a second Resume.
+          A stop it can&apos;t prove pauses the Build and keeps the task&apos;s work. The pause says what failed: close
+          any leftover program it names, then Resume, which tries the stop again. Collecting the CLI&apos;s work can
+          take a second Resume.
         </p>
         <p>
           When a CLI is out of usage or logged out, its task moves, in the same worktree, to another healthy worker (an

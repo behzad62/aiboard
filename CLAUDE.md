@@ -73,7 +73,7 @@ The flow is: **page creates a `Discussion` in the client store → `runClientDis
 - **Runner V2 browsing** is the bundled Playwright CLI (`playwright-cli`, one session per agent session); new runs have no `browser.*` tools, and a browser download is only the owner's `aiboard browser install` or Settings > Tools.
 - **Runner V2 CLI workers** (`docs/plans/2026-11-14-cli-workers.md`): Claude Code and agy (Codex CLI is refused) run as Build workers through the `cli` transport (`runner-v2/src/cli-worker-*.ts`).
   - Only as workers, only under Full access, and on Windows only in v1.
-  - A CLI launches only through the managed process host: Build workers through `createManagedCliProcessLauncher`, free checks and Tests through `createExecutionHostCliWorkerProcesses`. Its stop is proven before Collect, and an unproven stop pauses with the claim kept. The crew rules are in `cli-crew-policy.ts`.
+  - A CLI launches only through the managed process host: Build workers through `createManagedCliProcessLauncher`, free checks and Tests through `createExecutionHostCliWorkerProcesses`. Its stop is proven before Collect, and an unproven stop pauses with the claim kept. The host-free crew rules are in `cli-crew-policy.ts`; `cli-worker-crew.ts` adds the per-OS, root and `.cmd` refusals.
   - On Collect, the Runner undoes the CLI's commits, restores `docs/project`, re-runs the checks it reports, and submits through the shared path.
   - Settings live in the home's `cliWorkers` section (Settings > Providers > CLI workers).
   - Tests use fake CLIs (`runner-v2/test/support/fake-cli.mjs`), never a real CLI or prompt.

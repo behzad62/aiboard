@@ -508,11 +508,12 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 
 ### 8.1 The gate (CW10)
 - **Checks:** `npm run typecheck:runner-v2`, root `npx tsc --noEmit` and `npm run lint` pass on this change.
-- **What CI runs:** PR CI runs a fixed list of files (.github/workflows/runner-v2-portable-execution.yml). It has the `cli-worker-*` suites and a few shared files: child-environment, managed-process, playwright-cli-session, native-build-manager, aiboard-home-store, control-server-home and filesystem-mutation-routing.
+- **What CI runs:** PR CI runs a fixed list of files (.github/workflows/runner-v2-portable-execution.yml). It has the `cli-worker-*` suites and a few shared files: child-environment, managed-process, playwright-cli-session, native-build-manager, aiboard-home-store, control-server-home, filesystem-mutation-routing, static-adapter-policy and runner-resource-cleanup.
   - Most other targeted files these packets name are in no CI workflow.
   - Runner tests among them: native-worker-driver, worker-runtime, workspace-manager, runtime-router, evidence-tools, native-build-initialization, native-build-capabilities, verification-inventory, local-stdio-mcp, live-model-output and windows-process-backend.
-  - Web scripts among them: test-cli-workers-ui, test-build-live-state, test-settings-home and test-native-build-policy.
-  - For the Runner tests among them, the full `test:runner-v2` is their only automated run.
+  - Web scripts among them: test-cli-workers-ui, test-build-live-state, test-native-build-policy, test-build-ui-overhaul and test-settings-home.
+  - The full `test:runner-v2` is the only automated run of those Runner tests and of the first four web scripts.
+  - test-settings-home runs only in `npm run test:home`, which neither CI nor the full suite runs.
 - **The full `test:runner-v2`:** pending, by CI or the owner.
   - On main c1745049 it had 18 failures outside every CI workflow: 16 C3 tests in streaming-process-session-runtime.test.ts and both task8-raw-launch-closure.test.ts tests.
   - All 18 were stale tests, not product regressions. #247 (main 65d51c77) fixed them, and the task8 test now also covers the CLI transport.
@@ -528,7 +529,7 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
     - a cgroup v2 containment plan for Linux;
     - agy's Linux measurement;
     - macOS's own measurement and design.
-  - Lifting Codex's Windows refusal. The R1–R4 fix (#232) is in, and what's left is:
+  - Lifting Codex's Windows refusal. The R1–R4 fix (#232) is in; none of the rest is started:
     - the owner's trace (CW0b report §4.1);
     - a CW0-style measurement with Codex;
     - an answer to the packaged-root opt-out (CW0b report §6).
