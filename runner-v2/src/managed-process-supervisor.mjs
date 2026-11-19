@@ -1013,7 +1013,12 @@ async function endRoot(root) {
         }
       });
       child.once("error", () => finish(false));
-      child.once("close", (code) => finish(code === 0 && output.replace(/^ready\r?\n/, "").trim() === "gone"));
+      child.once("close", (code) => {
+        const gone = code === 0 && output.replace(/^ready\r?\n/, "").trim() === "gone";
+        // Diagnostic only: why an Assign-path root was not proven gone.
+        if (!gone) try { appendFileSync(config.stderrPath, `Assign-path root end was not proven (exit ${code}): ${output.slice(0, 2000)}\n`); } catch {}
+        finish(gone);
+      });
     });
   } finally {
     status.rootEnding = false;

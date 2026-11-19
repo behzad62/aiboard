@@ -596,6 +596,19 @@ public static class ManagedProcessJobHost
             StringBuilder commandLine = new StringBuilder(
                 BuildCommandLine(launch.Application, launch.Arguments));
 
+            // Stricter-only test fault (assign_path_exit_after_create): another child of this host, created before the
+            // intent, outside the Job, that stays alive 60 s; the supervisor must leave it alone. It is started through
+            // the shell, so it inherits none of this host's handles (its pipes stay the host's own).
+            if (injectedFault == "assign_path_exit_after_create")
+            {
+                System.Diagnostics.ProcessStartInfo sentinelStart = new System.Diagnostics.ProcessStartInfo(
+                    Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
+                    "-NoLogo -NoProfile -NonInteractive -Command Start-Sleep 60");
+                sentinelStart.UseShellExecute = true;
+                sentinelStart.WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden;
+                System.Diagnostics.Process sentinel = System.Diagnostics.Process.Start(sentinelStart);
+                EmitLsp(eventPath, "fault_sentinel", (uint)sentinel.Id, null, 0, null);
+            }
             if (!StartSuspended(launch, commandLine, ref processAttributes, ref threadAttributes,
                 environmentBlock, cwd, startup, job, eventPath, out contained, out processInfo))
                 ThrowWin32("CreateProcess");

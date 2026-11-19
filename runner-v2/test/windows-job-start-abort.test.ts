@@ -260,10 +260,19 @@ for (const [fault, window, identity] of [
     const result = await invoke("process.start", { command: process.execPath, args: ["-e", "setTimeout(() => {}, 60000)"] });
     const folder = jobFolders(jobHost)[0];
     const created = folder ? /"type":"fault_created","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
+    const sentinel = folder ? /"type":"fault_sentinel","pid":(\d+)/.exec(folder.events)?.[1] : undefined;
     const statuses = folder ? readFileSync(join(jobHost, folder.name, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean)
       .map((line) => JSON.parse(line) as { status?: string; rootEnding?: boolean; jobEmptyProof?: boolean }) : [];
-    return { result, events: folder?.events ?? "", pid: created ? Number(created) : 0, statuses };
+    return { result, events: folder?.events ?? "", pid: created ? Number(created) : 0, sentinel: sentinel ? Number(sentinel) : 0, statuses };
   });
+  if (fault === "assign_path_exit_after_create") {
+    // The host's other child, created before its intent, is outside the window: it is left alone. The test then ends
+    // it (its own fault's process, a few seconds old).
+    assert.ok(observed.sentinel > 0, observed.events);
+    const sentinelAlive = alive(observed.sentinel);
+    try { process.kill(observed.sentinel); } catch { /* already gone */ }
+    assert.equal(sentinelAlive, true, "the host's child created before the intent was not ended");
+  }
   assert.equal(observed.result.isError, true, JSON.stringify(observed.result.content));
   assert.ok(observed.pid > 0, `the host reported the root it created: ${observed.events}`);
   assert.match(observed.events, /"type":"assign_intent","hostPid":\d+,"hostCreationTime":"\d+","at":"\d+"/, "the intent was written before the create");
