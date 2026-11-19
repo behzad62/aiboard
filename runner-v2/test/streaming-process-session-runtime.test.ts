@@ -2300,7 +2300,9 @@ test("C3 real shared-spool spill failure finalizes lossy evidence and releases a
       spillRoot: join(root, "spool"),
       projectRoot: process.cwd(),
       ownershipId: "c3-round3-shared-owner",
-      tailBytes: 64,
+      // Shorter than the 14-byte output. With no spill, only bytes that leave the tail are lost (4ab8278d), so output
+      // that fit the tail would lose nothing and the spill-open fault would test no durable loss.
+      tailBytes: 8,
       spillBytes: 64,
       artifactStore: artifacts,
       storage,
@@ -2440,7 +2442,9 @@ test(`C3 round4 observes finalized lossy manifest after later cleanup exception 
       spillRoot: join(root, "spool"),
       projectRoot: process.cwd(),
       ownershipId: "c3-round3-shared-owner",
-      tailBytes: 64,
+      // Shorter than the 14-byte output. With no spill, only bytes that leave the tail are lost (4ab8278d), so output
+      // that fit the tail would lose nothing and the spill-open fault would test no durable loss.
+      tailBytes: 8,
       spillBytes: 64,
       artifactStore: artifacts,
       storage,
