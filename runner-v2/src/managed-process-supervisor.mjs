@@ -963,8 +963,10 @@ function malformedAssignEvent(line) {
 /**
  * The host's exit time as FILETIME ticks (100 ns since 1601), as a decimal string: the end of the intent's window.
  * Date.now() has millisecond precision, so it is rounded up by 1 ms, which can only widen the window past the exit.
- * That is safe while this supervisor holds the host's process handle (its pid cannot be reused, so no later child of
- * that pid exists). The window assumes the clock does not move backwards between the intent and the create; if it is
+ * Node closes its handle to the host just before it emits 'exit', so from then on the host's pid can be reused. What
+ * covers that is endRoot's narrowing: a live process that now has the host's pid ends the window at its own creation
+ * time, so none of its children can match. The 1 ms adds at most 1 ms in which a reuser that already exited could have
+ * started a child. The window assumes the clock does not move backwards between the intent and the create; if it is
  * set back, the root's creation time falls before the intent, it is not matched, and the stop stays unproven.
  */
 function fileTimeNow() {
