@@ -279,8 +279,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         continue;
       }
       if (snapshot.status === "unavailable") return { status: "blocked", reason: "outcome_unknown" };
-      // The read refuses with its own reason (the deadline passed between this loop's check and the read, or an output
-      // ACK it could not account for), so the settlement names that reason wherever the deadline lands.
+      // The read refuses with the settlement's own failure when the deadline passed between this loop's check and the
+      // read, so the settlement names the deadline wherever it lands.
       if (snapshot.status === "blocked" && snapshot.error instanceof PortableOutputSettlementFailure) {
         return { status: "blocked", reason: snapshot.error.reason };
       }
