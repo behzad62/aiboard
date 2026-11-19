@@ -10,6 +10,7 @@
 // Windows cases use stricter-only faults in the real Job host and end the start wait once the supervisor is listening
 // (the Job host's test seam for its ceiling, or the call's own cancellation for process.run), never on a fixed deadline.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -333,6 +334,47 @@ for (const fault of ["assign_path_exit_after_create", "assign_path_exit_before_a
   // The exact record stays held: it cannot be released without a recorded stop.
   const { processId, startedAt } = failure.startRecord;
   await assert.rejects(service.releaseOwned(processId, owner, startedAt, fence));
+});
+
+test("a host that died with output retained, before its launcher aborted the start, still has its stop recorded at the abort", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
+  // late_started_line: the workload writes 24 bytes, then the test ends the Job host itself (the supervisor's own
+  // PowerShell child, a few seconds old). The Job empties with the output retained for a reader, and the supervisor
+  // records it unsettled. Only then does the launcher, seeing that terminal status, abort the start: the abort itself
+  // must drop that output and record the stop.
+  const stateDirectory = join(ownRoot, "host-died", "job-host");
+  mkdirSync(stateDirectory, { recursive: true });
+  const owner = { runId: "host-died-run", sessionId: "host-died-session" };
+  const fence = { ownerId: "host-died-owner", fencingToken: 1 };
+  const service = createWindowsJobProcessHost({ stateDirectory, injectedLaunchFault: "late_started_line" });
+  const killed = waitUntil(() => jobFolders(stateDirectory).some((folder) => folder.stdoutBytes >= 24), 50_000).then(() => {
+    const supervisorPid = Number(jobFolders(stateDirectory)[0]?.status.supervisorPid);
+    assert.ok(Number.isSafeInteger(supervisorPid) && supervisorPid > 0);
+    const found = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      `@(Get-CimInstance Win32_Process -Filter "ParentProcessId = ${supervisorPid} AND Name = 'powershell.exe'" | Where-Object { $_.CommandLine -like '*managed-process-job-host.ps1*' }).ProcessId`],
+      { encoding: "utf8", windowsHide: true });
+    const hostPids = found.stdout.split(/\s+/).filter(Boolean).map(Number);
+    assert.equal(hostPids.length, 1, `exactly one Job host under supervisor ${supervisorPid}: ${found.stdout} ${found.stderr}`);
+    process.kill(hostPids[0]!);
+    return hostPids[0]!;
+  });
+  const failure = await service.launchOwned({ ...owner, command: process.execPath, args: ["-e", `process.stdout.write("x".repeat(24)); setTimeout(() => {}, 60000)`],
+    workingDirectory: ownRoot, environment: { ...process.env } as Record<string, string>, interactive: true, fence })
+    .then(() => assert.fail("the host died before it reported the workload started"), (error: unknown) => error);
+  assert.ok(failure instanceof WindowsJobStartFailedError, String(failure));
+  await killed;
+  const [folder] = await abortedStartSettled(stateDirectory);
+  const statuses = readFileSync(join(stateDirectory, folder!.name, "supervisor.jsonl"), "utf8").split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line) as { status?: string; error?: string; jobEmptyProof?: boolean; outputDiscarded?: boolean; retainedOutputBytes?: number });
+  assert.ok(statuses.some((entry) => entry.error === "Windows Job output remains unsettled after the job became empty." && entry.retainedOutputBytes === 24),
+    `the output was retained, unsettled, once the Job was empty: ${JSON.stringify(statuses)}`);
+  const last = statuses.at(-1)!;
+  assert.equal(last.status, "stopped", JSON.stringify(last));
+  assert.equal(last.jobEmptyProof, true, JSON.stringify(last));
+  assert.equal(last.outputDiscarded, true, JSON.stringify(last));
+  assert.equal(last.retainedOutputBytes, 0, JSON.stringify(last));
+  const { processId, startedAt } = failure.startRecord;
+  assert.equal((await service.reconcileOwned(processId, owner, fence)).status, "stopped");
+  assert.equal((await service.releaseOwned(processId, owner, startedAt, fence)).ownershipReleased, true);
 });
 
 test("a stopped start whose output was discarded is settled through the fenced status path, also after a Runner restart", { skip: !WINDOWS && "Windows Job host", timeout: 60_000 }, async () => {
