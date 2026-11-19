@@ -8,16 +8,19 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  ProcessLaunchFailedWithIdentityError,
   ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessEffectFence,
   type ProcessLaunchRequest,
+  type ProcessSignalOptions,
 } from "./process-backend.js";
 import type { ExecutionLifecycleScope, ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshot } from "./portable-process-protocol.mjs";
+import { WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
 import { withOwnedFenceLock } from "./owned-fence-lock.mjs";
 import { WindowsBirthInspectionOwner } from "./windows-birth-inspection.mjs";
@@ -33,7 +36,18 @@ const PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS = 15_000;
 // Windows birth probes per discovery, as before. Each gets all of the time left, so the cap matters only for a probe
 // that fails at once (it stops a powershell.exe spawn every poll).
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
-const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
+// A Windows portable launch's ceiling: for a supervisor that stays alive and silent, never the expected time. The launch
+// ends at once when the supervisor publishes its state, when it exits, or when the call is cancelled (request.signal),
+// and the supervisor bounds each of its own phases. Measured 2026-11-19 on a 16-core Windows 10 host, from launch() to
+// its accepted result (cold: a fresh Runner process):
+//   - idle: cold 0.37 s, sequential 0.20-0.24 s, four at once 0.5-0.9 s;
+//   - 20 busy loops: cold 3.7-5.3 s, sequential 3.0-4.1 s, four at once 2.7-5.3 s;
+//   - 40 busy loops: cold 12.1-15.2 s, sequential 7.3-7.9 s, four at once 7.8-18.1 s.
+// The PR 240 review's host started about 1.8 times slower at the same load (windows-job-process-host.ts), so about 27 s
+// cold and 33 s four at once at 40 busy loops there: the former fixed 30 s cut real starts. 120 s, the Job host's start
+// ceiling, is about 6.6 times this host's worst and 3.7 times the slower host's extrapolated worst. It is not raised
+// further, since a supervisor that exits or a call that is cancelled no longer waits for it.
+const WINDOWS_PORTABLE_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
 const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
 /** A healthy supervisor refreshes CPU evidence every 500 ms at most; much older means it can no longer read it. */
@@ -225,10 +239,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     this.assertPlatform();
     if (this.options.platform === "windows") assertUsableWorkingDirectory(request.intent.workingDirectory, "win32");
     const startupDeadline = Math.min(
-      Date.now() + (this.options.platform === "windows" ? WINDOWS_PORTABLE_STARTUP_DEADLINE_MS : PORTABLE_STARTUP_DEADLINE_MS),
+      Date.now() + (this.options.platform === "windows" ? WINDOWS_PORTABLE_START_CEILING_MS : PORTABLE_STARTUP_DEADLINE_MS),
       this.startupDeadlineAt ?? Number.MAX_SAFE_INTEGER,
     );
     if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
+    // A call cancelled before its supervisor starts never starts one (nothing is created).
+    assertLaunchNotCancelled(request.signal);
     await this.prepareInspection(startupDeadline);
     const nonce = randomBytes(24).toString("hex");
     const directory = join(this.stateDirectory, `owned-${randomUUID()}`);
@@ -259,8 +275,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       fence: { ...request.fence },
       ...windowsHelpers,
     })).toString("base64url");
-    if (Date.now() >= startupDeadline) {
+    if (Date.now() >= startupDeadline || request.signal?.aborted) {
       rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+      assertLaunchNotCancelled(request.signal);
       throw new Error("Portable process startup deadline is exhausted.");
     }
     const child = spawn(process.execPath, [supervisor, encoded], {
@@ -298,7 +315,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       if (supervisorBirth.deadlineExpired) throw new Error("Portable supervisor birth discovery deadline is exhausted.");
       if (!supervisorBirthFingerprint) throw new Error("Portable supervisor birth identity is unavailable.");
-      const state = await this.waitForState(directory, nonce, child.pid, startupDeadline);
+      const state = await this.waitForState(directory, nonce, child.pid, startupDeadline, request.signal);
       if (this.options.platform === "posix") {
         if (!isValidPosixSupervisorStateV2(state) || state.supervisorBirth !== supervisorBirthFingerprint)
           throw new Error("Portable POSIX workload identity was not durably published before launch acceptance.");
@@ -318,6 +335,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
     } catch (error) {
+      // A call cancelled after its supervisor started: the exact identity goes back with the failure and nothing is
+      // cleaned up here, so the caller stops it, verifies it empty and releases it on the supervisor's own proof, as any
+      // binding (the supervisor is still starting, and may already have started the workload).
+      if (identity && error instanceof PortableLaunchCancelledError)
+        throw new ProcessLaunchFailedWithIdentityError(error.message,
+          launchResult(identity, readState(directory)?.updatedAt ?? new Date().toISOString()), { cause: error });
       if (!identity) {
         const failedState = readState(directory);
         if (this.options.platform === "windows" &&
@@ -447,7 +470,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
   }
 
-  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence): Promise<unknown> {
+  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence, options?: ProcessSignalOptions): Promise<unknown> {
     const identity = this.identity(binding);
     await this.assertFence(identity, _fence);
     const validation = this.validate(identity);
@@ -485,7 +508,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const observedState = readState(identity.directory);
       let beforeSignal = observedState?.status === "outcome_unknown"
         ? this.windowsMembershipSnapshot(identity, true)
-        : await this.waitForKnownEmptiness(identity);
+        : await this.waitForWindowsSignalReadiness(identity, options);
       if (typeof beforeSignal !== "string")
         beforeSignal = beforeSignal.state === "ready" ? beforeSignal.emptiness : beforeSignal.state;
       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
@@ -831,6 +854,51 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     return result;
   }
+  // Windows, before a signal: a supervisor that is alive and still preparing (no state published yet, or its own
+  // "preparing" state) is on its way to the final state a signal needs; a launch cancelled after spawn hands its
+  // identity to cleanup at exactly that point. The supervisor's own startup deadline ends that phase (a cold start
+  // under load took 12-18 s on 16 cores), so the wait follows its progress up to the shared start ceiling instead of a
+  // fixed 2.5 s. Any other unknown keeps the short settle wait. The caller's deadline and abort end it sooner, and its
+  // timer never holds the process open. Waiting decides nothing: the fenced effect re-attests the exact identity
+  // before any control is written.
+  private async waitForWindowsSignalReadiness(identity: Identity, options?: ProcessSignalOptions): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+    const started = Date.now();
+    const settleDeadline = started + Math.max(500, this.pollIntervalMs * 100);
+    const stopAt = Math.min(started + WINDOWS_PORTABLE_START_CEILING_MS, options?.deadlineAt ?? Number.POSITIVE_INFINITY);
+    // The per-poll liveness probe is a PID check only. Once the wait outlasts the settle window, one asynchronous
+    // exact birth check (cancelled when the wait ends) catches a supervisor whose PID was reused: it ends the wait.
+    const inspection = new AbortController();
+    let birth: "pending" | "same" | "other" | "unknown" | undefined;
+    try {
+      let result = await this.emptiness(identity);
+      while (result === "outcome_unknown" && !options?.signal?.aborted) {
+        const now = Date.now();
+        if (now >= stopAt) break;
+        if (now >= settleDeadline) {
+          if (birth === "other" || !this.windowsSupervisorPreparing(identity)) break;
+          if (birth === undefined) {
+            birth = "pending";
+            void this.supervisorBirth(identity, inspection.signal).then((value) => { birth = value; }, () => { birth = "unknown"; });
+          }
+        }
+        await unrefDelay(Math.min(this.pollIntervalMs, Math.max(0, stopAt - now)), options?.signal);
+        result = await this.emptiness(identity);
+      }
+      return result;
+    } finally { inspection.abort(); }
+  }
+  private async supervisorBirth(identity: Identity, signal: AbortSignal): Promise<"same" | "other" | "unknown"> {
+    const inspection = this.operations.inspectProcessBirthAsync
+      ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
+      : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+    if (inspection.state === "unknown") return "unknown";
+    return inspection.state === "present" && sameProcessBirth(inspection.fingerprint, identity.supervisorBirth) ? "same" : "other";
+  }
+  private windowsSupervisorPreparing(identity: Identity): boolean {
+    const state = readState(identity.directory);
+    if (state !== undefined && (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid || state.status !== "preparing")) return false;
+    return pidAlive(identity.supervisorPid);
+  }
   private async cleanupFailedLaunch(identity: Identity): Promise<void> {
     const deadline = Date.now() + 3_000;
     let validation = this.validate(identity);
@@ -987,8 +1055,12 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     this.outputOffsets.set(identity.nonce, offsets);
   }
-  private async waitForState(directory: string, nonce: string, pid: number, deadline: number): Promise<SupervisorState> {
+  private async waitForState(directory: string, nonce: string, pid: number, deadline: number, signal?: AbortSignal): Promise<SupervisorState> {
     while (Date.now() < deadline) {
+      // Windows: a cancellation after the supervisor started (during its birth probe or this wait) fails the launch with
+      // its exact identity, which exists from the supervisor's birth. A POSIX identity exists only once the supervisor
+      // publishes, so a POSIX launch finishes this short wait and the caller's stop then stops the accepted launch.
+      if (this.options.platform === "windows") assertLaunchNotCancelled(signal);
       const state = readState(directory);
       if (Date.now() >= deadline) break;
       if (state && state.nonce === nonce && state.supervisorPid === pid && state.status !== "preparing") return state;
@@ -1223,6 +1295,18 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 function delay(milliseconds: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+/** A poll delay that never holds the process open and ends early on the caller's abort. */
+function unrefDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, milliseconds); timer.unref?.();
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+class PortableLaunchCancelledError extends Error {}
+function assertLaunchNotCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new PortableLaunchCancelledError("Portable process launch was cancelled before its supervisor proved the launch.");
+}
 const DEFAULT_OPERATIONS: NativeProcessOperations = {
   inspectProcessBirth: osProcessBirth,
   inspectProcessBirthAsync: osProcessBirthAsync,

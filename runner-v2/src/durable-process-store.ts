@@ -2985,9 +2985,11 @@ export const ROLLBACK_PARSEABLE_SCRUB_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The scrub decisions a durable process record keeps: only kinds a rollback to 0.3.20 parses. Two-step rollout: this
- * release parses removed_packaged_alias_path (R3) but never persists it; the scrub itself still happens, and the
- * decision stays in the in-memory and tool-result audit. Persisting it starts in the release after 0.3.21.
+ * The scrub decisions a durable process record keeps: only kinds a rollback to 0.3.20 parses. The Runner parses
+ * removed_packaged_alias_path (R3) from 0.3.21 but does not persist it yet: `aiboard update --rollback` returns to the
+ * version installed before the update, which can be older than the release that first parsed a kind (an update from
+ * 0.3.20 straight to a later release rolls back to 0.3.20). The scrub itself still happens, and the decision stays in
+ * the in-memory and tool-result audit. Persisting it waits for a rollback floor at or above 0.3.21.
  */
 export function persistableScrubDecisions(
   decisions: readonly import("./child-environment.js").ChildEnvironmentDecision[],

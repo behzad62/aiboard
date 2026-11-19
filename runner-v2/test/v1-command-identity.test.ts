@@ -187,8 +187,9 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
 });
 
 // The scrub decision kinds Runner 0.3.20's parseScrubDecisions (durable-process-store.ts at 4ed5a01d) accepts in a durable
-// process record; any other kind makes it call the record corrupt after `aiboard update --rollback`. A new kind is
-// parsed in one release and persisted only from the next (removed_packaged_alias_path: persisted after 0.3.21).
+// process record; any other kind makes it call the record corrupt after `aiboard update --rollback`, which returns to
+// the previously installed version (possibly older than the release that first parsed a kind). So
+// removed_packaged_alias_path, parsed from 0.3.21, stays out of durable records until a rollback floor covers it.
 const SCRUB_KINDS_0_3_20:readonly string[]=["removed_runner_path","removed_ambient","removed_explicit","applied_explicit","rejected_explicit","granted_credential","applied_runner"];
 
 test("Rollback pin: a durable process record persists only scrub kinds 0.3.20 parses",async()=> {

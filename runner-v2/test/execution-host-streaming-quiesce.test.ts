@@ -83,3 +83,23 @@ test("host quiesce accepts terminate when reconcile already proves exited", asyn
   assert.equal(outcome, "verified");
   assert.equal(forceCalls, 0, "reconcile exited before signaling needs no force escalation");
 });
+
+test("host quiesce bounds every signal by its own deadline", async () => {
+  const bounds: unknown[] = [];
+  let reconcileState: "running" | "exited" = "running";
+  const backend = {
+    async reconcile() { return { state: reconcileState }; },
+    async signal(_binding: ProcessBackendBinding, action: string, _fence: ProcessEffectFence, options?: unknown) {
+      bounds.push([action, options]);
+      // A refused terminate goes straight to force, so both signals are seen without waiting out the grace.
+      if (action === "terminate") throw new Error("Owned descendant identity is unavailable.");
+      reconcileState = "exited";
+      return { state: "exited" };
+    },
+    async verifyEmpty() { return { empty: true }; },
+  } as unknown as ProcessBackend;
+  const deadlineAt = Date.now() + 1_000;
+  assert.equal(await quiesceExactBackend(record, fence, deadlineAt, async () => ({ backend })), "verified");
+  assert.deepEqual(bounds, [["terminate", { deadlineAt }], ["force_terminate", { deadlineAt }]],
+    "a backend's own wait before a signal never outlives the cleanup that asked for it");
+});
