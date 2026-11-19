@@ -653,6 +653,17 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       );
       throw error;
     }
+    // A caller that gave the invocation up before its claim (a tool call the broker stopped waiting for while it was
+    // still on its way here, a cancelled attempt) never gets a launch: the fresh launch below has no abort check of its
+    // own (the stop race only stops a process it has already launched), so nothing may start after the caller's stop
+    // proof read this invocation as absent. The claim is settled as never launched.
+    if (request.signal?.aborted) {
+      await this.failBeforeLaunch(record, output, "Cancelled before launch: the caller's signal was aborted.");
+      throw new SubprocessRuntimeError(
+        "launch_not_proven",
+        "The invocation was cancelled before its launch; nothing was started.",
+      );
+    }
     let preparedEnvironment;
     try {
       preparedEnvironment = this.options.environments.prepare({
