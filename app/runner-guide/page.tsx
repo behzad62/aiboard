@@ -193,6 +193,38 @@ aiboard models disable <provider:model>`}
         </p>
       </section>
       <section className="space-y-3">
+        <h2 className="font-display text-xl font-semibold">CLI workers</h2>
+        <p>
+          A Build can use Claude Code and agy, signed in on this computer, as workers next to API models. Turn each one
+          on in Settings, Providers, CLI workers. Settings shows whether the CLI is installed and logged in, and lists
+          its models. Test sends it one tiny prompt, which uses a little of that CLI&apos;s usage. The CLI signs in with
+          its own login: AI Board never reads that login or keeps a key for it. A CLI&apos;s use isn&apos;t counted
+          toward a USD budget, but the time limits apply, 90 minutes per attempt by default.
+        </p>
+        <p>
+          CLI workers are workers only, never the Architect, a reviewer or a verifier. They need Full Access, because a
+          CLI runs commands as you with its own permission prompts turned off. The Runner starts the CLI in the
+          task&apos;s worktree. When the CLI finishes, the Runner:
+        </p>
+        <ul className="list-disc space-y-1 pl-6">
+          <li>proves every process it started has stopped;</li>
+          <li>undoes the CLI&apos;s own commits;</li>
+          <li>runs the checks the CLI reports again itself;</li>
+          <li>submits the changes for review, like any worker&apos;s.</li>
+        </ul>
+        <p>
+          A stop it can&apos;t prove pauses the Build and keeps the task&apos;s work. When a CLI is out of usage or
+          logged out, its task moves to another healthy worker with a summary of the work so far. A passing Test ends
+          that CLI&apos;s cooldown.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          CLI workers run on Windows only for now. Codex CLI is refused there until a fix lands, because some of the
+          processes it started ran outside the Runner&apos;s Job. On Linux and macOS, CLI workers are refused, because
+          Claude Code and Codex run commands outside the process group the Runner can stop. Use Claude Code&apos;s
+          native <code>claude.exe</code>: its npm <code>.cmd</code> shim is refused.
+        </p>
+      </section>
+      <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Recovery</h2>
         <p>
           Run <code>{RUNNER_START_COMMAND}</code> again in the same project folder. Its state lives in your user data

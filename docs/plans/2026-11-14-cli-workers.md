@@ -503,5 +503,20 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW6 | Done | #236 (eab536f1) |
 | CW7 | Done | #234, follow-ups #241 |
 | CW8 | Done | #237 |
-| CW9 | In review 2026-11-19; the Runner release it needs, 0.3.21 (CW5–CW8, #238, #239, #240, #242, #232), is out, so it can merge (a push to main deploys aiboard.me). The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 |
-| CW10 | Not started | — |
+| CW9 | Done 2026-11-19, after Runner 0.3.21 (CW5–CW8, #238, #239, #240, #242, #232) went live. The web needs `/v2/home` `capabilities.cliWorkers` (CW1) and `/v2/cli-workers` (CW3); with an older Runner it offers no CLI worker and says to update | #235 (main 0534f29e) |
+| CW10 | Docs done 2026-11-19 (the Runner guide's CLI workers section, AGENTS.md, CLAUDE.md, this status, the 2026-11-03 plan's §6.5 note). The owner's steps are pending (below) | this pull request |
+
+### 8.1 The gate (CW10)
+- **Checks:** `npm run typecheck:runner-v2`, root `npx tsc --noEmit` and `npm run lint` pass on this change. PR CI ran each packet's targeted tests when it merged.
+- **The full `test:runner-v2`:** pending, by CI or the owner.
+  - On main c1745049 it had 18 failures outside every CI workflow: 16 C3 tests in streaming-process-session-runtime.test.ts and both task8-raw-launch-closure.test.ts tests.
+  - All 18 were stale tests, not product regressions. #247 (main 65d51c77) fixed them, and the task8 test now also covers the CLI transport.
+- **The owner's real Build with each CLI:** pending for Claude Code and for agy. Codex is refused on Windows, so it has no run.
+  - The owner chose to run it as the AIBoard Build of the 2026-11-03 plan's SB1–SB9 and DX1–DX6 on this repository (OD-33), not on a toy project.
+  - That run is also the first real use of the restricted Test forms (§3.4) and of the §3.5 launch forms.
+- **Runner releases that carry CLI workers:** 0.3.21 (CW5–CW8 and the CW0b fix) and 0.3.22 (#244: progress-based portable start and late backend binding).
+- **Open follow-ups named in this plan, none started:**
+  - Lifting the POSIX refusals: a cgroup v2 containment plan for Linux, plus macOS's own measurement and design (§3.11).
+  - Codex on Windows stays refused (the CW0b report §6).
+  - No recovery owner reopens `state/transient-runs/<id>/` after a Runner crash during a Test or check, and nothing sweeps a kept `state/cli-worker-tests/<random>/` folder (§3.4).
+  - §3.11a's open process edge: the Windows launch cleanup reads `handledControl` outside its fence. It is listed as open and was not re-checked here.
