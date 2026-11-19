@@ -690,7 +690,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       removedNames: [...preparedEnvironment.audit.removedNames],
       explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
       grantedNames: [...preparedEnvironment.audit.grantedNames],
-      // Only kinds a rollback parses (two-step rollout of a new kind); the in-memory and tool-result audit keep all.
+      // Only kinds a rollback to 0.3.20 parses: a rollback returns to the previously installed version, which can be
+      // older than the release that first parsed a kind. The in-memory and tool-result audit keep every decision.
       scrubDecisions: persistableScrubDecisions(preparedEnvironment.audit.decisions),
     };
     record = this.current(record.invocationId);

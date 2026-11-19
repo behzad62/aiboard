@@ -2977,20 +2977,19 @@ function resultMatches(record: DurableSubprocessRecord): boolean {
 }
 
 /**
- * The scrub decision kinds that the Runner a rollback reaches parses in a durable process record (its
- * parseScrubDecisions): 0.3.21, the release before this one. A record that holds any other kind is corrupt to it, and
- * `aiboard update --rollback` runs it on the state this release wrote.
+ * The scrub decision kinds that Runner 0.3.20 parses in a durable process record (its parseScrubDecisions). A record that
+ * holds any other kind is corrupt to 0.3.20, and `aiboard update --rollback` runs 0.3.20 on the state this release wrote.
  */
 export const ROLLBACK_PARSEABLE_SCRUB_KINDS: ReadonlySet<string> = new Set([
   "removed_runner_path", "removed_ambient", "removed_explicit", "applied_explicit", "rejected_explicit", "granted_credential", "applied_runner",
-  // R3: parsed from 0.3.21 (two-step rollout; 0.3.21 itself did not persist it), so persisted from the release after it.
-  "removed_packaged_alias_path",
 ]);
 
 /**
- * The scrub decisions a durable process record keeps: only kinds a rollback parses. A new kind is parsed in one release
- * and persisted only from the next; until then the scrub itself still happens, and the decision stays in the in-memory
- * and tool-result audit.
+ * The scrub decisions a durable process record keeps: only kinds a rollback to 0.3.20 parses. The Runner parses
+ * removed_packaged_alias_path (R3) from 0.3.21 but does not persist it yet: `aiboard update --rollback` returns to the
+ * version installed before the update, which can be older than the release that first parsed a kind (an update from
+ * 0.3.20 straight to a later release rolls back to 0.3.20). The scrub itself still happens, and the decision stays in
+ * the in-memory and tool-result audit. Persisting it waits for a rollback floor at or above 0.3.21.
  */
 export function persistableScrubDecisions(
   decisions: readonly import("./child-environment.js").ChildEnvironmentDecision[],

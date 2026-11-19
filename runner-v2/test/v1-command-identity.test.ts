@@ -178,28 +178,25 @@ test("V1 actual native project child cannot resolve runner-only tsx while system
         assert.ok(record.environmentAudit.removedNames.includes("npm_config_cache"));
         assert.ok(record.environmentAudit.removedNames.includes("INIT_CWD"));
         assert.ok(record.environmentAudit.scrubDecisions?.some((entry)=>entry.kind==="removed_runner_path"));
-        // Every kind a durable record holds is one Runner 0.3.21 parses, so a rollback still reads the record.
-        for(const decision of record.environmentAudit.scrubDecisions??[])assert.ok(SCRUB_KINDS_0_3_21.includes(decision.kind),`0.3.21 parses ${decision.kind}`);
-        // The second step of the rollout: the packaged-alias scrub is persisted now that the rollback target parses it.
-        if(windowsApps)assert.ok(record.environmentAudit.scrubDecisions?.some((entry)=>entry.kind==="removed_packaged_alias_path"),"the record keeps the packaged-alias scrub");
+        // Every kind a durable record holds is one Runner 0.3.20 parses, so a rollback still reads the record.
+        for(const decision of record.environmentAudit.scrubDecisions??[])assert.ok(SCRUB_KINDS_0_3_20.includes(decision.kind),`0.3.20 parses ${decision.kind}`);
         assert.doesNotMatch(JSON.stringify(record.environmentAudit),/private-v1/);
       }
     } finally {reopened.store.close();}
   } finally {await host.close();rmSync(probePath,{force:true});rmSync(root,{recursive:true,force:true});}
 });
 
-// The scrub decision kinds Runner 0.3.21's parseScrubDecisions (durable-process-store.ts at 88d60c13, the commit 0.3.21 is
-// cut from) accepts in a durable process record; any other kind makes it call the record corrupt after
-// `aiboard update --rollback`. A new kind is parsed in one release and persisted only from the next.
-const SCRUB_KINDS_0_3_21:readonly string[]=["removed_runner_path","removed_ambient","removed_explicit","applied_explicit","rejected_explicit","granted_credential","applied_runner","removed_packaged_alias_path"];
+// The scrub decision kinds Runner 0.3.20's parseScrubDecisions (durable-process-store.ts at 4ed5a01d) accepts in a durable
+// process record; any other kind makes it call the record corrupt after `aiboard update --rollback`, which returns to
+// the previously installed version (possibly older than the release that first parsed a kind). So
+// removed_packaged_alias_path, parsed from 0.3.21, stays out of durable records until a rollback floor covers it.
+const SCRUB_KINDS_0_3_20:readonly string[]=["removed_runner_path","removed_ambient","removed_explicit","applied_explicit","rejected_explicit","granted_credential","applied_runner"];
 
-test("Rollback pin: a durable process record persists only scrub kinds 0.3.21 parses",async()=> {
+test("Rollback pin: a durable process record persists only scrub kinds 0.3.20 parses",async()=> {
   const {ROLLBACK_PARSEABLE_SCRUB_KINDS,persistableScrubDecisions}=await import("../src/durable-process-store.js");
-  assert.deepEqual([...ROLLBACK_PARSEABLE_SCRUB_KINDS].sort(),[...SCRUB_KINDS_0_3_21].sort());
-  // A kind newer than the rollback target (here a made-up one) is still dropped; the packaged-alias scrub is kept.
-  const future={kind:"removed_future_kind",name:"PATH"} as unknown as Parameters<typeof persistableScrubDecisions>[0][number];
-  const kept=persistableScrubDecisions([{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_packaged_alias_path",name:"PATH",count:2},future,{kind:"removed_ambient",name:"INIT_CWD"}]);
-  assert.deepEqual(kept,[{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_packaged_alias_path",name:"PATH",count:2},{kind:"removed_ambient",name:"INIT_CWD"}]);
+  assert.deepEqual([...ROLLBACK_PARSEABLE_SCRUB_KINDS].sort(),[...SCRUB_KINDS_0_3_20].sort());
+  const kept=persistableScrubDecisions([{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_packaged_alias_path",name:"PATH",count:2},{kind:"removed_ambient",name:"INIT_CWD"}]);
+  assert.deepEqual(kept,[{kind:"removed_runner_path",name:"PATH",count:1},{kind:"removed_ambient",name:"INIT_CWD"}]);
   // The one writer of a record's scrub decisions goes through the filter (the store's own read parses them).
   const writers=readdirSync(join(import.meta.dirname,"..","src")).filter((name)=>/\.(?:ts|mts|mjs)$/.test(name))
     .flatMap((name)=>[...readFileSync(join(import.meta.dirname,"..","src",name),"utf8").matchAll(/scrubDecisions: (?!parseScrubDecisions\()([^,\r\n]+)/g)].map((match)=>`${name}: ${match[1]}`));
