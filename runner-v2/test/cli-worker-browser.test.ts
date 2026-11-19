@@ -10,8 +10,9 @@
  * client in place of the guarded Playwright CLI (exit 1 on a failed command, as playwright-cli-guard.mjs does). No real
  * CLI is started and no prompt is sent.
  *
- * CW6's re-runs: this file stubs CW6's `rerunChecks` seam with the real `run_evidence_command` tool, run as the
- * assigned worker (each passing re-run links its criteria; a re-run with a failing exit links nothing).
+ * CW6's re-runs: most tests stub CW6's `rerunChecks` seam with the real `run_evidence_command` tool, run as the
+ * assigned worker (each passing re-run links its criteria; a re-run with a failing exit links nothing). One test runs
+ * the production re-runner (createCliCheckRerunner), as the factory wires it, in the re-run session.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -21,7 +22,10 @@ import test, { describe, type TestContext } from "node:test";
 
 import { composeRunnerProcessEnvironments } from "../src/child-environment.js";
 import { CLI_BROWSER_SESSION_READY_WAIT_MS, CLI_NO_BROWSER_NOTE, CLI_NO_BROWSING_NOTE, createManagedCliBrowserSessions, isPlaywrightCliCheck } from "../src/cli-worker-browser.js";
-import { createManagedCliProcessLauncher, runCliWorkerAttempt, type CliCheckRerunner, type CliWorkerHostFacts } from "../src/cli-worker-runtime.js";
+import { cliAttemptRecords, createManagedCliProcessLauncher, runCliWorkerAttempt, type CliCheckRerunner, type CliWorkerHostFacts } from "../src/cli-worker-runtime.js";
+import { createCliCheckRerunner } from "../src/cli-worker-evidence.js";
+import { captureWorkingTreeIdentity, restoreWorkingTree } from "../src/command-evidence-identity.js";
+import { RUNNER_RERUN_OF_CLI_CLAIM } from "../src/evidence-store.js";
 import { createEvidenceTools } from "../src/evidence-tools.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { ManagedProcessError, MANAGED_OUTPUT_WAIT_MAX_MS } from "../src/managed-process-contracts.js";
@@ -35,9 +39,12 @@ import {
   resolvePlaywrightCliInstall,
 } from "../src/playwright-cli.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
+import { workerSubmissionContext } from "../src/worker-runtime.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import { policyGit } from "./support/cli-worker-fixture.js";
 import { FAKE_CLI_SCENARIO_ENV, writeFakeCliScenario, type FakeCliRecord, type FakeCliScenario } from "./support/fake-cli.js";
-import { RUN, TASK, SESSION, WINDOWS, harness, claudeStream, records, type Harness } from "./support/cli-worker-runtime-harness.js";
+import { RUN, TASK, SESSION, WINDOWS, WORKER, harness, claudeStream, records, type Harness } from "./support/cli-worker-runtime-harness.js";
+import { asyncFixtureGitContext, runGitAsync } from "./support/git-fixture.js";
 
 const ON_WINDOWS = process.platform === "win32";
 const APP = "http://127.0.0.1:9/app";
@@ -259,8 +266,54 @@ function done(checks: Array<Record<string, unknown>>): Record<string, unknown> {
   return { outcome: "done", summary: "Changed value.txt to two and checked the page.", question: null, replanReason: null, checks, notRun: [], concerns: [] };
 }
 
-// The two tests have their own harness, host and stand-ins, so they run side by side.
+// The tests have their own harness, host and stand-ins, so they run side by side.
 describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, () => {
+  test("CW6 with CW8: the production re-runner's playwright-cli re-runs find the re-run session, and its screenshot supports the criterion", (t) => withFixture(t, "rerunner", "chromium", async (f) => {
+    const record = join(f.h.root, "fake", "rerunner.json");
+    f.scenario({
+      cli: "claude-code", stdout: claudeStream(f.h, done(browserChecks())), record,
+      actions: [
+        { write: "value.txt", content: "two\n" },
+        { run: ["playwright-cli", "--json", "goto", APP] },
+        { run: ["playwright-cli", "--json", "screenshot", `--filename=${SHOT}`] },
+      ],
+    });
+    // The re-runner as the factory wires it, with the harness's tree capture and the Runner Git policy's restore.
+    const indexRoot = join(f.h.state, "tree-index");
+    const capture = (cwd: string) => captureWorkingTreeIdentity(cwd, indexRoot, runGitAsync);
+    const restoreTree = (cwd: string, treeId: string) => restoreWorkingTree(cwd, indexRoot, policyGit, treeId);
+    const rerunChecks = createCliCheckRerunner({
+      git: { ...asyncFixtureGitContext("full", f.run.commandExecution), workingTreeForCall: (_context, cwd) => capture(cwd) },
+      evidenceStore: f.h.evidence, artifacts: f.h.artifacts, execution: f.run.commandExecution, executionGrants: f.run.executionGrants,
+      permissionProfile: "full", captureTree: capture, restoreTree,
+    });
+    const tree = await capture(f.h.workspace.path);
+    const result = await runCliWorkerAttempt({ ...f.deps({ rerun: false }), rerunChecks, restoreTree }, f.h.input());
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    if (result.type !== "submitted") return;
+
+    // Both checks ran in the session the Runner started for its re-runs, a second one of the same owner.
+    const [cliSession, rerunSession, ...more] = f.daemons();
+    assert.equal(more.length, 0, "one session for the CLI, one for the Runner's re-runs");
+    const reruns = f.reruns();
+    assert.deepEqual(reruns.map((entry) => [entry.command, entry.exitCode]), [["playwright-cli", 0], ["playwright-cli", 0]]);
+    const shot = await f.h.artifacts.get(reruns[1]!.outputs[0]!);
+    assert.equal(shot.subarray(PNG.length).toString("utf8"),
+      `screenshot of ${APP} by daemon ${rerunSession!.pid} of ${playwrightCliSessionName(RUN, SESSION)}`);
+    const evidence = f.h.evidence.list({ runId: RUN, taskId: TASK });
+    assert.ok(evidence.every((entry) => entry.fact.kind === "command" && entry.fact.source === RUNNER_RERUN_OF_CLI_CLAIM));
+    // The screenshot changed only the browser output folder: the Runner put the CLI's own screenshot back, and the
+    // re-run still supports the criterion, citing its screenshot.
+    assert.deepEqual((result.changeSet.criterionEvidenceLinks ?? []).map((link) => [link.criterionId, link.artifactHashes.includes(reruns[1]!.outputs[0]!)]), [["value", true]]);
+    assert.ok(!result.changeSet.unresolvedConcerns.some((concern) => /re-run .* changed/.test(concern)), JSON.stringify(result.changeSet.unresolvedConcerns));
+    assert.equal(tree.status, "known");
+
+    // Nothing of either session is left.
+    assert.equal(daemonAlive(cliSession!.pid), false);
+    assert.equal(daemonAlive(rerunSession!.pid), false);
+    assert.deepEqual(await f.running(), []);
+  }));
+
   test("CW8: the fake CLI's playwright-cli reaches the owner's session, a re-run keeps its screenshot as evidence, a failed command fails its re-run, and no session is left", (t) => withFixture(t, "browse", "chromium", async (f) => {
     const record = join(f.h.root, "fake", "browse.json");
     // A failed command: exit 1 in the CLI's run and in its re-run, so it supports nothing.
@@ -328,26 +381,29 @@ describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, 
     const rerun = deps.rerunChecks!;
     const result = await runCliWorkerAttempt({ ...deps, rerunChecks: async (input) => { browserUnavailable = input.browserUnavailable; return await rerun(input); } }, f.h.input());
 
-    assert.equal(injected, 1, "one start, never retried");
-    const browser = records(f.h)[0]?.browser;
-    assert.equal(browser?.status, "start_failed");
-    assert.match(browser?.reason ?? "", /could not be evaluated within 8000 ms on this busy host/);
+    // CW6: the screenshot criterion has no evidence, so the CLI gets its one fix round, a second run with its own session
+    // start: one start per run, never retried.
+    assert.equal(injected, 2, "one start per CLI run, never retried");
+    for (const entry of records(f.h)) {
+      assert.equal(entry.browser?.status, "start_failed");
+      assert.match(entry.browser?.reason ?? "", /could not be evaluated within 8000 ms on this busy host/);
+    }
     assert.match((JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord).stdin, /No browser is running for this task/);
     // The CLI ran, and its browser checks were not run: no re-run session, no browser re-run.
     assert.equal(browserUnavailable, true);
     assert.equal(f.reruns().length, 0);
-    // One session start, whose ready wait failed, then the CLI; nothing of either is left.
-    assert.deepEqual(started, ["playwright-cli-session", process.execPath]);
+    // Per run, one session start, whose ready wait failed, then the CLI; nothing of either is left.
+    assert.deepEqual(started, ["playwright-cli-session", process.execPath, "playwright-cli-session", process.execPath]);
     for (const daemon of f.daemons()) assert.equal(daemonAlive(daemon.pid), false);
     assert.deepEqual(await f.running(), []);
-    // Nothing was submitted: the screenshot criterion has no evidence.
-    assert.match(JSON.stringify(result), /cli_submission_refused/);
+    // Nothing was submitted: after its fix round the screenshot criterion still has no evidence (CW6).
+    assert.match(JSON.stringify(result), /cli_checks_unsupported: after its fix round/);
     // Neither bound was raised: the pattern's wall ceiling and the one ready read.
     assert.equal(PATTERN_WALL_CEILING_MS, 8_000);
     assert.equal(CLI_BROWSER_SESSION_READY_WAIT_MS, MANAGED_OUTPUT_WAIT_MAX_MS);
     assert.equal(MANAGED_OUTPUT_WAIT_MAX_MS, 30_000);
 
-    // The run's inventory recorded no browser: the next run of the attempt starts no session, and the CLI is told so.
+    // The run's inventory recorded no browser: the task's next attempt starts no session, and the CLI is told so.
     f.run.managedProcesses.readOutput = readOutput;
     f.sessions.configureRun(RUN, { browser: null });
     // The failed start's daemon may have registered its port before it was stopped: gone, so no stale port is reached.
@@ -358,10 +414,27 @@ describe("CW8: a CLI worker's browser session, end to end", { concurrency: 2 }, 
       cli: "claude-code", record: none, actions: [{ write: "value.txt", content: "two\n" }, { run: ["playwright-cli", "--json", "goto", APP] }],
       stdout: claudeStream(f.h, done([{ label: "node", executable: "node", args: ["-e", "0"], cwd: null, outputs: null, criterionIds: ["value"] }])),
     });
-    const second = await runCliWorkerAttempt(f.deps(), f.h.input());
+    // The failed attempt is requeued: attempt 2, its own session and owner.
+    const transition = (key: string, status: string, patch: Record<string, unknown>) => f.h.scheduler.append({
+      runId: RUN, type: "task.transitioned", occurredAt: "2026-11-18T00:00:03.000Z", actor: { role: "runner", id: "scheduler" },
+      idempotencyKey: key, payload: { taskId: TASK, status, patch },
+    });
+    transition("fail:1", "failed", { failureReason: "cli_checks_unsupported" });
+    transition("replan:1", "planned", {});
+    transition("assign:2", "assigned", { attempt: 2, assignedWorkerId: WORKER });
+    transition("run:2", "running", { workspacePath: "workspace" });
+    const sessionId = "worker:run_1:task_a:2";
+    const next = f.h.input({
+      attempt: 2, sessionId, owner: { runId: RUN, sessionId, actor: { role: "worker", id: WORKER } },
+      submission: workerSubmissionContext({
+        git: asyncFixtureGitContext(), runId: RUN, sessionId, taskId: TASK, actorId: WORKER, attempt: 2, workspace: f.h.workspace,
+        workspaceManager: f.h.workspaces, artifacts: f.h.artifacts, ledger: f.h.ledger, schedulerStore: f.h.scheduler, evidenceStore: f.h.evidence,
+      }),
+    });
+    const second = await runCliWorkerAttempt(f.deps(), next);
     assert.equal(second.type, "submitted", JSON.stringify(second));
     assert.deepEqual(started, [process.execPath], "no session was started");
-    assert.deepEqual(records(f.h).at(-1)?.browser, { status: "none" });
+    assert.deepEqual(cliAttemptRecords(f.h.scheduler, next).at(-1)?.browser, { status: "none" });
     const ran = JSON.parse(readFileSync(none, "utf8")) as FakeCliRecord;
     assert.ok(ran.stdin.includes(CLI_NO_BROWSER_NOTE));
     // A playwright-cli command finds no session to reach.

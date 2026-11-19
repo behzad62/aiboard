@@ -89,10 +89,80 @@ export async function fingerprintChildEnvironment(input: {
 }
 
 const CAPTURES = new WeakMap<GitRunner, (cwd: string) => Promise<WorkingTreeIdentity>>();
+const RESTORES = new WeakMap<GitRunner, (cwd: string, treeId: string) => Promise<string[]>>();
 /** Trusted composition only; never supplied by model tool arguments. */
 export function bindWorkingTreeCapture(execute: GitRunner, capture: (cwd: string) => Promise<WorkingTreeIdentity>): void { CAPTURES.set(execute, capture); }
 export async function workingTreeForRunner(execute: GitRunner, cwd: string): Promise<WorkingTreeIdentity> {
   return await CAPTURES.get(execute)?.(cwd) ?? unknownWorkingTree();
+}
+/** Trusted composition only: the restore that goes with the capture bound to the same runner (same private root). */
+export function bindWorkingTreeRestore(execute: GitRunner, restore: (cwd: string, treeId: string) => Promise<string[]>): void { RESTORES.set(execute, restore); }
+export async function restoreWorkingTreeForRunner(execute: GitRunner, cwd: string, treeId: string): Promise<string[]> {
+  const restore = RESTORES.get(execute);
+  if (!restore) throw new Error("The working-tree restore is unavailable for this Git runner.");
+  return await restore(cwd, treeId);
+}
+
+/** At most this many characters of pathspecs on one Git command line (Windows allows 32,767 for the whole line). */
+const RESTORE_PATHSPEC_CHARS = 8_000;
+
+/**
+ * CW6 (CLI workers plan §3.6): puts a worktree's working files back to `treeId`, a tree captureWorkingTreeIdentity
+ * took earlier, after something the Runner ran (a re-run of a CLI worker's check) changed them. The same private-index
+ * rules as the capture: the owner's staging index is never read or written. Files the tree has are written back from
+ * it; files it lacks (added since, not ignored) are removed. Returns the paths it put back, sorted, and throws unless a
+ * fresh capture then reads exactly `treeId`.
+ */
+export async function restoreWorkingTree(cwd: string, indexRoot: string, execute: GitRunner, treeId: string): Promise<string[]> {
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(treeId)) throw new Error("The tree to restore is not a tree id.");
+  const now = await captureWorkingTreeIdentity(cwd, indexRoot, execute);
+  if (now.status !== "known") throw new Error("The working files could not be read before their restore.");
+  if (now.treeId === treeId) return [];
+  const diff = await execute({ cwd, args: ["diff", "--name-status", "-z", "--no-renames", treeId, now.treeId] });
+  if (diff.exitCode !== 0) throw new Error("The changed working files could not be listed.");
+  const fields = diff.stdout.split("\0");
+  const restore: string[] = [], remove: string[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const status = fields[index]!, path = fields[index + 1]!;
+    if (!path) continue;
+    // Added since the tree: removed. Changed or deleted since: written back from the tree.
+    (status === "A" ? remove : restore).push(path);
+  }
+  const root = await realpath(indexRoot);
+  const temporary = await mkdtemp(join(root, "restore-index-"));
+  try {
+    const env = Object.freeze({ GIT_INDEX_FILE: join(temporary, "index") });
+    const run = async (args: readonly string[]) => {
+      const result = await execute({ cwd, args, env });
+      if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed while the working files were restored.`);
+    };
+    await run(["read-tree", treeId]);
+    for (const batch of pathspecBatches(restore)) await run(["checkout", treeId, "--", ...batch]);
+    // Listed paths only, ignored or not: each is a file the tree does not have.
+    for (const batch of pathspecBatches(remove)) await run(["clean", "-f", "-x", "-q", "--", ...batch]);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+  const after = await captureWorkingTreeIdentity(cwd, indexRoot, execute);
+  if (after.status !== "known" || after.treeId !== treeId) throw new Error("The working files could not be proven back to the tree they were restored to.");
+  return [...restore, ...remove].sort();
+}
+
+function pathspecBatches(paths: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [], size = 0;
+  for (const path of paths) {
+    const spec = `:(literal)${path}`;
+    if (batch.length && size + spec.length > RESTORE_PATHSPEC_CHARS) {
+      batches.push(batch);
+      batch = [];
+      size = 0;
+    }
+    batch.push(spec);
+    size += spec.length + 1;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
 
 export function settleWorkingTreeIdentity(before: WorkingTreeIdentity, after: WorkingTreeIdentity): WorkingTreeIdentity {

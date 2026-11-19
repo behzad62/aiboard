@@ -139,6 +139,7 @@ jobs:
           runner-v2/test/cli-worker-runtime-stops.test.ts
           runner-v2/test/cli-worker-runtime-runs.test.ts
           runner-v2/test/windows-job-start-abort.test.ts
+          runner-v2/test/cli-worker-evidence.test.ts
           runner-v2/test/cli-worker-handoff.test.ts
           runner-v2/test/cli-worker-browser.test.ts
           runner-v2/test/one-shot-command-executor.test.ts

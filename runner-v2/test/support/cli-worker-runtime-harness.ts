@@ -118,6 +118,8 @@ export async function harness(t: TestContext, label: string): Promise<Harness> {
       host: WINDOWS, stateDirectory: state, owners,
       captureTree: (cwd) => captureWorkingTreeIdentity(cwd, join(state, "tree-index"), runGitAsync),
       readWaitMs: 50,
+      // The Runner's re-runs settled (§3.6): a test of an unsettled or unreadable store overrides it.
+      oneShotCommands: async () => undefined,
       ...overrides,
     }),
     input: (overrides = {}) => ({
