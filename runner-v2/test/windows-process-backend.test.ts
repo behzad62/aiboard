@@ -756,6 +756,99 @@ test("Windows portable launch consumes the caller's shared absolute startup dead
   }
 });
 
+// The Windows portable launch waits on its supervisor's progress up to the Job host's start ceiling, set from measured
+// cold starts (native-process-backend.ts), never a separate fixed cut such as the former 30 s.
+test("Windows portable launch is bounded by the shared measured start ceiling", async () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const { WINDOWS_JOB_START_CEILING_MS } = await import("../src/cleanup-timeouts.js");
+  assert.equal(WINDOWS_JOB_START_CEILING_MS, 120_000);
+  assert.match(source, /const WINDOWS_PORTABLE_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS;/);
+  assert.match(source, /this\.options\.platform === "windows" \? WINDOWS_PORTABLE_START_CEILING_MS : PORTABLE_STARTUP_DEADLINE_MS/);
+  assert.doesNotMatch(source, /WINDOWS_PORTABLE_STARTUP_DEADLINE_MS/);
+});
+
+test("Windows portable launch cancelled before its supervisor starts creates nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cancelled-before-start-"));
+  const stateDirectory = join(root, "state");
+  const backend = new WindowsProcessBackend({ stateDirectory, semanticFacts: verifiedWindowsSemanticFacts });
+  try {
+    await assert.rejects(backend.launch({ ...request(["-e", "process.exit(0)"]), signal: AbortSignal.abort() }), /launch was cancelled/);
+    assert.deepEqual(readdirSync(stateDirectory), [], "a cancelled call never creates launch state");
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+// A cancellation that lands while the launch prepares its birth inspection is caught right before the supervisor would
+// start: its launch state is removed and nothing is started.
+test("Windows portable launch cancelled while it prepares starts no supervisor", { skip: process.platform !== "win32" && "Windows host", timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cancelled-preparing-"));
+  const stateDirectory = join(root, "state");
+  const backend = new WindowsProcessBackend({ stateDirectory, semanticFacts: verifiedWindowsSemanticFacts });
+  const cancel = new AbortController();
+  const prepare = backend.prepareInspection.bind(backend);
+  backend.prepareInspection = async (absoluteDeadline: number) => { await prepare(absoluteDeadline); cancel.abort(); };
+  const ownedLeft = () => readdirSync(stateDirectory).filter((name) => name.startsWith("owned-"));
+  await withInspectionFixture({
+    fixtureName: "Windows portable cancelled while preparing", root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
+      await assert.rejects(backend.launch({ ...request(["-e", "process.exit(0)"]), signal: cancel.signal }), /launch was cancelled/);
+      assert.equal(cancel.signal.aborted, true);
+      assert.deepEqual(ownedLeft(), [], "the cancelled launch removed its launch state before any supervisor started");
+    },
+    cleanupWorkloads: async () => undefined,
+    certifyWorkloads: async () => { assert.deepEqual(ownedLeft(), []); },
+    removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+  });
+});
+
+// The portable launch follows its supervisor's progress up to a ceiling (WINDOWS_PORTABLE_START_CEILING_MS), so a call
+// cancelled while the supervisor starts must end the wait at once, as a failed start on its exact identity.
+test("Windows portable launch cancelled while its supervisor starts fails on its exact identity and leaves nothing", { skip: process.platform !== "win32" && "Windows host", timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cancelled-while-starting-"));
+  const stateDirectory = join(root, "state");
+  const marker = join(root, "ran.txt");
+  const backend = new WindowsProcessBackend({ stateDirectory, semanticFacts: verifiedWindowsSemanticFacts });
+  const cancel = new AbortController();
+  const composed = backend as unknown as { operations: NativeProcessOperations };
+  const real = composed.operations;
+  let supervisorPid: number | undefined;
+  // The call is cancelled right after the supervisor's real birth probe, before it publishes its state.
+  composed.operations = { ...real, inspectProcessBirth: (pid, platform, attemptDeadlineMs) => {
+    const inspection = real.inspectProcessBirth(pid, platform, attemptDeadlineMs);
+    if (supervisorPid === undefined) { supervisorPid = pid; cancel.abort(); }
+    return inspection;
+  } };
+  const ownedLeft = () => readdirSync(stateDirectory).filter((name) => name.startsWith("owned-"));
+  await withInspectionFixture({
+    fixtureName: "Windows portable cancelled start", root,
+    registerCleanup: register => backend.registerInspectionCleanup(register),
+    body: async () => {
+      const started = Date.now();
+      await assert.rejects(backend.launch({ ...request(["-e", `require("fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setTimeout(() => {}, 5000)`]), signal: cancel.signal }),
+        /launch was cancelled/);
+      assert.ok(Date.now() - started < 60_000, "the cancelled launch did not wait for its ceiling");
+      assert.ok(supervisorPid !== undefined, "the supervisor was started and probed");
+      // The failed start was cleaned up on its exact identity (its owned processes proven gone), and its launch state is
+      // removed.
+      assert.deepEqual(ownedLeft(), []);
+    },
+    // The supervisor exits on its own once it has handled the cleanup's force_terminate.
+    cleanupWorkloads: async () => {
+      if (supervisorPid === undefined) return;
+      const deadline = Date.now() + 60_000;
+      for (;;) {
+        try { process.kill(supervisorPid, 0); } catch { return; }
+        if (Date.now() >= deadline) throw new Error(`the cancelled launch's supervisor ${supervisorPid} did not exit`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+    certifyWorkloads: async () => { assert.deepEqual(ownedLeft(), [], "no launch state is left to clean up"); },
+    removeRoot: () => rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 }),
+  });
+});
+
 test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-late-birth-deadline-"));
   console.log(`C5 round9 late-birth root created: ${root}`);
