@@ -81,6 +81,12 @@ const deterministicPrTests = [
   "runner-v2/test/cli-worker-runtime-outcomes.test.ts",
   "runner-v2/test/cli-worker-runtime-stops.test.ts",
   "runner-v2/test/cli-worker-runtime-runs.test.ts",
+  // A Job host start the launcher gives up on, or its call cancels, records its stop, so the run closes with its exact
+  // record released (also after its workload wrote, on a claimed spare and through one-shot process.run), and a host
+  // that dies between creating the root and resuming it leaves no process; a root ender that cannot identify the root
+  // leaves the stop unproven (stricter-only faults in the real Job host; Windows only, about 17 s on a Windows PC; the
+  // start-wait unit test runs on every host in milliseconds).
+  "runner-v2/test/windows-job-start-abort.test.ts",
   // CW6: the re-runner of a CLI's reported checks alone, on a temporary Git worktree with a scripted one-shot executor
   // (no CLI, no command process): the record, the timeout rule, shell lines, missing tools and the restore. Its tests run
   // four at a time with async fixture Git: about 12 s run alone on a busy Windows PC. The CLI-loop half,

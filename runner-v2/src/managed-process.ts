@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, MANAGED_START_CEILING_MS } from "./cleanup-timeouts.js";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { assertUsableWorkingDirectory } from "./windows-path-limits.mjs";
@@ -130,7 +130,7 @@ export class ManagedProcessService {
     this.idFactory = options.idFactory ?? (() => randomUUID());
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.maxPollBytes = bound(options.maxPollBytes ?? MAX_MANAGED_OUTPUT_BYTES, 1, MAX_MANAGED_OUTPUT_BYTES);
-    this.startDeadlineMs = bound(options.startDeadlineMs ?? 30_000, 1, 120_000);
+    this.startDeadlineMs = bound(options.startDeadlineMs ?? MANAGED_START_CEILING_MS, 1, MANAGED_START_CEILING_MS);
     this.stopDeadlineMs = bound(options.stopDeadlineMs ?? AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, 1, 120_000);
     this.inputWriteCeilingMs = bound(options.inputWriteCeilingMs ?? MANAGED_INPUT_WRITE_CEILING_MS, 1, MANAGED_INPUT_WRITE_CEILING_MS);
     mkdirSync(this.stateDirectory, { recursive: true, mode: 0o700 });

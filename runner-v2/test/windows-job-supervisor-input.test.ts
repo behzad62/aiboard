@@ -30,6 +30,9 @@ for (const interactive of [true, false]) test(`Windows Job supervisor retains ex
   const context = { spawn: () => backend, dirname, join, fileURLToPath, Buffer,
     config: { interactive }, backend: undefined, backendInput: undefined, status,
     settled: false, backendFailure: undefined, interactiveStdoutEnded: false, interactiveStderrEnded: false,
+    // The host reported its workload started; no Assign-path root is pending.
+    reportedStarted: true, spareUnclaimed: false, pendingRoot: null, assignIntent: null, assignEventMalformed: false, pendingRootEnd: undefined,
+    persistStatus: () => undefined, endRoot: async () => false, fileTimeNow: () => "1",
     setInterval: () => 0, jobEventTimer: undefined, createInterface: () => new EventEmitter(),
     drainInteractiveOutput: () => undefined, pollInteractiveJobEvents: () => undefined,
     handleJobEvent: () => undefined, appendFileSync: () => undefined,
@@ -44,6 +47,57 @@ for (const interactive of [true, false]) test(`Windows Job supervisor retains ex
   backend.emit("exit", 1);
   assert.equal(status.jobEmptyProof, true, "only the exact Job-host exit attests kill-on-close");
   assert.equal(status.ownershipReleased, false, "output still needs separate terminal settlement");
+});
+
+// An Assign-path line that fails validation names no root. If the host then dies before it reported started, with no
+// valid root named, its root may still live outside the Job: the stop stays unproven, and nothing is ended by a guess.
+// A valid intent is the control: the same exit then hands exactly that intent to the root ender.
+for (const [name, line] of [
+  ["an intent naming another host pid", { type: "assign_intent", hostPid: 9999, hostCreationTime: "134395532800331088", at: "134395532803809075" }],
+  ["an intent with a malformed time", { type: "assign_intent", hostPid: 4321, hostCreationTime: "134395532800331088", at: "soon" }],
+  ["a pending identity with no pid", { type: "assign_pending", pid: 0, creationTime: "134395532803809075" }],
+  ["a valid intent (control)", { type: "assign_intent", hostPid: 4321, hostCreationTime: "134395532800331088", at: "134395532803809075" }],
+] as const) test(`Windows Job supervisor, host exit before its started line after ${name}`, async () => {
+  const url = new URL("../src/managed-process-supervisor.mjs", import.meta.url);
+  const source = await readFile(url, "utf8");
+  const slice = (from: string, to: string) => {
+    const start = source.indexOf(from), end = source.indexOf(to, start);
+    assert.ok(start >= 0 && end > start, from);
+    return source.slice(start, end);
+  };
+  const malformedStart = source.indexOf("function malformedAssignEvent(line) {");
+  const code = [
+    slice("function launchWindowsJob() {", "\nfunction drainInteractiveOutput"),
+    slice("function handleJobEvent(line) {", "\nfunction markRunning"),
+    source.slice(malformedStart, source.indexOf("\n}", malformedStart) + 2),
+  ].join("\n").replaceAll("import.meta.url", JSON.stringify(url.href));
+  const input = Object.assign(new EventEmitter(), { write: () => true });
+  const backend = Object.assign(new EventEmitter(), { pid: 4321, stdin: input, stdout: new EventEmitter(), stderr: new EventEmitter() });
+  const status: Record<string, unknown> = { status: "starting", jobEmptyProof: false, ownershipReleased: false };
+  const ended: unknown[] = [], diagnostics: string[] = [];
+  const context = { spawn: () => backend, dirname, join, fileURLToPath, Buffer, JSON, Number, Promise,
+    config: { interactive: true, stderrPath: "stderr.log" }, backend: undefined, backendInput: undefined, status,
+    settled: false, backendFailure: undefined, interactiveStdoutEnded: false, interactiveStderrEnded: false,
+    reportedStarted: false, spareUnclaimed: false, pendingRoot: null, assignIntent: null, assignEventMalformed: false, pendingRootEnd: undefined,
+    persistStatus: () => undefined, endRoot: (root: unknown) => { ended.push(root); return new Promise(() => undefined); }, fileTimeNow: () => "134395532900000000",
+    setInterval: () => 0, jobEventTimer: undefined, createInterface: () => new EventEmitter(),
+    drainInteractiveOutput: () => undefined, pollInteractiveJobEvents: () => undefined,
+    appendFileSync: (_path: string, text: string) => { diagnostics.push(text); },
+    startupFailed: () => undefined, tryMarkStopped: () => undefined, markOwnershipUncertain: () => undefined };
+  runInNewContext(`${code}\nlaunchWindowsJob();\nhandleJobEvent(${JSON.stringify(JSON.stringify(line))});`, context);
+  backend.emit("exit", 1);
+  if (name === "a valid intent (control)") {
+    // The root comes from the VM's realm: compare its data.
+    assert.deepEqual(JSON.parse(JSON.stringify(ended)), [{ hostPid: 4321, hostCreationTime: "134395532800331088", at: "134395532803809075", hostExitedAt: "134395532900000000" }]);
+    assert.equal(status.jobEmptyProof, false, "the empty proof waits for the ender");
+    return;
+  }
+  assert.equal(context.assignEventMalformed, true);
+  assert.match(diagnostics.join(""), /Malformed Assign-path event from the Job host/);
+  assert.deepEqual(ended, [], "no root is ended by a guess");
+  assert.equal(status.status, "exited_unknown", JSON.stringify(status));
+  assert.equal(status.jobEmptyProof, false, `the stop is unproven: ${JSON.stringify(status)}`);
+  assert.match(String(status.error), /could not be named/);
 });
 
 // PX-2e repair cycle 1 (B1, N1): this file drives the supervisor source in-VM

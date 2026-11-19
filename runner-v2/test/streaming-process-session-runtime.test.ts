@@ -2,6 +2,7 @@ import { createLinkedTestOutputSpillStorage } from "./support/linked-output-spil
 import { BoundedProtocolQueue } from "../src/bounded-protocol-queue.js";
 import { StreamingOutputError } from "../src/streaming-output-controller.js";
 import assert from "node:assert/strict";
+import { inspect as inspectValue } from "node:util";
 import test, { type TestContext } from "node:test";
 import { createHash, createHmac } from "node:crypto";
 import { lstat, mkdtemp, rm, unlink } from "node:fs/promises";
@@ -2916,6 +2917,34 @@ test("provider-created exported runtime errors are foreign and cannot cross the 
   assert.equal(thrown instanceof Error && thrown.message, "Streaming provider launch phase failed.");
   assert.equal(thrown instanceof Error && thrown.cause, undefined);
   assert.doesNotMatch(JSON.stringify(errorGraph(thrown)), /B1_R7_TYPED_PROVIDER_SENTINEL|credential=|payload=|cause/);
+});
+
+test("a host launch that failed naming its exact backend binding is bound, so cleanup quiesces that exact binding", async () => {
+  for (const named of [true, false]) {
+    const fixture = await makeFixture(2, "cleaned");
+    const failure = new Error("Windows Job start failed.");
+    const quiesced: unknown[] = [];
+    const runtime = createStreamingProcessSessionRuntime({ ...fixture.runtimeOptions, host: { ...fixture.runtimeOptions.host,
+      quiesce: async (input) => { quiesced.push((input.record as { backendBinding?: unknown }).backendBinding); return await fixture.runtimeOptions.host.quiesce(); },
+      // Only the exact error the launch threw names the binding.
+      failedLaunchBinding: (error: unknown) => (named && error === failure ? fixture.backendBinding : undefined) } });
+    fixture.setHostLaunch(async () => { throw failure; });
+    await assert.rejects(runtime.open(fixture.request), (error) => error instanceof StreamingProcessSessionError && error.code === "launch_failed");
+    const host = fixture.kernel.store.readHostLaunch("launch-1")!;
+    const launch = host.effects.find((effect) => effect.kind === "launch");
+    if (named) {
+      assert.equal(host.backendBinding?.opaqueIdentity, "opaque-1", inspectValue(host, { depth: 6 }));
+      assert.ok(host.history.some((entry) => entry.state === "bound"), "the failed launch's binding is recorded");
+      assert.equal(launch?.status, "acknowledged");
+      assert.deepEqual(quiesced, [fixture.backendBinding], "cleanup quiesces the exact named binding");
+      assert.equal(host.state, "released", inspectValue(host, { depth: 6 }));
+    } else {
+      assert.equal(host.backendBinding, undefined);
+      assert.equal(host.history.some((entry) => entry.state === "bound"), false);
+      assert.equal(launch?.status, "pending", "a launch with no named identity stays an unresolved effect");
+      assert.deepEqual(quiesced, [undefined]);
+    }
+  }
 });
 
 test("replayed Runner errors are reminted from immutable private claims at every boundary", { timeout: 5_000 }, async (t) => withSyntheticFixtureEvidence(t, async (evidence) => {
