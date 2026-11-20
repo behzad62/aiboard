@@ -164,8 +164,20 @@ test("CW5a: the managed transport refuses a batch launch before any streaming la
   assert.match(start, /catch \(primary\) \{\s*try \{ await this\.stopExact\(/, "every failed start runs the exact stop");
   assert.match(start, /AggregateError\(\[primary, cleanup\], "Managed failed start retains unverified exact cleanup\."\)/);
 });
+/**
+ * The Job host script without the stop-time escape sweep's class (ManagedProcessEscapeSweep), which follows the host's
+ * own class in the same helper source and is pinned by its own test below.
+ */
+function jobHostWithoutEscapeSweep(script: string): string {
+  const start = script.indexOf("public static class ManagedProcessEscapeSweep");
+  assert.ok(start > 0, "the escape sweep's class is in the Job host's helper source");
+  const end = script.indexOf("\n'@", start);
+  assert.ok(end > start, "the escape sweep's class ends the helper source");
+  return script.slice(0, start) + script.slice(end);
+}
+
 test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway", () => {
-  const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8");
+  const jobHost = jobHostWithoutEscapeSweep(readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8"));
   assert.match(
     jobHost,
     /limits\.BasicLimitInformation\.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;/,
@@ -284,7 +296,7 @@ test("R4: the Job host refuses a launch it cannot give the desktop app policy, b
 
 // R2: the Job's own membership messages, never a host census (DECISION 2026-09-19 §8.1, §14.1).
 test("R2: the Job host watches the Job's membership messages and a packaged member blocks verify-empty and release", () => {
-  const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n");
+  const jobHost = jobHostWithoutEscapeSweep(readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n"));
   assert.match(jobHost, /private const int JobObjectAssociateCompletionPortInformation = 7;/);
   assert.match(jobHost, /private const uint JOB_OBJECT_MSG_NEW_PROCESS = 6;/);
   // Both launches watch from before the root joins: the port is associated right after the Job is made, and the root
@@ -359,3 +371,45 @@ function nativeScriptFiles(root: string): string[] {
 }
 
 
+
+// The Start-Process gap (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §7; DECISION 2026-09-19 §8.1 as
+// amended): the one host snapshot is the stop-time escape sweep's, and it ends a process only through the handle its
+// mark was read from.
+test("the escape sweep is the only host snapshot, and it ends a process only through the handle its mark was read from", () => {
+  const script = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8").replace(/\r\n/g, "\n");
+  const start = script.indexOf("public static class ManagedProcessEscapeSweep");
+  const sweep = script.slice(start, script.indexOf("\n'@", start));
+  // The snapshot only here, and the sweep creates no process.
+  assert.equal([...script.matchAll(/CreateToolhelp32Snapshot\(/g)].length, 2, "the declaration and one call");
+  assert.match(sweep, /CreateToolhelp32Snapshot\(TH32CS_SNAPPROCESS, 0\)/);
+  assert.doesNotMatch(sweep, /CreateProcess|ShellExecute|Process\.Start|EnumProcesses|Win32_Process/);
+  // One TerminateProcess, on the handle Inspect handed back.
+  assert.equal([...sweep.matchAll(/TerminateProcess\(/g)].length, 2, "the declaration and one call");
+  assert.match(sweep, /IntPtr handle = Inspect\(pid, [^;]*\);[\s\S]*bool terminated = TerminateProcess\(handle, 1\);/);
+  // Inspect reads every fact through its one handle, the mark last, and hands the handle back only after it matched.
+  const inspect = sweep.slice(sweep.indexOf("private static IntPtr Inspect("), sweep.indexOf("private static long CreationTime("));
+  const order = [
+    "long created = CreationTime(handle);",
+    "if (created <= since) return IntPtr.Zero;",
+    "string sid = TokenUserSid(handle);",
+    "if (!string.Equals(sid, mySid, StringComparison.OrdinalIgnoreCase)) return IntPtr.Zero;",
+    "string environment = ReadEnvironment(handle);",
+    "if (!HasMark(environment, markName, markValue)) return IntPtr.Zero;",
+    "keep = true;",
+  ].map((needle) => inspect.indexOf(needle, inspect.indexOf("bool keep = false;")));
+  assert.ok(order.every((at, index) => at > 0 && (index === 0 || at > order[index - 1]!)), `the order: ${order.join(", ")}`);
+  assert.equal([...inspect.matchAll(/keep = true;/g)].length, 1, "one way to hand a handle back");
+  assert.match(inspect, /Reason = "open_denied" \};\s+return IntPtr\.Zero;/, "a process not opened for reading is reported, never handed back");
+  // A marked process whose facts could not all be read, or that sits in a job without being packaged, is never ended.
+  assert.match(sweep, /if \(entry\.Reason != null\)\s+\{\s+unended\.Add\(entry\);\s+continue;\s+\}\s+if \(entry\.InJob && !entry\.Packaged\)/);
+  // The script runs the sweep from its own entry only, and the Runner launches that entry from one place.
+  assert.equal([...script.matchAll(/\[ManagedProcessEscapeSweep\]::Sweep\(/g)].length, 1);
+  assert.match(script, /if \(\$args\.Count -eq 1 -and \$args\[0\] -eq "--aiboard-escape-sweep"\) \{/);
+  const tsHost = readFileSync(join(sourceRoot, "windows-job-process-host.ts"), "utf8");
+  assert.equal([...tsHost.matchAll(/"--aiboard-escape-sweep"/g)].length, 1);
+  const marks = readFileSync(join(sourceRoot, "process-escape-marks.ts"), "utf8");
+  assert.match(marks, /markName: RUNNER_PROCESS_MARK_NAME, markValue: mark\.value, since: new Date\(mark\.issuedAt\)/);
+  // A report that is not settled, or leaves a marked process unended, fails the owner's stop closed.
+  assert.match(marks, /if \(report\.settled && report\.unended\.length === 0\) \{/);
+  assert.match(marks, /throw new ManagedProcessError\("process_cleanup_unverified", /);
+});

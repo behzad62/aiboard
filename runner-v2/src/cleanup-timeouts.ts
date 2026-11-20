@@ -18,3 +18,11 @@ export const ROOT_ENDING_CEILING_MS = 190_000;
 // returns as soon as the backend does. The former fixed 30 s cut real cold starts (32.9 s measured, about 75-85 s on a
 // slower host).
 export const MANAGED_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS + ROOT_ENDING_CEILING_MS + 30_000;
+// The stop-time escape sweep (windows-job-process-host.ts sweepMarkedWindowsProcesses). Its PowerShell starts and loads
+// the Job-host helper like a Job host does, so the start has the Job host's start ceiling. Once it reports ready, each
+// marked process is ended with TerminateProcess and a WaitForSingleObject of ESCAPE_SWEEP_EXIT_WAIT_MS, the same Kill and
+// bounded wait as the supervisor's Assign-path root ender (ROOT_ENDER_ACTION_CEILING_MS 60 s). Every bound is a ceiling for
+// a sweep that hangs, never the expected time (one sweep took 0.7 s here); a sweep cut by one leaves the stop unproven.
+export const ESCAPE_SWEEP_START_CEILING_MS = WINDOWS_JOB_START_CEILING_MS;
+export const ESCAPE_SWEEP_ACTION_CEILING_MS = 60_000;
+export const ESCAPE_SWEEP_EXIT_WAIT_MS = 30_000;

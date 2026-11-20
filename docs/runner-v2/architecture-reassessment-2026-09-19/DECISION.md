@@ -129,6 +129,20 @@ A durable “effect issued, outcome unknown” never authorizes automatic repeat
 Exact native escape policy:
 
 1. Do not add continuous host-tree enumeration. Absence of an observed escape is never proof none occurred.
+   **Amendment (2026-11-20, owner's decision): one snapshot at a stop, on Windows.** A packaged (Store) program that a
+   process in the Runner's Job starts is created outside the Job (docs/runner-v2/codex-windows-job-escape-2026-11-18.md
+   §6–§7), so the Job's own evidence never sees it. Every process the Runner starts for an owner carries a random mark
+   for that owner in its environment, which such a program inherits. After the owner's stop, and at the run's close,
+   the Runner takes **one** snapshot of the host's processes (repeated only while it keeps ending marked ones) and ends
+   those of the same user and session, created after the mark was issued, whose environment carries the mark. This is
+   not continuous enumeration and still not proof: a packaged program started without the worker's environment
+   (`Start-Process -UseNewEnvironment`, or launched through Explorer or COM) goes unseen, and the stop is then as
+   blind as before. Rules 2 and 3 still hold: a process is ended only when the mark is read from its environment
+   through the very handle that ends it, after that handle's creation time is checked; never by PPID, name or a
+   reported PID alone. A process whose facts cannot be read (an elevated one, for example) is recorded and never ended,
+   and does not by itself leave the stop unproven, since nothing attributes it. A marked process that cannot be ended,
+   an exit that is not seen, a marked process inside some job that is not packaged (it may be a live Runner Job member),
+   or a failed snapshot leaves the stop unproven (`cleanup_blocked`), with the worktree claim kept.
 2. Use low-cost existing evidence (registered helper identity, protocol ownership, observed loss of group membership) diagnostically. PPID alone does not establish cleanup authority.
 3. If an attributable owned helper is known to escape, record the incident and block automatic affected-resource release/replacement until its termination or explicit external ownership transfer is established. Do not introduce a generic per-PID escape killer. Uncertain attribution is reported as uncertainty and does not authorize signaling.
 4. If no escape is known and the group and other owned resources have valid evidence, release **the group-scoped lease**. Do not block every native execution forever because an invisible detached process is theoretically possible. Native mode cannot promise zero undetected escaped helpers.

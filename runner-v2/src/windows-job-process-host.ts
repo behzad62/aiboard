@@ -2,7 +2,7 @@
 import { WINDOWS_JOB_LAUNCH_REFUSAL_CODES } from "./windows-job-launch-refusal.js";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS, ESCAPE_SWEEP_ACTION_CEILING_MS, ESCAPE_SWEEP_EXIT_WAIT_MS, ESCAPE_SWEEP_START_CEILING_MS, ROOT_ENDING_CEILING_MS, WINDOWS_JOB_START_CEILING_MS } from "./cleanup-timeouts.js";
 import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -2286,6 +2286,144 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private snapshot(record: HostRecord): WindowsJobProcessSnapshot {
     return { processId: record.processId, pid: record.pid, status: record.status, exitCode: record.exitCode, signal: record.signal, startedAt: record.startedAt, updatedAt: record.updatedAt, stdout: tail(record.stdoutPath, this.maxPollBytes), stderr: tail(record.stderrPath, this.maxPollBytes),
       ...(record.memberEvidence ? { memberEvidence: record.memberEvidence } : {}) };
+  }
+}
+
+/** One process the escape sweep looked at: its pid, its creation time (FILETIME, decimal) and its image. */
+export interface SweptWindowsProcess {
+  readonly pid: number;
+  readonly created: string;
+  readonly image: string;
+  readonly packaged: boolean;
+  readonly inJob: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * The escape sweep's answer. `settled` means its last snapshot found no marked process left. `ended` were marked and
+ * are gone; `unended` were marked and are not proven gone (the stop stays unproven); `unreadable` were created after
+ * the mark but their facts could not be read: never ended, and not counted against the stop (they cannot be
+ * attributed). `unqueried` counts processes of this session whose creation time could not even be read.
+ */
+export interface WindowsEscapeSweepReport {
+  readonly settled: boolean;
+  readonly rounds: number;
+  readonly ended: readonly SweptWindowsProcess[];
+  readonly unended: readonly SweptWindowsProcess[];
+  readonly unreadable: readonly SweptWindowsProcess[];
+  readonly unqueried: number;
+}
+
+export interface WindowsEscapeSweepRequest {
+  readonly markName: string;
+  readonly markValue: string;
+  /** Only processes created after this instant are looked at: the mark did not exist before it. */
+  readonly since: Date;
+  /** Test-only, stricter: the sweep's query fails, or no marked process is ended. */
+  readonly injectedFault?: "query_fails" | "terminate_fails";
+}
+
+const ESCAPE_SWEEP_MAX_ROUNDS = 8;
+
+function fileTimeOf(date: Date): string {
+  const ms = date.getTime();
+  if (!Number.isFinite(ms) || ms <= 0) throw new WindowsJobHostError("process_cleanup_unverified", "The escape sweep's start time is invalid.");
+  return String(BigInt(Math.floor(ms)) * 10_000n + 116_444_736_000_000_000n);
+}
+
+function parseSweptProcesses(value: unknown): SweptWindowsProcess[] {
+  if (!Array.isArray(value)) throw new Error("list missing");
+  return value.map((item) => {
+    const entry = item as Record<string, unknown>;
+    if (!Number.isSafeInteger(entry.pid) || typeof entry.created !== "string" || !/^[0-9]{1,20}$/.test(entry.created)
+      || typeof entry.image !== "string" || typeof entry.packaged !== "boolean" || typeof entry.inJob !== "boolean"
+      || (entry.reason !== undefined && typeof entry.reason !== "string")) throw new Error("entry malformed");
+    return Object.freeze({ pid: entry.pid as number, created: entry.created, image: entry.image, packaged: entry.packaged, inJob: entry.inJob,
+      ...(typeof entry.reason === "string" ? { reason: entry.reason } : {}) });
+  });
+}
+
+/**
+ * The stop-time escape sweep (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §7): one PowerShell running the
+ * Job host's `--aiboard-escape-sweep` with the Job host's own digest-pinned helper. It snapshots this user's and
+ * session's processes created after `since` and ends those whose environment carries the mark, each through the
+ * handle its facts were read from (ManagedProcessEscapeSweep in managed-process-job-host.ps1). Any failure (the
+ * PowerShell does not start, report or finish within its ceiling, or answers with an error or a malformed report)
+ * throws; the caller leaves the stop unproven.
+ */
+export async function sweepMarkedWindowsProcesses(request: WindowsEscapeSweepRequest): Promise<WindowsEscapeSweepReport> {
+  if (process.platform !== "win32") throw new WindowsJobHostError("process_cleanup_unverified", "The escape sweep runs on Windows only.");
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.markName) || !/^[0-9a-f]{32}$/.test(request.markValue)) {
+    throw new WindowsJobHostError("process_cleanup_unverified", "The escape sweep's mark is invalid.");
+  }
+  const helper = await ensureJobHostHelperAssembly();
+  const script = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
+  const config = JSON.stringify({
+    ...(helper ? { helperAssemblyPath: helper.path, helperAssemblySha256: helper.sha256 } : {}),
+    markName: request.markName,
+    markValue: request.markValue,
+    since: fileTimeOf(request.since),
+    exitWaitMs: ESCAPE_SWEEP_EXIT_WAIT_MS,
+    maxRounds: ESCAPE_SWEEP_MAX_ROUNDS,
+    ...(request.injectedFault ? { injectedFault: request.injectedFault } : {}),
+  });
+  const output = await new Promise<string>((resolvePromise, rejectPromise) => {
+    let text = "";
+    let ready = false;
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const fail = (message: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectPromise(new WindowsJobHostError("process_cleanup_unverified", `The escape sweep did not finish: ${message}`));
+    };
+    let child: ChildProcess;
+    try {
+      child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "--aiboard-escape-sweep"],
+        { windowsHide: true, shell: false, stdio: ["pipe", "pipe", "ignore"] });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const arm = (ms: number, phase: string): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { try { child.kill(); } catch { /* reported below */ } fail(`no ${phase} within ${ms} ms`); }, ms);
+    };
+    arm(ESCAPE_SWEEP_START_CEILING_MS, "ready line");
+    child.stdout!.on("data", (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+      if (!ready && /^ready\r?\n/.test(text)) {
+        ready = true;
+        arm(ESCAPE_SWEEP_ACTION_CEILING_MS, "report");
+      }
+    });
+    child.once("error", (error) => fail(error.message));
+    child.once("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0 || !ready) {
+        rejectPromise(new WindowsJobHostError("process_cleanup_unverified", `The escape sweep failed (exit ${code}): ${text.replace(/^ready\r?\n/, "").trim().slice(0, 500)}`));
+      } else resolvePromise(text.replace(/^ready\r?\n/, "").trim());
+    });
+    child.stdin!.once("error", (error) => fail(error.message));
+    child.stdin!.end(`${config}\n`);
+  });
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(output) as Record<string, unknown>;
+    if (typeof parsed.settled !== "boolean" || !Number.isSafeInteger(parsed.rounds) || !Number.isSafeInteger(parsed.unqueried)) throw new Error("fields missing");
+    return Object.freeze({
+      settled: parsed.settled,
+      rounds: parsed.rounds as number,
+      ended: Object.freeze(parseSweptProcesses(parsed.ended)),
+      unended: Object.freeze(parseSweptProcesses(parsed.unended)),
+      unreadable: Object.freeze(parseSweptProcesses(parsed.unreadable)),
+      unqueried: parsed.unqueried as number,
+    });
+  } catch (error) {
+    throw new WindowsJobHostError("process_cleanup_unverified", `The escape sweep's report is malformed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

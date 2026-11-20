@@ -40,4 +40,9 @@ export interface ManagedProcessRunRuntime {
     interaction?: "write" | "close_input" }>): Promise<import("./managed-process-contracts.js").ManagedOutputEvidence>;
   /** Finalized spill artifact bytes; read-only evidence, never an execution capability. */
   readSpill?(artifactId: string): Promise<Uint8Array>;
+  /**
+   * Windows: ends the processes outside every Job that carry the session's mark (or, with no session, every mark
+   * launched since its last sweep), after the owner's stop (process-escape-marks.ts). Throws when that is not proven.
+   */
+  sweepEscapes?(scope: { readonly sessionId?: string }): Promise<void>;
 }

@@ -74,6 +74,8 @@ import {
   createWindowsProcessBackend,
   WindowsJobObjectProcessBackend,
 } from "./windows-process-backend.js";
+import { ProcessEscapeMarks, sweepEscapedProcesses, type ProcessEscapeSweeper } from "./process-escape-marks.js";
+import { sweepMarkedWindowsProcesses } from "./windows-job-process-host.js";
 
 const STREAMING_QUEUE_BYTES = 256 * 1024;
 const STREAMING_QUEUE_CHUNKS = 16;
@@ -98,6 +100,12 @@ export interface ExecutionHostOptions {
     StreamingRuntimeOptions["output"],
     "createEvidenceSpool" | "deliver"
   >;
+  /**
+   * Test seam for the Windows escape sweep (process-escape-marks.ts); production uses sweepMarkedWindowsProcesses.
+   * A test may only make it stricter (inject a fault), never skip it.
+   */
+  readonly escapeSweep?: ProcessEscapeSweeper;
+  readonly escapeSweepFault?: "query_fails" | "terminate_fails";
   /** Deterministic cleanup-boundary test seam; production leaves this unset. */
   readonly cleanupFault?: (event: Readonly<{
     runId: string;
@@ -387,6 +395,8 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
           streamingStoreOptions: options.streamingStoreOptions,
           streamingOutput: options.streamingOutput,
           cleanupFault: options.cleanupFault,
+          ...(options.escapeSweep ? { escapeSweep: options.escapeSweep } : {}),
+          ...(options.escapeSweepFault ? { escapeSweepFault: options.escapeSweepFault } : {}),
           resolveWindowsFacts,
           // Only the shared Job host keeps records past a run. A transient run's private host is removed whole after
           // its proven stop, and its supervisor wait reads the host's own records, so retention never runs there.
@@ -679,6 +689,8 @@ interface CreateRunBindingInput {
     "createEvidenceSpool" | "deliver"
   >;
   readonly cleanupFault?: ExecutionHostOptions["cleanupFault"];
+  readonly escapeSweep?: ProcessEscapeSweeper;
+  readonly escapeSweepFault?: ExecutionHostOptions["escapeSweepFault"];
   readonly resolveWindowsFacts: () => Promise<ProcessHostSemanticFacts>;
   readonly onClosed: () => void;
   /**
@@ -704,9 +716,17 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       const blockers = recovery.flatMap((entry) => entry.blockers);
       if (blockers.length > 0) throw new Error(blockers.join(" "));
     });
+    // The Start-Process gap (process-escape-marks.ts): on Windows every process of an owner carries that owner's mark,
+    // and the owner's stop (ManagedProcessService.closeAgent) and this run's close sweep for it.
+    const escapeMarks = input.platform === "windows" ? new ProcessEscapeMarks(join(runRoot, "process-marks"), input.runId) : undefined;
+    const escapeSweep = input.escapeSweep ?? sweepMarkedWindowsProcesses;
+    const sweepEscapes = escapeMarks
+      ? async (scope: { readonly sessionId?: string }) => await sweepEscapedProcesses(escapeMarks, escapeSweep, scope, input.escapeSweepFault)
+      : undefined;
     const childEnvironments = createChildEnvironmentFactory({
       ...(input.mcpChildDepth !== undefined ? { mcpChildDepth: input.mcpChildDepth } : {}),
       ...(input.processEnvironment ? { processEnvironment: input.processEnvironment } : {}),
+      ...(escapeMarks ? { processMark: (owner: { readonly runId: string; readonly sessionId: string }) => escapeMarks.markFor(owner) } : {}),
       credentialResolver: {
         consume: () => {
           throw new Error("No Runner child-environment credential grant is configured.");
@@ -950,6 +970,11 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
               const blockers = recovery.flatMap((entry) => entry.blockers);
               if (blockers.length > 0) throw new Error(blockers.join(" "));
             } catch (error) { failures.push(error); }
+            // Last, once every process the run's stores record is released: no live Runner-owned process carries a mark
+            // now, so every marked process still alive was started outside a Job, and is ended or leaves the close failed.
+            if (failures.length === 0 && sweepEscapes) {
+              try { await sweepEscapes({}); } catch (error) { failures.push(error); }
+            }
             if (failures.length === 0) {
               cleanupDutiesSettled = true;
               // Every process the run's stores record as released is final there, so the shared Job host may delete
@@ -1000,8 +1025,9 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
       // CW5a: the same once-run fact the Windows backends were built with (createWindowsBackends).
       ...(input.platform === "windows" ? { windowsBatchArgv: (await input.resolveWindowsFacts()).windowsBatchArgv } : {}),
     });
+    const sweepingRuntime: ManagedProcessRunRuntime = sweepEscapes ? Object.freeze({ ...managedRuntime, sweepEscapes }) : managedRuntime;
     managedRuntimeRegistration.detach = input.managedProcesses.registerRuntime(
-      input.managedStopObserver ? observeManagedStops(managedRuntime, input.managedStopObserver) : managedRuntime,
+      input.managedStopObserver ? observeManagedStops(sweepingRuntime, input.managedStopObserver) : sweepingRuntime,
     );
     constructionOwner.transfer();
     return binding;

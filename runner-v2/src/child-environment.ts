@@ -128,9 +128,23 @@ export interface CreateChildEnvironmentFactoryOptions {
   readonly processEnvironment?: RunnerProcessEnvironmentResolver;
   /** The platform whose PATH rules apply (R3 removes WindowsApps folders on win32). Defaults to this process's. */
   readonly platform?: NodeJS.Platform;
+  /**
+   * The owner's {@link RUNNER_PROCESS_MARK_NAME} value; consulted only when a prepare names both runId and sessionId.
+   * Issuing it may persist it, so the owner's stop can still find it after a restart.
+   */
+  readonly processMark?: (owner: { readonly runId: string; readonly sessionId: string }) => string | undefined;
 }
 
 export const LOCAL_MCP_DEPTH_LIMIT = 2;
+
+/**
+ * The Start-Process gap (docs/runner-v2/codex-windows-job-escape-2026-11-18.md §7): the environment entry every process
+ * the Runner starts for one owner carries, with a random value per owner (process-escape-marks.ts). A packaged program
+ * a process in the Job starts is created outside the Job but inherits it, so the owner's stop finds it by this mark.
+ * Runner authority: a caller's override of it is rejected; an inherited one is kept unless the Runner sets its own (a
+ * Runner nested in a worker keeps its parent's mark on children it does not mark).
+ */
+export const RUNNER_PROCESS_MARK_NAME = "AIBOARD_PROCESS_MARK";
 
 export function parseMcpDepth(value: string | undefined): number {
   if (value === undefined) return 0;
@@ -196,7 +210,7 @@ export function createChildEnvironmentFactory(
           continue;
         }
         assertEnvironmentEntry(name, value);
-        if (isForbiddenChildEnvironmentName(name)) decisions.push({ kind: "rejected_explicit", name });
+        if (isForbiddenChildEnvironmentName(name) || canonicalName(name) === RUNNER_PROCESS_MARK_NAME) decisions.push({ kind: "rejected_explicit", name });
         else {
           setEnvironment(environment, name, value);
           explicitSafeNames.push(name);
@@ -226,9 +240,17 @@ export function createChildEnvironmentFactory(
       for (const [name, value] of sortedEntries(runner?.values ?? {})) {
         if (value === undefined) continue;
         assertEnvironmentEntry(name, value);
-        if (canonicalName(name) === "PATH" || isForbiddenChildEnvironmentName(name)) throw new Error("Runner process environment is invalid.");
+        if (canonicalName(name) === "PATH" || canonicalName(name) === RUNNER_PROCESS_MARK_NAME || isForbiddenChildEnvironmentName(name)) throw new Error("Runner process environment is invalid.");
         setEnvironment(environment, name, value);
         decisions.push({ kind: "applied_runner", name });
+      }
+      const mark = nonEmpty(request.runId) && nonEmpty(request.sessionId)
+        ? options.processMark?.({ runId: request.runId, sessionId: request.sessionId })
+        : undefined;
+      if (mark !== undefined) {
+        if (!/^[0-9a-f]{32}$/.test(mark)) throw new Error("Runner process mark is invalid.");
+        setEnvironment(environment, RUNNER_PROCESS_MARK_NAME, mark);
+        decisions.push({ kind: "applied_runner", name: RUNNER_PROCESS_MARK_NAME });
       }
       const path = environment.get("PATH");
       // R3: the PATH the launch's own program is looked up in keeps the WindowsApps entries the child's PATH loses.
