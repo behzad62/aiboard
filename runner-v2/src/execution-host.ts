@@ -75,6 +75,7 @@ import {
   WindowsJobObjectProcessBackend,
 } from "./windows-process-backend.js";
 import { ProcessEscapeMarks, sweepEscapedProcesses, type ProcessEscapeSweeper } from "./process-escape-marks.js";
+import { ManagedProcessError } from "./managed-process-contracts.js";
 import { sweepMarkedWindowsProcesses } from "./windows-job-process-host.js";
 
 const STREAMING_QUEUE_BYTES = 256 * 1024;
@@ -720,8 +721,36 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
     // and the owner's stop (ManagedProcessService.closeAgent) and this run's close sweep for it.
     const escapeMarks = input.platform === "windows" ? new ProcessEscapeMarks(join(runRoot, "process-marks"), input.runId) : undefined;
     const escapeSweep = input.escapeSweep ?? sweepMarkedWindowsProcesses;
+    // A session's sweep would end a packaged member of a Runner Job of that session, and fail on an unpackaged one, so
+    // it runs only once every launch of the session (and of its subagents) is released in the run's own stores: a live
+    // one (a language or MCP server, a one-shot command, another actor's process) leaves the stop unproven instead.
+    const liveLaunchesOf = (sessionId: string): string[] => {
+      const belongs = (session: string | undefined) => session !== undefined && (session === sessionId || session.startsWith(`${sessionId}:subagent:`));
+      const live: string[] = [];
+      for (const id of streamingKernel.store.listSessionIds()) {
+        const record = streamingKernel.store.readBySession(id);
+        if (record && belongs(record.agentSessionId) && record.state !== "released") live.push(`streaming session ${id} (${record.state})`);
+      }
+      for (const id of subprocessKernel.readOnlyStore.listRowIds()) {
+        const record = subprocessKernel.readOnlyStore.readByInvocation(id);
+        if (!record || !belongs(record.sessionId) || subprocessResidue?.get(id) === record.revision) continue;
+        const noLaunch = !record.backendBinding && (record.state === "reused" || record.state === "launch_not_proven") && record.cleanup.state === "not_required";
+        const cleaned = record.state === "cleaned" && record.cleanup.state === "verified_empty";
+        if (record.pendingEffects.length > 0 || (!noLaunch && !cleaned)) live.push(`command ${id} (${record.state})`);
+      }
+      return live;
+    };
     const sweepEscapes = escapeMarks
-      ? async (scope: { readonly sessionId?: string }) => await sweepEscapedProcesses(escapeMarks, escapeSweep, scope, input.escapeSweepFault)
+      ? async (scope: { readonly sessionId?: string }) => {
+        if (scope.sessionId !== undefined) {
+          const live = liveLaunchesOf(scope.sessionId);
+          if (live.length > 0) {
+            throw new ManagedProcessError("process_cleanup_unverified",
+              `Processes started outside the Runner's Job cannot be swept while the session still has live launches: ${live.slice(0, 5).join(", ")}.`);
+          }
+        }
+        await sweepEscapedProcesses(escapeMarks, escapeSweep, scope, input.escapeSweepFault);
+      }
       : undefined;
     const childEnvironments = createChildEnvironmentFactory({
       ...(input.mcpChildDepth !== undefined ? { mcpChildDepth: input.mcpChildDepth } : {}),

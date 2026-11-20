@@ -2356,7 +2356,8 @@ export async function sweepMarkedWindowsProcesses(request: WindowsEscapeSweepReq
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(request.markName) || !/^[0-9a-f]{32}$/.test(request.markValue)) {
     throw new WindowsJobHostError("process_cleanup_unverified", "The escape sweep's mark is invalid.");
   }
-  const helper = await ensureJobHostHelperAssembly();
+  // As every Job host call: without the precompiled helper the script compiles the same source itself.
+  const helper = await ensureJobHostHelperAssembly().catch(() => null);
   const script = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
   const config = JSON.stringify({
     ...(helper ? { helperAssemblyPath: helper.path, helperAssemblySha256: helper.sha256 } : {}),

@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test, { after } from "node:test";
@@ -19,6 +19,8 @@ import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-facto
 import { isProcessStopUnprovenError } from "../src/process-stop-proof.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
+import { createManagedProcessTools } from "../src/managed-process-tools.js";
+import { ToolBroker } from "../src/tool-broker.js";
 import { createWindowsJobProcessHost, sweepMarkedWindowsProcesses } from "../src/windows-job-process-host.js";
 import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
@@ -128,10 +130,13 @@ test("a Store pwsh a worker starts with Start-Process is ended by the owner's st
     const plain = track(unmarked.pid!);
     // Before the stop both escapees live outside every Runner Job: the Job's own stop never saw them.
     for (const entry of [a.escapee, a.child, b.escapee, b.child]) assert.ok(sameAlive(entry), `escapee ${entry.pid} runs before the stop`);
+    // The owner also has a managed process in its Job: its stop comes first, and the sweep then finds it released.
+    const managed = track((await startManaged(run, project, "agent-a", "worker-a", ["-e", "setTimeout(()=>{},120000)", `${OWN_MARKER}managed`])).pid);
 
     await run.managedProcesses.closeAgent(a.owner);
     assert.equal(sameAlive(a.escapee), false, `the Store pwsh (pid ${a.escapee.pid}) is ended by its owner's stop`);
     assert.equal(sameAlive(a.child), false, `its own child (pid ${a.child.pid}) too: it carries the same mark`);
+    assert.equal(sameAlive(managed), false, "the owner's managed process ended with its Job");
     assert.ok(sameAlive(b.escapee) && sameAlive(b.child), "another owner's escapees are not this owner's");
     assert.ok(sameAlive(plain), "an unmarked process created after the mark is never ended");
 
@@ -203,10 +208,95 @@ test("the mark the sweep matches is the one each child of the owner carries", { 
     });
     const stdout = Buffer.from((result as { capturedOutput?: { stdout?: Uint8Array } }).capturedOutput?.stdout ?? new Uint8Array()).toString("utf8");
     assert.match(stdout, /^[0-9a-f]{32}$/u, `the child carries a mark: ${stdout}`);
-    const marks = readFileSync(join(run.runRoot, "process-marks", (await import("node:fs")).readdirSync(join(run.runRoot, "process-marks")).find((name) => name.endsWith(".json"))!), "utf8");
-    assert.equal((JSON.parse(marks) as { value: string }).value, stdout, "the persisted mark is the child's");
+    assert.equal(sessionMark(run, "agent-m").value, stdout, "the persisted mark is the child's");
   } finally {
     await run.close();
+    await host.close();
+  }
+});
+
+/** A managed `process.start` through the ToolBroker, as a worker's tool call makes it. */
+async function startManaged(run: Awaited<ReturnType<typeof bind>>["run"], project: string, sessionId: string, actor: string, args: string[]) {
+  const broker = new ToolBroker({ permissionProfile: "full", workspacePath: project, executionGrants: run.executionGrants,
+    artifacts: new ArtifactStore(join(project, "..", `broker-artifacts-${randomUUID().slice(0, 8)}`)), maxInlineOutputBytes: 512 * 1024 });
+  for (const tool of createManagedProcessTools(run.managedProcesses)) broker.register(tool);
+  const started = await broker.invoke({ type: "tool_call", callId: `start-${randomUUID()}`, name: "process.start", arguments: { command: process.execPath, args } },
+    { runId: run.runId, sessionId, actor: { role: "worker", id: actor }, workspacePath: project });
+  assert.equal(started.isError, false, JSON.stringify(started.content));
+  const value = (started.content[0] as { value: { pid?: unknown } }).value;
+  assert.ok(typeof value.pid === "number" && value.pid > 0, JSON.stringify(value));
+  return { pid: value.pid };
+}
+
+function sessionMark(run: Awaited<ReturnType<typeof bind>>["run"], sessionId: string): { value: string; issuedAt: string } {
+  const folder = join(run.runRoot, "process-marks");
+  for (const name of readdirSync(folder).filter((entry) => entry.endsWith(".json"))) {
+    const mark = JSON.parse(readFileSync(join(folder, name), "utf8")) as { sessionId: string; value: string; issuedAt: string };
+    if (mark.sessionId === sessionId) return mark;
+  }
+  throw new Error(`no mark for ${sessionId}`);
+}
+
+function errorText(error: unknown): string {
+  if (error instanceof AggregateError) return [error.message, ...error.errors.map(errorText)].join(" ");
+  return error instanceof Error ? `${error.message} ${error.cause ? errorText(error.cause) : ""}` : String(error);
+}
+
+test("a marked process alive in a live Runner Job is never ended: the sweep refuses, and the stop is unproven", { skip: WINDOWS ? false : "Windows only", timeout: 300_000 }, async () => {
+  const { host, run, project } = await bind("live-member");
+  try {
+    const member = track((await startManaged(run, project, "agent-l", "worker-other", ["-e", "setTimeout(()=>{},120000)", `${OWN_MARKER}live`])).pid);
+    // Another actor of the same session stops: they share the mark, and the other actor's process still runs.
+    const refused = await run.managedProcesses.closeAgent({ runId: run.runId, sessionId: "agent-l", actor: { role: "worker", id: "worker-self" } })
+      .then(() => undefined, (error: unknown) => error);
+    assert.ok(isProcessStopUnprovenError(refused), `unproven, not swept: ${String(refused)}`);
+    assert.ok(sameAlive(member), "the other actor's process is untouched");
+    // The sweep itself, asked directly for that mark: the member is marked, unpackaged and in a job, so it is reported
+    // and left alone. This part needs no Store app, so it runs on every Windows host.
+    const mark = sessionMark(run, "agent-l");
+    const report = await sweepMarkedWindowsProcesses({ markName: RUNNER_PROCESS_MARK_NAME, markValue: mark.value, since: new Date(mark.issuedAt) });
+    assert.equal(report.settled, false);
+    assert.deepEqual(report.ended, []);
+    assert.ok(report.unended.some((entry) => entry.pid === member.pid && entry.reason === "in_job_not_packaged" && entry.inJob && !entry.packaged), JSON.stringify(report));
+    assert.ok(sameAlive(member), "still alive after the sweep");
+    // A mark nobody carries, and a start time after every process: nothing is looked at, nothing is ended.
+    const other = await sweepMarkedWindowsProcesses({ markName: RUNNER_PROCESS_MARK_NAME, markValue: "0".repeat(32), since: new Date(mark.issuedAt) });
+    assert.deepEqual([other.settled, other.ended.length, other.unended.length], [true, 0, 0]);
+    const later = await sweepMarkedWindowsProcesses({ markName: RUNNER_PROCESS_MARK_NAME, markValue: mark.value, since: new Date(Date.now() + 60_000) });
+    assert.deepEqual([later.settled, later.ended.length, later.unended.length], [true, 0, 0]);
+    assert.ok(sameAlive(member));
+    // Once the other actor stops, the session's stop is proven.
+    await run.managedProcesses.closeAgent({ runId: run.runId, sessionId: "agent-l", actor: { role: "worker", id: "worker-other" } });
+    assert.equal(sameAlive(member), false, "its own stop ended it, through its Job");
+    await run.managedProcesses.closeAgent({ runId: run.runId, sessionId: "agent-l", actor: { role: "worker", id: "worker-self" } });
+  } finally {
+    await run.close();
+    await host.close();
+  }
+});
+
+test("a sweep that fails at the run's close leaves the close failed; a retried close proves it", { skip: WINDOWS ? false : "Windows only", timeout: 300_000 }, async () => {
+  let fail = true;
+  const { host, run, project } = await bind("close-fails", {
+    escapeSweep: async (request) => {
+      if (fail) throw new Error("injected sweep failure");
+      return await sweepMarkedWindowsProcesses(request);
+    },
+  });
+  try {
+    // A one-shot command marks its session; no owner stop sweeps it, so the close does.
+    const result = await run.commandExecution.execute({
+      executable: process.execPath, arguments: ["-e", "0"], workingDirectory: project, timeoutMs: 60_000, captureOutputBytes: 1024,
+      context: { runId: run.runId, sessionId: "agent-f", actor: { role: "worker", id: "worker-f" }, callId: "close-1", toolName: "process.run", runnerInternal: true },
+    });
+    assert.equal((result as { process?: { exitCode?: unknown } }).process?.exitCode, 0);
+    const refused = await run.close().then(() => undefined, (error: unknown) => error);
+    assert.ok(refused instanceof Error && errorText(refused).includes("injected sweep failure"), `the close fails: ${String(refused)}`);
+    fail = false;
+    await run.close();
+  } finally {
+    fail = false;
+    await run.close().catch(() => undefined);
     await host.close();
   }
 });

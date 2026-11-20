@@ -491,8 +491,21 @@ app policy on a Windows PowerShell root; not elevated).**
   in the run's sweep log (`<run>/process-marks/sweeps.jsonl`, with every sweep's ended and unended lists) and never
   ended. It does not by itself leave the stop unproven: nothing attributes it to the owner, and the owner's own elevated
   tools started during an attempt would otherwise block every stop (DECISION §8.4).
-- **Another actor in the same session.** The sweep waits while the managed service still has a live process of that
-  session (they would share the mark); that actor's own stop, or the run's close, sweeps it.
+- **A live launch of the same session.** The sweep never runs beside a live Runner-owned process that shares the mark:
+  it would end one that is packaged and fail on one that is not. So a session's sweep first requires every launch of
+  that session (and of its subagents) to be released in the run's own stores: managed records, streaming sessions
+  (language and MCP servers, managed processes) and one-shot commands. A live one leaves the stop unproven, and the
+  retried stop sweeps once it is gone. Every stop path closes its language and MCP servers before the managed stop,
+  and current callers give each actor its own session, so this does not fire today; it is the guard, not a deferral.
+- **Subagents and launches during a sweep.** A session's sweep covers its subagents' sessions
+  (`<session>:subagent:<id>`), because after a restart the worker's retried stop reaches only the subagents with a
+  managed record left. A session with no launch since its last settled sweep is not swept again (nothing can carry its
+  mark that was not there before), and a launch during a sweep keeps the session pending.
+- **A known cost to the owner.** A Store program a worker started that the owner then uses (a single-instance app such
+  as Windows Terminal or Notepad on Windows 11) is ended at the worker's stop, with any unsaved work in it.
+- **Not covered.** 32-bit Windows (the sweep reads 64-bit process parameters; there every Windows stop would be
+  unproven). A transient run (a CLI Test or check) removes its whole folder after its proven close, sweep log
+  included.
 
 **What it proves and what it does not.** It is detection, not proof. It finds every live escapee that kept the
 worker's environment, whatever started it and however deep. It does not see a packaged program started without that
@@ -514,5 +527,10 @@ another owner's escapee and an unmarked process are not, and the sweep log recor
 terminate failure leaves the stop unproven (`isProcessStopUnprovenError`) and a retried stop ends it; the run's close
 ends an escapee no owner stop swept; a child carries the persisted mark. With the sweep calls removed (main's
 behavior) the first three fail: the Store pwsh survives the stop, the stop reads proven, and the run's close leaves it.
-`process-escape-marks.test.ts` (portable): the mark's issue, persistence and restart; what each report means for the
-stop; the environment rules; where `closeAgent` runs the sweep.
+Two more cases run on any Windows host (CI included): a marked process alive in a live Runner Job of another actor of
+the session leaves the stop unproven and is left alone, and the sweep asked directly reports it `in_job_not_packaged`
+without ending it (a mark nobody carries, or a later start time, ends nothing); a sweep that fails at the run's close
+leaves the close failed, and a retried close proves it. `process-escape-marks.test.ts` (portable, in PR CI): the
+mark's issue, persistence and restart; what each report means for the stop; subagent sessions and a launch during a
+sweep; the environment rules; where `closeAgent` runs the sweep. The independent review of the first version found
+the live-launch, subagent and launch-during-sweep gaps (all latent with today's callers); they are fixed as above.

@@ -1701,7 +1701,8 @@ public static class ManagedProcessEscapeSweep
             {
                 if (pid == 0 || pid == 4 || pid == self) continue;
                 uint session;
-                if (!ProcessIdToSessionId(pid, out session) || session != mySession) continue;
+                if (!ProcessIdToSessionId(pid, out session)) { unqueried++; continue; }
+                if (session != mySession) continue;
                 Entry entry;
                 IntPtr handle = Inspect(pid, sinceFileTime, mySid, markName, markValue, out entry, ref unqueried);
                 if (entry == null) continue;

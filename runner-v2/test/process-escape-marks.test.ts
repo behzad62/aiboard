@@ -37,7 +37,7 @@ test("a mark is issued once per owner session, persisted, and found again after 
   assert.throws(() => marks.markFor({ runId: "run-2", sessionId: "agent-a" }), /another run/u);
 
   const restarted = new ProcessEscapeMarks(root, "run-1");
-  assert.deepEqual(restarted.pending("agent-a"), [{ runId: "run-1", sessionId: "agent-a", value: a, issuedAt: issuedAt.toISOString() }]);
+  assert.deepEqual(restarted.pending("agent-a").map(({ launch: _launch, ...mark }) => mark), [{ runId: "run-1", sessionId: "agent-a", value: a, issuedAt: issuedAt.toISOString() }]);
   assert.deepEqual(restarted.pending().map((mark) => mark.sessionId).sort(), ["agent-a", "agent-b"], "after a restart every mark is swept again");
   assert.deepEqual(restarted.pending("agent-c"), [], "a session that never launched has nothing to sweep");
 });
@@ -149,14 +149,36 @@ test("the owner's managed stop sweeps the owner's session after its processes ar
   assert.equal(f.order[1], "sweep agent-a", "the sweep runs after the stop");
 });
 
-test("while another actor of the same session still runs, the sweep waits for that actor's stop", async (t) => {
+test("while another actor of the same session still runs, the stop is unproven and nothing is swept", async (t) => {
   const f = serviceWithSweep(t, async () => {});
   await f.service.start({ command: "node" }, f.context("agent-a", "worker-a"), f.root);
   await f.service.start({ command: "node" }, f.context("agent-a", "worker-b"), f.root);
-  await f.service.closeAgent({ runId: "run", sessionId: "agent-a", actor: { role: "worker", id: "worker-a" } });
+  const error = await f.service.closeAgent({ runId: "run", sessionId: "agent-a", actor: { role: "worker", id: "worker-a" } }).then(() => undefined, (caught: unknown) => caught);
+  assert.ok(isProcessStopUnprovenError(error), "they share the mark: sweeping now could end worker-b's processes");
   assert.ok(!f.order.includes("sweep agent-a"), `no sweep while worker-b's process runs: ${f.order.join(", ")}`);
   await f.service.closeAgent({ runId: "run", sessionId: "agent-a", actor: { role: "worker", id: "worker-b" } });
-  assert.equal(f.order.at(-1), "sweep agent-a");
+  assert.equal(f.order.at(-1), "sweep agent-a", "the last actor's stop sweeps");
+  await f.service.closeAgent({ runId: "run", sessionId: "agent-a", actor: { role: "worker", id: "worker-a" } });
+});
+
+test("a session's sweep covers its subagents' sessions, and a launch during a sweep keeps the session pending", async (t) => {
+  const root = temporary(t);
+  const marks = new ProcessEscapeMarks(root, "run-1");
+  marks.markFor({ runId: "run-1", sessionId: "agent-a" });
+  marks.markFor({ runId: "run-1", sessionId: "agent-a:subagent:1" });
+  marks.markFor({ runId: "run-1", sessionId: "agent-ab" });
+  assert.deepEqual(marks.pending("agent-a").map((mark) => mark.sessionId), ["agent-a", "agent-a:subagent:1"], "not a session that only shares the prefix");
+  const swept: string[] = [];
+  await sweepEscapedProcesses(marks, async (request) => {
+    swept.push(request.markValue);
+    // A launch of the session while its sweep runs: its process may have started after the snapshot.
+    marks.markFor({ runId: "run-1", sessionId: "agent-a" });
+    return clean;
+  }, { sessionId: "agent-a" });
+  assert.equal(swept.length, 2);
+  assert.deepEqual(marks.pending("agent-a").map((mark) => mark.sessionId), ["agent-a"], "the session launched during its sweep and stays pending");
+  await sweepEscapedProcesses(marks, async () => clean, { sessionId: "agent-a" });
+  assert.deepEqual(marks.pending("agent-a"), []);
 });
 
 test("a sweep failure makes the owner's managed stop unproven, whatever its error", async (t) => {

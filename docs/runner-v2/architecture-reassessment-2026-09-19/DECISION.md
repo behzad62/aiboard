@@ -142,7 +142,10 @@ Exact native escape policy:
    reported PID alone. A process whose facts cannot be read (an elevated one, for example) is recorded and never ended,
    and does not by itself leave the stop unproven, since nothing attributes it. A marked process that cannot be ended,
    an exit that is not seen, a marked process inside some job that is not packaged (it may be a live Runner Job member),
-   or a failed snapshot leaves the stop unproven (`cleanup_blocked`), with the worktree claim kept.
+   a live launch of the same session still recorded in the run's stores (the sweep would risk it), or a failed snapshot
+   leaves the stop unproven (`cleanup_blocked`; the code's `process_cleanup_unverified`), with the worktree claim kept.
+   "One snapshot" means one per stop: it is repeated, at most 8 times, only while it keeps ending marked processes
+   (a child started meanwhile).
 2. Use low-cost existing evidence (registered helper identity, protocol ownership, observed loss of group membership) diagnostically. PPID alone does not establish cleanup authority.
 3. If an attributable owned helper is known to escape, record the incident and block automatic affected-resource release/replacement until its termination or explicit external ownership transfer is established. Do not introduce a generic per-PID escape killer. Uncertain attribution is reported as uncertainty and does not authorize signaling.
 4. If no escape is known and the group and other owned resources have valid evidence, release **the group-scoped lease**. Do not block every native execution forever because an invisible detached process is theoretically possible. Native mode cannot promise zero undetected escaped helpers.

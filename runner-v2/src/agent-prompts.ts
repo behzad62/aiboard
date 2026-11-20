@@ -59,7 +59,7 @@ export const RUNNER_UNTRUSTED_DATA_LINE =
  * Runner's own stop and its escape sweep are what end what is left.
  */
 export const RUNNER_PROCESS_CLEANUP_LINE =
-  "Before you finish, stop every process you started that is still running (a server, a watcher, anything started in the background, with Start-Process or with start). Whatever is left is ended when your turn ends.";
+  "Before you finish, stop every process you started that is still running (a server, a watcher, anything started in the background, with Start-Process or with start); do not leave one running for later.";
 
 /** T10 (M12): v2 kernel invariants for editing roles (worker, Architect). */
 export const RUNNER_KERNEL_INVARIANTS_V2 = [

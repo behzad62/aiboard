@@ -25,14 +25,21 @@ export interface ProcessEscapeMark {
   readonly issuedAt: string;
 }
 
+/** A mark to sweep, with the session's launch count when it was taken. */
+export interface PendingProcessEscapeMark extends ProcessEscapeMark { readonly launch: number }
+
 export type ProcessEscapeSweeper = (request: WindowsEscapeSweepRequest) => Promise<WindowsEscapeSweepReport>;
 
 const MARK_FILE = /^[0-9a-f]{32}\.json$/;
 
 export class ProcessEscapeMarks {
   private readonly cache = new Map<string, ProcessEscapeMark>();
-  /** Sessions launched since their last settled sweep (all loaded ones count, after a restart). */
-  private readonly unswept = new Set<string>();
+  /**
+   * Sessions launched since their last settled sweep (all loaded ones count, after a restart), each with its launch
+   * count, so a launch during a sweep keeps its session pending (settled only clears an unchanged count).
+   */
+  private readonly unswept = new Map<string, number>();
+  private launches = 0;
   private loaded = false;
 
   constructor(private readonly directory: string, private readonly runId: string, private readonly clock: () => Date = () => new Date()) {}
@@ -51,7 +58,7 @@ export class ProcessEscapeMarks {
       renameSync(temporary, path);
       this.cache.set(owner.sessionId, mark);
     }
-    this.unswept.add(owner.sessionId);
+    this.unswept.set(owner.sessionId, ++this.launches);
     return mark.value;
   }
 
@@ -60,13 +67,21 @@ export class ProcessEscapeMarks {
    * settled sweep. A settled sweep left no marked process alive, and only a launch makes a new one (its prepare calls
    * markFor), so a session with no launch since has nothing new to find.
    */
-  pending(sessionId?: string): readonly ProcessEscapeMark[] {
+  pending(sessionId?: string): readonly PendingProcessEscapeMark[] {
     this.load();
-    const sessions = sessionId === undefined ? [...this.unswept] : this.unswept.has(sessionId) ? [sessionId] : [];
-    return sessions.map((session) => this.cache.get(session)!).filter(Boolean);
+    // A session's sweep covers its subagents' sessions (`<session>:subagent:<id>`, native-worker-driver.ts): after a
+    // restart the worker's retried stop reaches only the subagents that still have a managed record.
+    const sessions = [...this.unswept.keys()].filter((session) => sessionId === undefined || session === sessionId || session.startsWith(`${sessionId}:subagent:`));
+    return sessions.flatMap((session) => {
+      const mark = this.cache.get(session);
+      return mark ? [Object.freeze({ ...mark, launch: this.unswept.get(session)! })] : [];
+    });
   }
 
-  settled(sessionId: string): void { this.unswept.delete(sessionId); }
+  /** The mark settled: no longer pending, unless the session launched again since the sweep began. */
+  settled(mark: PendingProcessEscapeMark): void {
+    if (this.unswept.get(mark.sessionId) === mark.launch) this.unswept.delete(mark.sessionId);
+  }
 
   /** Appends one sweep's report to the run's durable sweep log (the unreadable processes are recorded there). */
   record(entry: Readonly<Record<string, unknown>>): void {
@@ -91,7 +106,7 @@ export class ProcessEscapeMarks {
       }
       this.cache.set(value.sessionId, Object.freeze(value as ProcessEscapeMark));
       // Issued by an earlier Runner process: whether it was swept since is unknown, so it is swept again.
-      this.unswept.add(value.sessionId);
+      this.unswept.set(value.sessionId, ++this.launches);
     }
     this.loaded = true;
   }
@@ -127,7 +142,7 @@ export async function sweepEscapedProcesses(
     }
     marks.record({ sessionId: mark.sessionId, ...report });
     if (report.settled && report.unended.length === 0) {
-      marks.settled(mark.sessionId);
+      marks.settled(mark);
       continue;
     }
     const left = report.unended.map((entry) => `${entry.image || "process"} (pid ${entry.pid}${entry.reason ? `, ${entry.reason}` : ""})`);
