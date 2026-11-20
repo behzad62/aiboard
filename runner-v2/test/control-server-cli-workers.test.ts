@@ -291,7 +291,7 @@ test("§3.11c: on Windows Codex is checked like the other CLIs (version, login, 
   }
 });
 
-test("§3.11c: a packaged (Microsoft Store) Codex is refused with its reason, without a launch", async () => {
+test("§3.11c: a packaged codex.exe (the Codex desktop app's bundled one) is refused with its reason, without a launch", async () => {
   for (const path of [
     "C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\codex.exe",
     "C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\OpenAI.Codex_2p2nqsd0c76g0\\codex.exe",
@@ -302,8 +302,8 @@ test("§3.11c: a packaged (Microsoft Store) Codex is refused with its reason, wi
       const codex = worker((await f.call("/v2/cli-workers")).body, "codex-cli");
       assert.equal(codex.status, "unavailable", path);
       assert.equal(codex.code, "executable_refused", path);
-      assert.match(codex.reason!, /packaged \(Microsoft Store\) program/);
-      assert.ok(!f.processes.launches.some((launch) => launch.executable === path), "the packaged Codex was never launched");
+      assert.match(codex.reason!, /inside a Microsoft Store package.*Install the Codex CLI/);
+      assert.ok(!f.processes.launches.some((launch) => launch.executable === path), "the packaged codex.exe was never launched");
     } finally {
       await f.close();
     }

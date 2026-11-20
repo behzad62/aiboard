@@ -54,7 +54,7 @@ export type CliPlatform = "win32" | "linux" | "darwin";
  * Codex runs on Windows since its Job escape was traced and closed (§3.11c): Codex ran every command through the Store
  * pwsh it found by name on its PATH, and a packaged program an unpackaged process in the Job starts is created outside
  * the Job. R3 takes the WindowsApps folders off every managed child's PATH, so Codex falls to an unpackaged
- * PowerShell, and a packaged Codex itself is refused (`resolveCliExecutable`).
+ * PowerShell, and the Codex desktop app's own packaged codex.exe is refused (`resolveCliExecutable`).
  */
 export const CLI_WORKER_PLATFORM_REFUSALS: Readonly<Record<CliWorkerProviderId, Readonly<Partial<Record<CliPlatform, string>>>>> = Object.freeze({
   "codex-cli": Object.freeze({
@@ -156,7 +156,7 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
       return { status: "refused", source: "home", path: override, reason: "The executable path must be an absolute path." };
     const form = executableForm(override, platform);
     if (!form) return { status: "refused", source: "home", path: override, reason: windowsFormReason(override) };
-    // An app execution alias cannot be stat'ed (EACCES), so a Store Codex set in Settings is refused by its path first,
+    // An app execution alias cannot be stat'ed (EACCES), so a packaged codex.exe set in Settings is refused by its path first,
     // with its reason, never reported as "could not be inspected".
     const lexical = await withoutPackagedCodex({ ...input, realPath: async () => "absent" }, platform, { status: "found", path: override, source: "home", form });
     if (lexical.status !== "found") return lexical;
@@ -178,7 +178,9 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
 }
 
 /**
- * §3.11c: on Windows a Codex installed as a packaged (MSIX / Microsoft Store) program is refused. The managed launch
+ * §3.11c: on Windows a codex.exe inside a packaged (MSIX / Microsoft Store) app is refused. The only one known is the
+ * agent the Codex desktop app bundles in its Store package (`app\resources\codex.exe`, not on PATH); the Codex CLI from
+ * OpenAI's installer or npm is unpackaged and runs. The managed launch
  * would pin it and start it as the Job's packaged root (R3), the one shape whose own children can be created outside
  * the Job without the Job seeing them (the CW0b report §6), and Codex was never measured that way. Its path and its
  * real path are both checked, so a junction or a link into a WindowsApps folder counts. Only Codex: Claude Code and
@@ -192,7 +194,7 @@ async function withoutPackagedCodex(
   if (platform !== "win32" || input.providerId !== "codex-cli") return found;
   const refused = (): CliExecutableResolution => ({
     status: "refused", source: found.source, path: found.path,
-    reason: `${win32.basename(found.path)} is a packaged (Microsoft Store) program, which AIBoard does not run as a Codex CLI worker: its processes could run outside the job AIBoard stops. Install the standalone Codex CLI and set its path in Settings.`,
+    reason: `${win32.basename(found.path)} is inside a Microsoft Store package, such as the codex.exe the Codex desktop app bundles. AIBoard does not run that one as a worker: the programs it starts could run outside the job AIBoard stops. Install the Codex CLI (OpenAI's installer or npm) next to the desktop app and use that one; both use the .codex folder in your user profile.`,
   });
   if (isWindowsAppsPathEntry(win32.dirname(found.path))) return refused();
   const real = await (input.realPath ?? realPathOf)(found.path);

@@ -825,7 +825,7 @@ test("lookup: the home's path wins; on Windows only .exe and .cmd are launched",
   assert.deepEqual(cliExecutableMissingFailure("agy", NOW).kind, "authentication");
 });
 
-test("§3.11c: on Windows a packaged (Microsoft Store) Codex is refused, by its path or its real path; other CLIs and OSes are not", async () => {
+test("§3.11c: on Windows a packaged codex.exe (the Codex desktop app's bundled one) is refused, by its path or its real path; the Codex CLI, other CLIs and OSes are not", async () => {
   const found = (path: string): CheckToolLookup => async () => ({ status: "found", path });
   const realPath = (value: string | "absent" | "unknown") => async () => value;
   const packaged = [
@@ -837,7 +837,7 @@ test("§3.11c: on Windows a packaged (Microsoft Store) Codex is refused, by its 
   for (const path of packaged) {
     const lookedUp = await resolveCliExecutable({ providerId: "codex-cli", lookup: found(path), cwd: "C:\\w", platform: "win32", realPath: realPath("absent") });
     assert.equal(lookedUp.status, "refused", path);
-    assert.match(lookedUp.status === "refused" ? lookedUp.reason : "", /packaged \(Microsoft Store\) program.*Install the standalone Codex CLI/);
+    assert.match(lookedUp.status === "refused" ? lookedUp.reason : "", /inside a Microsoft Store package, such as the codex\.exe the Codex desktop app bundles.*Install the Codex CLI \(OpenAI's installer or npm\) next to the desktop app/);
     const home = await resolveCliExecutable({ providerId: "codex-cli", executablePath: path, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "file", realPath: realPath("absent") });
     assert.equal(home.status, "refused", `home ${path}`);
     // An app execution alias cannot be stat'ed: the path alone refuses it, before any inspection.
@@ -850,9 +850,14 @@ test("§3.11c: on Windows a packaged (Microsoft Store) Codex is refused, by its 
   assert.equal(linked.status, "refused");
   // A real path that cannot be read is undecided, never launched as found.
   assert.equal((await resolveCliExecutable({ providerId: "codex-cli", lookup: found("C:\\tools\\codex.exe"), cwd: "C:\\w", platform: "win32", realPath: realPath("unknown") })).status, "unknown");
-  // The standalone CLI (the installer's folder, an npm shim) is found as before.
-  for (const path of ["C:\\Users\\me\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd"]) {
-    const resolved = await resolveCliExecutable({ providerId: "codex-cli", lookup: found(path), cwd: "C:\\w", platform: "win32", realPath: realPath(path) });
+  // The Codex desktop app's own agent, inside its Store package (not on PATH), set in Settings.
+  const desktopAgent = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1117.3838.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe";
+  assert.equal((await resolveCliExecutable({ providerId: "codex-cli", executablePath: desktopAgent, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "file", realPath: realPath(desktopAgent) })).status, "refused");
+  // The Codex CLI is found as before: OpenAI's installer (its bin folder is a junction into %USERPROFILE%\.codex) and npm.
+  const installerBin = "C:\\Users\\me\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+  const installerReal = "C:\\Users\\me\\.codex\\packages\\standalone\\releases\\0.171.0-x86_64-pc-windows-msvc\\bin\\codex.exe";
+  for (const [path, real] of [[installerBin, installerReal], ["C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd"]] as const) {
+    const resolved = await resolveCliExecutable({ providerId: "codex-cli", lookup: found(path), cwd: "C:\\w", platform: "win32", realPath: realPath(real) });
     assert.equal(resolved.status, "found", path);
   }
   // A folder merely named WindowsApps is not a package folder.

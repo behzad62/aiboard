@@ -261,9 +261,12 @@ aiboard models disable <provider:model>`}
           Use Claude Code&apos;s native <code>claude.exe</code>: its npm <code>.cmd</code> shim is refused.
         </p>
         <p className="text-sm text-muted-foreground">
-          Codex CLI workers need a Runner newer than 0.3.22. Use the standalone Codex CLI (its installer or npm): a
-          Microsoft Store Codex is refused, because the programs it starts could run outside the Runner&apos;s Job. A
-          Codex worker&apos;s commands run in Windows PowerShell, or in PowerShell 7 if you installed it from its
+          Codex CLI workers need a Runner newer than 0.3.22. A worker runs the Codex CLI, installed with OpenAI&apos;s
+          installer (<code>irm https://chatgpt.com/codex/install.ps1 | iex</code>, which puts <code>codex</code> on
+          your PATH) or with npm. The Codex desktop app from the Microsoft Store bundles its own <code>codex.exe</code>
+          inside its package, and that one isn&apos;t run as a worker, because the programs it starts could run outside
+          the Runner&apos;s Job. The CLI installs next to the desktop app: both use the <code>.codex</code> folder in
+          your user profile. A Codex worker&apos;s commands run in Windows PowerShell, or in PowerShell 7 if you installed it from its
           installer: the Microsoft Store PowerShell is left off the worker&apos;s PATH, because the programs it starts
           run outside the Job. A server a CLI worker starts, such as a dev server, stops when its attempt ends.
         </p>
