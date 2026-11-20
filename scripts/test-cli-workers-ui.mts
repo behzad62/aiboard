@@ -430,7 +430,10 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.equal(cliModelToAdd("gpt-6.2-sol", "", [null, "gpt-6.2-sol"]), undefined);
   assert.equal(cliModelToAdd("", "__cli_default__", [null]), undefined);
   assert.deepEqual(cliModelToAdd("gpt-6.2-astra", "", [null, "gpt-6.2-sol"]), { id: "gpt-6.2-astra" });
-  assert.equal(cliTypedModelError("gpt-6.2-sol", "gpt-6.2-sol", ["gpt-6.2-sol"]), "gpt-6.2-sol is already in the list.");
+  assert.equal(cliTypedModelError("gpt-6.2-sol", "gpt-6.2-sol", ["gpt-6.2-sol"]), "That model is already in the list.");
+  // The list's own key for the CLI default is not a typed id either (it would collide with the default's row).
+  assert.equal(cliModelToAdd("__cli_default__", ""), undefined);
+  assert.equal(cliTypedModelError("__cli_default__", undefined), "Pick \"CLI default\" from the list instead.");
   assert.equal(cliTypedModelError("gpt-6.2-astra", "gpt-6.2-sol", ["gpt-6.2-sol"]), null);
   const agy = parsed.workers.find((check) => check.providerId === "agy")!;
   const firstId = agy.models.find((model) => model.id !== null)!.id!;

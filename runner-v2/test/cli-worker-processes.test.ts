@@ -6,13 +6,14 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
-import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses } from "../src/cli-worker-processes.js";
+import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses, type CliWorkerProcessOutput } from "../src/cli-worker-processes.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { MANAGED_OUTPUT_LIVE_TAIL_BYTES } from "../src/managed-process-output.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
@@ -30,8 +31,53 @@ const CANARIES = ["canary@example.test", "Canary Org", "00000000-0000-4000-8000-
 // version came back unknown once (CI run 44500809465). The hanging Test's 1.5 s is a deadline that must pass, not a bound.
 const CI_STEP_BOUND_MS = 56_879;
 
+/**
+ * The durable states and blocked codes in a folder's JSON files, by file: what a process left unreleased was waiting on
+ * (read before the session's stop, which would move it on).
+ */
+function durableStates(folder: string): string[] {
+  if (!existsSync(folder)) return [`${folder}: missing`];
+  const found: string[] = [];
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
+    const path = join(entry.parentPath, entry.name);
+    if (!entry.isFile() || !entry.name.endsWith(".json") || /[\\/]artifacts[\\/]/.test(path)) continue;
+    let text: string;
+    try { text = readFileSync(path, "utf8"); } catch (error) { found.push(`${path.slice(folder.length + 1)}: unreadable (${(error as Error).message})`); continue; }
+    const values = (key: string) => [...new Set([...text.matchAll(new RegExp(`"${key}"\\s*:\\s*"([A-Za-z_]+)"`, "g"))].map((match) => match[1]))].join(",") || "-";
+    found.push(`${path.slice(folder.length + 1)}: state ${values("state")}; status ${values("status")}; code ${values("code")}; ${statSync(path).size} bytes`);
+  }
+  // The streaming sessions (release state, each effect's cleanup progress and blockers), the host launches, and the
+  // output checkpoints' outcome and pages, read-only.
+  type Fact = { resource?: string; status?: string; blocker?: { code?: string } };
+  type Effect = { kind?: string; status?: string; blocker?: { code?: string }; progress?: { resources?: Fact[] }; resources?: Fact[] };
+  const effects = (list: Effect[] | undefined) => (list ?? []).map((effect) =>
+    `${effect.kind}:${effect.status}${effect.blocker?.code ? `(${effect.blocker.code})` : ""}[${[...(effect.progress?.resources ?? []), ...(effect.resources ?? [])]
+      .map((fact) => `${fact.resource}:${fact.status}${fact.blocker?.code ? `(${fact.blocker.code})` : ""}`).join(" ")}]`).join("; ");
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || entry.name !== "streaming-sessions.sqlite") continue;
+    const path = join(entry.parentPath, entry.name);
+    try {
+      const database = new DatabaseSync(path, { readOnly: true });
+      try {
+        const rows = (table: string) => (database.prepare(`SELECT record_json FROM ${table}`).all() as Array<{ record_json: string }>).map((row) => JSON.parse(row.record_json) as Record<string, unknown>);
+        for (const record of rows("streaming_sessions")) found.push(`session ${String(record.callId)}: ${String(record.state)}, cleanup by ${String(record.cleanupOwner)}; ${effects(record.effects as Effect[])}`);
+        for (const record of rows("streaming_host_launches")) found.push(`launch: ${String(record.state)}; ${effects(record.effects as Effect[])}`);
+        for (const record of rows("streaming_output_checkpoints")) {
+          const continuation = record.continuation as { pages?: number; retainedBytes?: number; loss?: string; finalized?: unknown } | null;
+          found.push(`checkpoint: ${String(record.outcome)}, ${continuation?.pages ?? 0} pages, ${continuation?.retainedBytes ?? 0} bytes, loss ${continuation?.loss}, finalized ${continuation?.finalized ? "yes" : "no"}`);
+        }
+      } finally {
+        database.close();
+      }
+    } catch (error) {
+      found.push(`${path.slice(folder.length + 1)}: unreadable (${(error as Error).message})`);
+    }
+  }
+  return found;
+}
+
 /** Wraps the sessions to note how each process and each session's stop ended, so a failure names its cause. */
-function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProcesses {
+function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: () => string[]): CliWorkerProcesses {
   return {
     async open(input) {
       const session = await processes.open(input);
@@ -68,6 +114,7 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
         },
         async close() {
           for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)`);
+          if (running.size && beforeClose) for (const line of beforeClose()) notes.push(`  before the stop: ${line}`);
           try {
             await session.close();
             notes.push(`${input.purpose} session: stop proven`);
@@ -264,7 +311,7 @@ test("through the execution host: a free probe that prints far more than the liv
         host,
         capabilitiesConfig: () => capabilitiesConfig,
         capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: state }),
-      }), notes),
+      }), notes, () => durableStates(join(state, "transient-runs"))),
       lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
       platform: "win32",
       isRoot: () => false,
@@ -278,9 +325,9 @@ test("through the execution host: a free probe that prints far more than the liv
     assert.equal(check.modelsSource, "cli", `${check.modelsNote ?? "no note"}${trace}`);
     const listed = list.models.filter((model) => model.visibility === "list").map((model) => model.slug);
     assert.ok(listed.length > 0);
+    // Whether the live reads fell behind the CLI's one write (and so read it again) depends on the host's speed; the
+    // trace above says which happened, and the scripted test below drives the re-read itself.
     assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
-    // The live reads did skip the start (the list is far past the live tail), so the list came from the re-read.
-    assert.ok(notes.includes("check debug models: read again from the start"), `the probe was not read again${trace}`);
   } catch (error) {
     bodyFailed = true;
     throw error;
@@ -294,4 +341,81 @@ test("through the execution host: a free probe that prints far more than the liv
       console.error(`cleanup after the failure: ${inspect(error, { depth: Infinity })}`);
     }
   }
+});
+
+/**
+ * A process double whose reads follow a script per probe: `live` is what each read returns before any rewind (as a
+ * host whose live reads skipped the start returns it), `whole` what reads return after one. Rewinds are noted.
+ */
+function scriptedProcesses(scripts: Record<string, { live: CliWorkerProcessOutput; whole?: CliWorkerProcessOutput }>, rewinds: string[]): CliWorkerProcesses {
+  return {
+    async open() {
+      return {
+        async start({ args }) {
+          const name = args.join(" ");
+          const script = scripts[name];
+          if (!script) throw new Error(`no script for ${name}`);
+          let rewound = false;
+          return {
+            async closeInput() {},
+            async read(waitMs) {
+              if (!script.live.exited) await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 20)));
+              return { ...(rewound && script.whole ? script.whole : script.live) };
+            },
+            rewind() { rewound = true; rewinds.push(name); },
+          };
+        },
+        async close() {},
+      };
+    },
+  };
+}
+
+test("a free probe whose live reads skipped its start is read again once it exited, and only then", async (t) => {
+  const state = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-scripted-")));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const list = readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8");
+  const listed = (JSON.parse(list) as { models: Array<{ slug: string; visibility: string }> }).models.filter((model) => model.visibility === "list").map((model) => model.slug);
+  const exited = (stdout: string, extra: Partial<CliWorkerProcessOutput> = {}): CliWorkerProcessOutput => ({ stdout, stderr: "", gap: false, exited: true, exitCode: 0, ...extra });
+  const base = {
+    "--version": { live: exited("codex-cli 0.171.0\n") },
+    "login status": { live: exited("", { stderr: readFileSync(cliFixture("codex-cli/free/login-status.logged-in.txt"), "utf8") }) },
+  };
+  // The tail only, as the live reads left it once the start was skipped.
+  const tail = list.slice(Math.floor(list.length / 2));
+  const check = async (models: { live: CliWorkerProcessOutput; whole?: CliWorkerProcessOutput }, probeTimeoutMs = CI_STEP_BOUND_MS) => {
+    const rewinds: string[] = [];
+    const detection = new CliWorkerDetection({
+      stateDirectory: state,
+      processes: scriptedProcesses({ ...base, "debug models": models }, rewinds),
+      lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
+      platform: "win32",
+      isRoot: () => false,
+      inspect: async () => "file",
+      windowsJobContainment: async () => "verified",
+      command: (_path, args) => ({ executable: "codex", arguments: [...args] }),
+      probeTimeoutMs,
+    });
+    return { result: await detection.check("codex-cli", {}), rewinds };
+  };
+
+  const reread = await check({ live: exited(tail, { gap: true }), whole: exited(list) });
+  assert.deepEqual(reread.rewinds, ["debug models"]);
+  assert.equal(reread.result.modelsSource, "cli", reread.result.modelsNote ?? "no note");
+  assert.deepEqual(reread.result.models?.filter((model) => model.id !== null).map((model) => model.id), listed);
+
+  // The finalized record skipped a stretch too (no spill): the start stays unknown, so nothing is parsed from the middle.
+  const stillCut = await check({ live: exited(tail, { gap: true }), whole: exited(tail, { gap: true }) });
+  assert.deepEqual(stillCut.rewinds, ["debug models"]);
+  assert.equal(stillCut.result.modelsSource, "catalog");
+
+  // A probe still running at its bound is not read again: it did not finish. 300 ms is a deadline that must pass.
+  const running = await check({ live: { stdout: "", stderr: "", gap: true, exited: false, exitCode: null }, whole: exited(list) }, 300);
+  assert.deepEqual(running.rewinds, []);
+  assert.equal(running.result.modelsSource, "catalog");
+
+  // No gap: read once, as before.
+  const whole = await check({ live: exited(list) });
+  assert.deepEqual(whole.rewinds, []);
+  assert.equal(whole.result.modelsSource, "cli");
 });

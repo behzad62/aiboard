@@ -50,7 +50,9 @@ const idOf = (key: string) => (key === DEFAULT_KEY ? null : key);
  */
 export function cliModelToAdd(typed: string, pickedKey: string, chosen: readonly (string | null)[] = []): { id: string | null } | undefined {
   const text = typed.trim();
-  const pick = text ? (isCliArgumentValue(text) && text !== "default" ? { id: text } : undefined) : pickedKey ? { id: idOf(pickedKey) } : undefined;
+  // "default" is the home's refused id, and DEFAULT_KEY the list's own key for the CLI default: neither is a typed id.
+  const typedId = text && isCliArgumentValue(text) && text !== "default" && text !== DEFAULT_KEY ? text : undefined;
+  const pick = text ? (typedId ? { id: typedId } : undefined) : pickedKey ? { id: idOf(pickedKey) } : undefined;
   return pick && !chosen.includes(pick.id) ? pick : undefined;
 }
 
@@ -58,8 +60,8 @@ export function cliModelToAdd(typed: string, pickedKey: string, chosen: readonly
 export function cliTypedModelError(typed: string, exampleId: string | undefined, chosen: readonly (string | null)[] = []): string | null {
   const text = typed.trim();
   if (!text) return null;
-  if (cliModelToAdd(text, "")) return chosen.includes(text) ? `${text} is already in the list.` : null;
-  if (text === "default") return "Pick \"CLI default\" from the list instead.";
+  if (cliModelToAdd(text, "")) return chosen.includes(text) ? "That model is already in the list." : null;
+  if (text === "default" || text === DEFAULT_KEY) return "Pick \"CLI default\" from the list instead.";
   return `Type the model's id${exampleId ? `, like ${exampleId}` : ""}, not its name: letters, digits and . _ : / - only, with no spaces and no - first (at most 128).`;
 }
 

@@ -27,7 +27,8 @@ import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
  * read at once, so without a pause the reader asked again at once: a grant issued and revoked and the record saved on
  * every turn, and on a busy host that loop can hold the event loop the release itself needs (Windows CI run 44758126056:
  * two probes printing 18 and 0 characters read as exited only after 26 s, a third not within 55 s). The first pause is
- * short, as a release usually follows the exit at once, and each empty read doubles it up to the cap.
+ * short, as a release usually follows the exit at once, and each empty read doubles it up to the cap. The pause comes
+ * before the next read, never after one, so a release just before the reader's deadline is still read.
  */
 const SETTLE_FIRST_PAUSE_MS = 10;
 const SETTLE_MAX_PAUSE_MS = 250;
@@ -131,6 +132,12 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
             managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), closeInput: true }, context));
         },
         async read(waitMs: number): Promise<CliWorkerProcessOutput> {
+          // The last read found the process ended, nothing new and no release: the host would answer at once, so this
+          // read pauses first, then reads, so even a read whose pause takes all of its wait still reads a late release.
+          if (settlePause > 0) {
+            const pause = Math.min(settlePause, Math.max(0, waitMs));
+            if (pause > 0) await delay(pause);
+          }
           const result = await invoke("process.read_output", (context) =>
             managed.readOutput(processId, { ...(cursor ? { cursor } : {}), waitMs: Math.max(0, Math.min(Math.round(waitMs), MANAGED_OUTPUT_WAIT_MAX_MS)), maxBytes: MANAGED_OUTPUT_READ_MAX_BYTES }, context));
           cursor = result.cursor;
@@ -142,14 +149,9 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
           }
           const ended = result.status !== "running";
           const exited = ended && result.complete;
-          // Ended, nothing new, not released yet: the next read would be answered at once, so this one waits first.
-          if (ended && !exited && !stdout && !stderr) {
-            settlePause = settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS;
-            const pause = Math.min(settlePause, Math.max(0, waitMs));
-            if (pause > 0) await delay(pause);
-          } else {
-            settlePause = 0;
-          }
+          settlePause = ended && !exited && !stdout && !stderr
+            ? (settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS)
+            : 0;
           return { stdout, stderr, gap, exited, exitCode: result.exitCode };
         },
         rewind() {
