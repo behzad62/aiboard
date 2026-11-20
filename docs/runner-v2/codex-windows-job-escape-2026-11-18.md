@@ -470,7 +470,8 @@ app policy on a Windows PowerShell root; not elevated).**
   `AIBOARD_PROCESS_MARK=<32 hex>`, random per session (process-escape-marks.ts, set by child-environment.ts like
   `AIBOARD_MCP_DEPTH`: a caller's override is rejected). It is issued on the owner's first launch and written to the
   run's state (`<run>/process-marks/`), so a stop retried after a restart still sweeps it. Its issue time bounds the
-  sweep.
+  sweep. That time is the Runner's wall clock: a system clock set back during a Build could make a later escapee look
+  older than the mark, and the sweep would skip it.
 - **The sweep.** After the owner's managed stop (`ManagedProcessService.closeAgent`, which the worker, subagent,
   Architect and verifier stop paths call after their language and MCP servers are closed) and at the run binding's close
   (after every recorded process is released), the Job host's helper runs `ManagedProcessEscapeSweep`
@@ -490,7 +491,10 @@ app policy on a Windows PowerShell root; not elevated).**
   cannot be opened for reading (an elevated or protected one), whose token or environment cannot be read, is recorded
   in the run's sweep log (`<run>/process-marks/sweeps.jsonl`, with every sweep's ended and unended lists) and never
   ended. It does not by itself leave the stop unproven: nothing attributes it to the owner, and the owner's own elevated
-  tools started during an attempt would otherwise block every stop (DECISION §8.4).
+  tools started during an attempt would otherwise block every stop (DECISION §8.4). Two consequences: the log keeps the
+  image path of each such process of the owner's (an elevated or protected program created during a Build) in the
+  run's state; and a marked escapee whose environment read fails only at that moment is skipped like the rest, so the
+  stop can read proven with it alive. Re-reading such entries once in a later round would narrow that; it is not done.
 - **A live launch of the same session.** The sweep never runs beside a live Runner-owned process that shares the mark:
   it would end one that is packaged and fail on one that is not. So a session's sweep first requires every launch of
   that session (and of its subagents) to be released in the run's own stores: managed records, streaming sessions

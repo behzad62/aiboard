@@ -91,6 +91,11 @@ const privateOwners = new Set([
   // fix-round.json (the attempt's pending fix round) and reruns-pending.json (the tree the CLI left, while its re-runs
   // run), in the same folder.
   "cli-worker-runtime.ts",
+  // Reviewed 2026-11-20 (PR #254, docs/runner-v2/codex-windows-job-escape-2026-11-18.md §7): the per-owner process marks
+  // of one run, only under <run>/process-marks/ (Windows only). Each mark file <32 hex of sha256(session)>.json is written
+  // to an exclusive (wx) temporary and renamed into place; each sweep's report is appended to the fixed sweeps.jsonl in
+  // that folder. Every name is Runner-built; it never writes the project tree and is never a tool target.
+  "process-escape-marks.ts",
 ]);
 // Read-handle-only owners: exact reviewed mutation-capable import per module.
 // Async open owners keep ["open"]; the sync report reader keeps ["openSync"].
