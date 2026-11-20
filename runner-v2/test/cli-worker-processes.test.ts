@@ -3,12 +3,12 @@
 // is started. The OS seam stays win32, so the Windows-only v1 path runs on every CI host; the process host is this
 // host's own.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
@@ -226,13 +226,20 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
 // host the live reads keep only the newest MANAGED_OUTPUT_LIVE_TAIL_BYTES, so the first read skipped the start, the JSON
 // did not parse, and Settings offered AIBoard's own OpenAI catalog instead of Codex's models (owner, 2026-11-20). The
 // probe now reads its whole output again from the finalized record once the CLI exited. Every run prints its probes'
-// timings and reads (a passing one too), so this test's own CI times can be measured.
-test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async (t) => {
+// timings, reads and lost output (a passing one too), so these tests' own CI times can be measured.
+async function largeProbeThroughHost(t: TestContext, stateThroughAlias: boolean) {
   // The real path without 8.3 short names (GitHub's Windows temp is under RUNNER~1): the Runner refuses an output spill
   // root whose real path is spelled differently (spill_root_invalid), and without a spill the start is gone for good.
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
-  const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
+  const project = join(root, "project"), scenarios = join(root, "scenarios");
+  let state = join(root, "state");
   for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
+  // The state folder reached through a junction (Windows) or a symlink: the spill root then looks like an alias.
+  const alias = stateThroughAlias ? join(root, "state-alias") : undefined;
+  if (alias) {
+    symlinkSync(state, alias, process.platform === "win32" ? "junction" : "dir");
+    state = alias;
+  }
   const wrapper = join(root, "fake-cli-wrapper.mjs");
   writeFileSync(wrapper, [
     `const scenario = process.argv.splice(2, 1)[0];`,
@@ -277,13 +284,7 @@ test("through the execution host: a free probe that prints far more than the liv
       probeTimeoutMs: CI_STEP_BOUND_MS,
     });
     const check = await detection.check("codex-cli", {});
-    const trace = `\nprocesses:\n  ${notes.join("\n  ")}`;
-    assert.equal(check.modelsSource, "cli", `${check.modelsNote ?? "no note"}${trace}`);
-    const listed = list.models.filter((model) => model.visibility === "list").map((model) => model.slug);
-    assert.ok(listed.length > 0);
-    // Whether the live reads fell behind the CLI's one write (and so read it again) depends on the host's speed; the
-    // trace above says which happened, and the scripted test below drives the re-read itself.
-    assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
+    return { check, notes, trace: `\nprocesses:\n  ${notes.join("\n  ")}`, listed: list.models.filter((model) => model.visibility === "list").map((model) => model.slug) };
   } catch (error) {
     bodyFailed = true;
     throw error;
@@ -291,12 +292,33 @@ test("through the execution host: a free probe that prints far more than the liv
     for (const note of notes) t.diagnostic(note);
     try {
       await host.close();
+      // The alias first, so removing the folder never walks through it.
+      if (alias) rmSync(alias);
       rmSync(root, { recursive: true, force: true });
     } catch (error) {
       if (!bodyFailed) throw error;
       console.error(`cleanup after the failure: ${inspect(error, { depth: Infinity })}`);
     }
   }
+}
+
+test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async (t) => {
+  const { check, trace, listed } = await largeProbeThroughHost(t, false);
+  assert.equal(check.modelsSource, "cli", `${check.modelsNote ?? "no note"}${trace}`);
+  assert.ok(listed.length > 0);
+  // Whether the live reads fell behind the CLI's one write (and so read it again) depends on the host's speed; the
+  // trace says which happened, and the scripted test below drives the re-read itself.
+  assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
+});
+
+// A record that lost output (here its spill root, reached through an alias, was refused) never reads `complete`, so the
+// probe used to read it as running until its bound (Windows CI run 44765956605). It now ends once the record is
+// released: the probe sees the start is missing and falls back to the catalog, without parsing the tail.
+test("through the execution host: a free probe whose output record lost its start ends at once and is not parsed", { timeout: 120_000 }, async (t) => {
+  const { check, notes, trace } = await largeProbeThroughHost(t, true);
+  assert.ok(notes.some((note) => /^check debug models: started in .* exited 0 after .*output lost: .*spill_root_invalid/.test(note)), `the probe did not end with its loss${trace}`);
+  assert.ok(!notes.some((note) => note.includes("no exit read")), trace);
+  assert.equal(check.modelsSource, "catalog", trace);
 });
 
 /**
