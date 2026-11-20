@@ -526,7 +526,7 @@ function CliCrewNotes({
         .filter((worker) => !worker.option)
         .map((worker) => (
           <p key={worker.name} className="font-medium text-warning">
-            {worker.name} is not turned on in Settings &gt; Providers &gt; CLI workers.
+            {worker.name} is not turned on in Settings &gt; CLI workers.
           </p>
         ))}
       {waiting.map((worker) => (

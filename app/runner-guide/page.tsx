@@ -196,7 +196,8 @@ aiboard models disable <provider:model>`}
         <h2 className="font-display text-xl font-semibold">CLI workers</h2>
         <p>
           A Build can use Claude Code and agy, signed in on this computer, as workers next to API models (Runner 0.3.21
-          or newer: <code>aiboard update</code>). Turn each one on in Settings &gt; Providers &gt; CLI workers.
+          or newer: <code>aiboard update</code>). Turn each one on in{" "}
+          <Link href="/settings?tab=cli-workers" className="underline hover:text-foreground">Settings &gt; CLI workers</Link>.
           Settings shows whether the CLI is installed and logged in, and suggests models. Test sends one tiny prompt in
           the CLI&apos;s most restricted mode, in an empty folder, and uses a little of that CLI&apos;s usage.
         </p>
