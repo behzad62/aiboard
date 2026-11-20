@@ -6,7 +6,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import test from "node:test";
@@ -31,53 +30,8 @@ const CANARIES = ["canary@example.test", "Canary Org", "00000000-0000-4000-8000-
 // version came back unknown once (CI run 44500809465). The hanging Test's 1.5 s is a deadline that must pass, not a bound.
 const CI_STEP_BOUND_MS = 56_879;
 
-/**
- * The durable states and blocked codes in a folder's JSON files, by file: what a process left unreleased was waiting on
- * (read before the session's stop, which would move it on).
- */
-function durableStates(folder: string): string[] {
-  if (!existsSync(folder)) return [`${folder}: missing`];
-  const found: string[] = [];
-  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
-    const path = join(entry.parentPath, entry.name);
-    if (!entry.isFile() || !entry.name.endsWith(".json") || /[\\/]artifacts[\\/]/.test(path)) continue;
-    let text: string;
-    try { text = readFileSync(path, "utf8"); } catch (error) { found.push(`${path.slice(folder.length + 1)}: unreadable (${(error as Error).message})`); continue; }
-    const values = (key: string) => [...new Set([...text.matchAll(new RegExp(`"${key}"\\s*:\\s*"([A-Za-z_]+)"`, "g"))].map((match) => match[1]))].join(",") || "-";
-    found.push(`${path.slice(folder.length + 1)}: state ${values("state")}; status ${values("status")}; code ${values("code")}; ${statSync(path).size} bytes`);
-  }
-  // The streaming sessions (release state, each effect's cleanup progress and blockers), the host launches, and the
-  // output checkpoints' outcome and pages, read-only.
-  type Fact = { resource?: string; status?: string; blocker?: { code?: string } };
-  type Effect = { kind?: string; status?: string; blocker?: { code?: string }; progress?: { resources?: Fact[] }; resources?: Fact[] };
-  const effects = (list: Effect[] | undefined) => (list ?? []).map((effect) =>
-    `${effect.kind}:${effect.status}${effect.blocker?.code ? `(${effect.blocker.code})` : ""}[${[...(effect.progress?.resources ?? []), ...(effect.resources ?? [])]
-      .map((fact) => `${fact.resource}:${fact.status}${fact.blocker?.code ? `(${fact.blocker.code})` : ""}`).join(" ")}]`).join("; ");
-  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile() || entry.name !== "streaming-sessions.sqlite") continue;
-    const path = join(entry.parentPath, entry.name);
-    try {
-      const database = new DatabaseSync(path, { readOnly: true });
-      try {
-        const rows = (table: string) => (database.prepare(`SELECT record_json FROM ${table}`).all() as Array<{ record_json: string }>).map((row) => JSON.parse(row.record_json) as Record<string, unknown>);
-        for (const record of rows("streaming_sessions")) found.push(`session ${String(record.callId)}: ${String(record.state)}, cleanup by ${String(record.cleanupOwner)}; ${effects(record.effects as Effect[])}`);
-        for (const record of rows("streaming_host_launches")) found.push(`launch: ${String(record.state)}; ${effects(record.effects as Effect[])}`);
-        for (const record of rows("streaming_output_checkpoints")) {
-          const continuation = record.continuation as { pages?: number; retainedBytes?: number; loss?: string; finalized?: unknown } | null;
-          found.push(`checkpoint: ${String(record.outcome)}, ${continuation?.pages ?? 0} pages, ${continuation?.retainedBytes ?? 0} bytes, loss ${continuation?.loss}, finalized ${continuation?.finalized ? "yes" : "no"}`);
-        }
-      } finally {
-        database.close();
-      }
-    } catch (error) {
-      found.push(`${path.slice(folder.length + 1)}: unreadable (${(error as Error).message})`);
-    }
-  }
-  return found;
-}
-
 /** Wraps the sessions to note how each process and each session's stop ended, so a failure names its cause. */
-function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: () => string[]): CliWorkerProcesses {
+function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProcesses {
   return {
     async open(input) {
       const session = await processes.open(input);
@@ -115,7 +69,6 @@ function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: ()
         },
         async close() {
           for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)${state.lost.size ? `, output lost: ${[...state.lost].join(",")}` : ""}`);
-          if (running.size && beforeClose) for (const line of beforeClose()) notes.push(`  before the stop: ${line}`);
           try {
             await session.close();
             notes.push(`${input.purpose} session: stop proven`);
@@ -275,7 +228,9 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
 // probe now reads its whole output again from the finalized record once the CLI exited. Every run prints its probes'
 // timings and reads (a passing one too), so this test's own CI times can be measured.
 test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async (t) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
+  // The real path without 8.3 short names (GitHub's Windows temp is under RUNNER~1): the Runner refuses an output spill
+  // root whose real path is spelled differently (spill_root_invalid), and without a spill the start is gone for good.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
   const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
   for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
   const wrapper = join(root, "fake-cli-wrapper.mjs");
@@ -312,7 +267,7 @@ test("through the execution host: a free probe that prints far more than the liv
         host,
         capabilitiesConfig: () => capabilitiesConfig,
         capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: state }),
-      }), notes, () => durableStates(join(state, "transient-runs"))),
+      }), notes),
       lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
       platform: "win32",
       isRoot: () => false,
@@ -373,7 +328,7 @@ function scriptedProcesses(scripts: Record<string, { live: CliWorkerProcessOutpu
 }
 
 test("a free probe whose live reads skipped its start is read again once it exited, and only then", async (t) => {
-  const state = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-scripted-")));
+  const state = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-scripted-")));
   t.after(() => rmSync(state, { recursive: true, force: true }));
   const list = readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8");
   const listed = (JSON.parse(list) as { models: Array<{ slug: string; visibility: string }> }).models.filter((model) => model.visibility === "list").map((model) => model.slug);

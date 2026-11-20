@@ -157,7 +157,8 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
           }
           const ended = result.status !== "running";
           // Not `result.complete`, which also needs a record that lost nothing: a lossy record never reads complete, so
-          // its reader waited out its whole bound (Windows CI run 44764091636: released, never complete, for 57 s).
+          // its reader waited out its whole bound (Windows CI runs 44764091636 and 44765956605: a probe whose spill root
+          // was refused, spill_root_invalid, was released lossy and read as running for 57 s).
           const exited = ended && result.source !== "live" && !more;
           settlePause = ended && !exited && !stdout && !stderr
             ? (settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS)
