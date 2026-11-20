@@ -825,10 +825,64 @@ test("lookup: the home's path wins; on Windows only .exe and .cmd are launched",
   assert.deepEqual(cliExecutableMissingFailure("agy", NOW).kind, "authentication");
 });
 
+test("§3.11c: on Windows a packaged codex.exe (the Codex desktop app's bundled one) is refused, by its path or its real path; the Codex CLI, other CLIs and OSes are not", async () => {
+  const found = (path: string): CheckToolLookup => async () => ({ status: "found", path });
+  const realPath = (value: string | "absent" | "unknown") => async () => value;
+  const packaged = [
+    "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\codex.exe",
+    "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\OpenAI.Codex_2p2nqsd0c76g0\\codex.exe",
+    "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0\\app\\codex.exe",
+    "E:\\WindowsApps\\OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0\\codex.exe",
+  ];
+  for (const path of packaged) {
+    const lookedUp = await resolveCliExecutable({ providerId: "codex-cli", lookup: found(path), cwd: "C:\\w", platform: "win32", realPath: realPath("absent") });
+    assert.equal(lookedUp.status, "refused", path);
+    assert.match(lookedUp.status === "refused" ? lookedUp.reason : "", /inside a Microsoft Store package, such as the codex\.exe the Codex desktop app bundles.*Install the Codex CLI \(OpenAI's installer or npm\) next to the desktop app/);
+    const home = await resolveCliExecutable({ providerId: "codex-cli", executablePath: path, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "file", realPath: realPath("absent") });
+    assert.equal(home.status, "refused", `home ${path}`);
+    // An app execution alias cannot be stat'ed: the path alone refuses it, before any inspection.
+    const alias = await resolveCliExecutable({ providerId: "codex-cli", executablePath: path, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "unknown", realPath: realPath("unknown") });
+    assert.equal(alias.status, "refused", `alias ${path}`);
+  }
+  // A link or junction into a package folder counts: the real path decides too.
+  const linked = await resolveCliExecutable({ providerId: "codex-cli", lookup: found("C:\\tools\\codex.exe"), cwd: "C:\\w", platform: "win32",
+    realPath: realPath("C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0\\app\\codex.exe") });
+  assert.equal(linked.status, "refused");
+  // A real path that cannot be read is undecided, never launched as found.
+  assert.equal((await resolveCliExecutable({ providerId: "codex-cli", lookup: found("C:\\tools\\codex.exe"), cwd: "C:\\w", platform: "win32", realPath: realPath("unknown") })).status, "unknown");
+  // The Codex desktop app's own agent, inside its Store package (not on PATH), set in Settings.
+  const desktopAgent = "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1117.3838.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe";
+  assert.equal((await resolveCliExecutable({ providerId: "codex-cli", executablePath: desktopAgent, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "file", realPath: realPath(desktopAgent) })).status, "refused");
+  // The Codex CLI is found as before: OpenAI's installer (its bin folder is a junction into %USERPROFILE%\.codex) and npm.
+  const installerBin = "C:\\Users\\me\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe";
+  const installerReal = "C:\\Users\\me\\.codex\\packages\\standalone\\releases\\0.171.0-x86_64-pc-windows-msvc\\bin\\codex.exe";
+  for (const [path, real] of [[installerBin, installerReal], ["C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd"]] as const) {
+    const resolved = await resolveCliExecutable({ providerId: "codex-cli", lookup: found(path), cwd: "C:\\w", platform: "win32", realPath: realPath(real) });
+    assert.equal(resolved.status, "found", path);
+  }
+  // A folder merely named WindowsApps is not a package folder.
+  assert.equal((await resolveCliExecutable({ providerId: "codex-cli", lookup: found("D:\\src\\WindowsApps\\codex.exe"), cwd: "C:\\w", platform: "win32", realPath: realPath("absent") })).status, "found");
+  // Only Codex: Claude Code and agy keep the launch they were measured with, and the rule is Windows'.
+  assert.equal((await resolveCliExecutable({ providerId: "claude-code", lookup: found(packaged[0]!.replace("codex", "claude")), cwd: "C:\\w", platform: "win32", realPath: realPath("unknown") })).status, "found");
+  assert.equal((await resolveCliExecutable({ providerId: "codex-cli", lookup: found("/usr/bin/codex"), cwd: "/w", platform: "linux", realPath: realPath("unknown") })).status, "found");
+});
+
+test("§3.11c: a Codex result taken before the exit (turn.completed and a whole -o file) reads as a completed run; nothing else does", () => {
+  const stdout = fixture("codex-cli/success.windows.stdout.jsonl");
+  const good = readFileSync(cliFixture("codex-cli/success.windows.last-message.json"));
+  const outcome = (input: Partial<CliRunInput>) => read("codex-cli", { stdout, exitCode: null, outputFile: good, now: NOW, ...input }).outcome;
+  assert.equal(outcome({ resultDelivered: true }).type, "result", "delivered while a process it left kept the Job running");
+  assert.equal(outcome({}).type, "failure", "no exit code and not delivered: not a result");
+  assert.equal(outcome({ resultDelivered: true, exitCode: 1 }).type, "failure", "a non-zero exit is never a result");
+  const unfinished = stdout.split("\n").filter((line) => !line.includes('"turn.completed"')).join("\n");
+  assert.notEqual(read("codex-cli", { stdout: unfinished, exitCode: null, outputFile: good, resultDelivered: true, now: NOW }).outcome.type, "result", "no turn.completed: not this run's");
+});
+
 test("facts for CW3 and CW4: the per-OS refusals of §3.11 and the root refusal of §3.12, stated, not enforced", () => {
   const allowed = (id: CliWorkerProviderId, platform: NodeJS.Platform) => cliWorkerPlatformRefusal(id, platform) === undefined;
   assert.deepEqual(CLI_WORKER_PROVIDER_IDS.map((id) => [id, allowed(id, "win32"), allowed(id, "linux"), allowed(id, "darwin"), allowed(id, "freebsd")]), [
-    ["codex-cli", false, false, false, false],
+    // §3.11c: Codex runs on Windows; Linux and macOS stay refused for every CLI.
+    ["codex-cli", true, false, false, false],
     ["claude-code", true, false, false, false],
     ["agy", true, false, false, false],
   ]);

@@ -86,7 +86,9 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     const scenario = (name: string, value: FakeCliScenario) => writeFakeCliScenario(scenarioDir, value, `${name}.json`);
     const scenarios = new Map(Object.entries(options.scenarios?.({ scenario, root }) ?? {}));
     const processes = fakeProcesses(scenarios);
-    const found: Record<string, string> = { claude: CLAUDE, agy: AGY, codex: CODEX, ...options.found };
+    // Codex is found only where a test gives it a scenario (`found: { codex: CODEX }`): on Windows it is checked like
+    // the others (§3.11c), and a found CLI with no scenario cannot answer its probes.
+    const found: Record<string, string> = { claude: CLAUDE, agy: AGY, ...options.found };
     const lookup: CheckToolLookup = async (name) => (found[name] ? { status: "found", path: found[name]! } : { status: "missing" });
     const now = { value: options.now ?? Date.parse("2026-11-18T00:00:00.000Z") };
     const batch = options.batch ?? "verified";
@@ -162,6 +164,19 @@ function version(root: string, text: string): string {
   const path = join(root, `version-${text.replace(/\W+/g, "-")}.txt`);
   writeFileSync(path, `${text}\n`);
   return path;
+}
+
+/** Codex answering its free checks (CW0's recordings): version, logged in with ChatGPT, its model catalog. */
+function codexScenario(f: { scenario: Fixture["scenario"]; root: string }): string {
+  return f.scenario("codex", {
+    cli: "codex-cli",
+    responses: [
+      { args: ["--version"], stdout: version(f.root, "codex-cli 0.169.0") },
+      { args: ["login", "status"], stderr: cliFixture("codex-cli/free/login-status.logged-in.txt") },
+      { args: ["debug", "models"], stdout: cliFixture("codex-cli/free/debug-models.json") },
+    ],
+    record: "codex-run.json",
+  });
 }
 
 /** Claude Code answering its free checks: logged in (the canary account fields included). */
@@ -242,13 +257,10 @@ test("on Linux and macOS every CLI is refused with its reason, and nothing is lo
   }
 });
 
-test("on Windows Codex is refused until CW0b's fix, and Claude Code under root, each without a launch", async () => {
+test("on Windows Claude Code under root is refused without a launch", async () => {
   const f = await fixture({ isRoot: true, scenarios: (s) => ({ [AGY]: agyScenario(s) }) });
   try {
     const { body } = await f.call("/v2/cli-workers");
-    const codex = worker(body, "codex-cli");
-    assert.equal(codex.status, "refused");
-    assert.match(codex.reason!, /not available on Windows yet/);
     const claude = worker(body, "claude-code");
     assert.equal(claude.status, "refused");
     assert.equal(claude.code, "root_refused");
@@ -257,6 +269,44 @@ test("on Windows Codex is refused until CW0b's fix, and Claude Code under root, 
     assert.ok(f.processes.launches.every((launch) => launch.executable === AGY), "only agy was launched");
   } finally {
     await f.close();
+  }
+});
+
+test("§3.11c: on Windows Codex is checked like the other CLIs (version, login, its own model list), with no OS refusal", async () => {
+  const f = await fixture({ found: { codex: CODEX }, scenarios: (s) => ({ [CODEX]: codexScenario(s), [CLAUDE]: claudeScenario(s), [AGY]: agyScenario(s) }) });
+  try {
+    const { body } = await f.call("/v2/cli-workers");
+    const codex = worker(body, "codex-cli");
+    assert.equal(codex.status, "ready", JSON.stringify(codex));
+    assert.equal(codex.version, "0.169.0");
+    assert.equal(codex.login?.status, "logged_in");
+    assert.deepEqual(codex.executable, { path: CODEX, source: "path", form: "exe" });
+    assert.equal(codex.models?.[0]?.id, null, "CLI default first");
+    assert.ok((codex.models?.length ?? 0) > 1, "Codex's own catalog is listed");
+    const codexArgs = f.processes.launches.filter((launch) => launch.executable === CODEX).map((launch) => launch.args.join(" "));
+    assert.deepEqual([...codexArgs].sort(), ["--version", "debug models", "login status"]);
+    assertNoCanary(f, "codex ready");
+  } finally {
+    await f.close();
+  }
+});
+
+test("§3.11c: a packaged codex.exe (the Codex desktop app's bundled one) is refused with its reason, without a launch", async () => {
+  for (const path of [
+    "C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\codex.exe",
+    "C:\\Users\\someone\\AppData\\Local\\Microsoft\\WindowsApps\\OpenAI.Codex_2p2nqsd0c76g0\\codex.exe",
+    "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1.0.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe",
+  ]) {
+    const f = await fixture({ found: { codex: path }, scenarios: (s) => ({ [path]: codexScenario(s) }) });
+    try {
+      const codex = worker((await f.call("/v2/cli-workers")).body, "codex-cli");
+      assert.equal(codex.status, "unavailable", path);
+      assert.equal(codex.code, "executable_refused", path);
+      assert.match(codex.reason!, /inside a Microsoft Store package.*Install the Codex CLI/);
+      assert.ok(!f.processes.launches.some((launch) => launch.executable === path), "the packaged codex.exe was never launched");
+    } finally {
+      await f.close();
+    }
   }
 });
 
