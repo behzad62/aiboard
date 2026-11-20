@@ -428,3 +428,91 @@ Windows PowerShell root the same call kept both in the Job, and node died with i
 **Not changed (2026-11-18).** Codex CLI workers stay refused on Windows. Lifting that still needs the owner's trace (§4.1), a
 CW0-style measurement with Codex runs and an answer to the packaged-root opt-out above, with the owner's go. No host
 census, per-PID killer, breakaway, or change to the user's Codex config.
+
+## 7. The Start-Process gap: the stop-time escape sweep (2026-11-20)
+
+The one escape §6 and the CLI workers plan §3.11c left open: `Start-Process pwsh` (or cmd's `start pwsh`) in any
+worker's command uses ShellExecuteEx, which finds a Store-only program through the App Paths keys
+(`HKCU\Software\Microsoft\Windows\CurrentVersion\App Paths\pwsh.exe` names
+`C:\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe` here, and the same for the
+Python install manager's `python.exe`/`python3.exe`, `winget.exe` and `wt.exe`), although R3 took WindowsApps off the
+child's PATH. The program is created outside the Job and outlived a stop the Runner reported as proven.
+
+**Measured (this PC: Windows 10 19045, Store pwsh 7.7 only; a raw Job built like the host's: kill-on-close, the desktop
+app policy on a Windows PowerShell root; not elevated).**
+
+| Escapee | In the Runner's Job | In any job | Parent | Created | Session | Root's environment | Assign to the Job |
+|---|---|---|---|---|---|---|---|
+| Store pwsh, by `Start-Process pwsh` | no | yes (its package's) | the Job member that ran `Start-Process` | after that member | the same | **inherited** (a marker set on the root is there) | refused, Win32 5 |
+| Store pwsh, by its full path (`Process.Start`) | no | yes | the same | after | the same | inherited | refused, 5 |
+| node, started by that pwsh | no | **no** | the escaped pwsh | after it | the same | inherited | succeeds (then dies with the Job) |
+
+- The full-path row shows the gap is not ShellExecuteEx's alone: any packaged program a Job descendant starts escapes
+  (§6 row 2 measured the same). ShellExecuteEx is only the way a name still reaches one after R3.
+- The Runner can end the escaped pwsh by a handle it holds (TerminateProcess), but cannot put it back in the Job.
+- Without admin there is no process-creation watch: `Win32_ProcessStartTrace` answers "Access denied". (This user is in
+  Performance Log Users, which could start an ETW session, but that is not a product assumption.)
+- So the only Runner-side evidence that ties an escapee to the attempt, without the worker's help, is its inherited
+  environment.
+
+**The owner's two ideas, weighed.**
+1. *Ask workers to close what they start.* Kept as a layer: one line in every editing role's kernel invariants
+   (`RUNNER_PROCESS_CLEANUP_LINE`, agent-prompts.ts) and in the CLI worker's rules (cli-worker-adapters.ts). It never
+   proves a stop: a worker stopped at its deadline or cancelled mid-turn gets no chance, and it cannot know what its
+   tools start.
+2. *Workers report their PIDs.* Not built. A reported PID can only point at a process the sweep below already finds by
+   its mark, and misses what matters: a worker cut off mid-turn reports nothing, and an escapee's own children (a dev
+   server's node under the escaped pwsh) are never listed. Taking the PIDs as a hint would add an untrusted input and
+   no coverage.
+
+**The fix (owner's decision 2026-11-20; DECISION 2026-09-19 §8.1 as amended).**
+- **The mark.** On Windows every process the Runner starts for an owner (run and agent session) carries
+  `AIBOARD_PROCESS_MARK=<32 hex>`, random per session (process-escape-marks.ts, set by child-environment.ts like
+  `AIBOARD_MCP_DEPTH`: a caller's override is rejected). It is issued on the owner's first launch and written to the
+  run's state (`<run>/process-marks/`), so a stop retried after a restart still sweeps it. Its issue time bounds the
+  sweep.
+- **The sweep.** After the owner's managed stop (`ManagedProcessService.closeAgent`, which the worker, subagent,
+  Architect and verifier stop paths call after their language and MCP servers are closed) and at the run binding's close
+  (after every recorded process is released), the Job host's helper runs `ManagedProcessEscapeSweep`
+  (managed-process-job-host.ps1, `--aiboard-escape-sweep`; launched by `sweepMarkedWindowsProcesses`). It takes one
+  Toolhelp snapshot and, for each process of the Runner's own session, opens one handle and reads through it: the
+  creation time (older than the mark: never looked at), the user (another user: skipped), and the environment from the
+  process parameters. Only an exact `AIBOARD_PROCESS_MARK=<value>` entry makes it the owner's. It is then ended with
+  TerminateProcess on that same handle and its exit waited for (30 s, the root ender's bound). The snapshot repeats
+  while it keeps finding marked processes (a child started meanwhile), at most 8 rounds.
+- **Fail closed.** The owner's stop is unproven (`process_cleanup_unverified`, so #220 keeps the worktree claim and
+  pauses) when a marked process cannot be ended or its exit is not seen; when one sits inside some job without being
+  packaged (it may be a live Runner Job member, or in a job the Runner cannot attribute; it is never ended); when its
+  job or package cannot be read; when 8 rounds still found new ones; or when the sweep itself fails (its PowerShell
+  does not report ready within the Job host's start ceiling, or its report within 60 s, or reports an error or a
+  malformed report).
+- **Unreadable processes (the owner's question).** A process of this session created after the mark whose handle
+  cannot be opened for reading (an elevated or protected one), whose token or environment cannot be read, is recorded
+  in the run's sweep log (`<run>/process-marks/sweeps.jsonl`, with every sweep's ended and unended lists) and never
+  ended. It does not by itself leave the stop unproven: nothing attributes it to the owner, and the owner's own elevated
+  tools started during an attempt would otherwise block every stop (DECISION §8.4).
+- **Another actor in the same session.** The sweep waits while the managed service still has a live process of that
+  session (they would share the mark); that actor's own stop, or the run's close, sweeps it.
+
+**What it proves and what it does not.** It is detection, not proof. It finds every live escapee that kept the
+worker's environment, whatever started it and however deep. It does not see a packaged program started without that
+environment (`Start-Process -UseNewEnvironment`, a launch through Explorer, COM, WMI or the Task Scheduler: Model B/C,
+outside the native contract), a program that scrubs its own environment, or one that exits before the stop.
+- **A CLI that does not pass its environment on.** The real-Codex run (Codex CLI 0.171.0, plan §3.11c, docs PR #253)
+  counted environments: Codex's command shells (57–69 variables), the `Start-Process` server (57) and its hook shells
+  carry Codex's whole environment, so they carry the mark. Its stdio MCP servers got only 19–22 (Codex's source:
+  `rmcp-client` starts them with `inherit: Core`, a fixed allowlist), so a Store program an MCP server Codex runs
+  starts by name is not seen. A user's own Codex `shell_environment_policy` (`inherit = "core"` or `"none"`, `exclude`,
+  `include_only`) can drop the mark from commands too. Codex's default excludes match names containing KEY, SECRET or
+  TOKEN, which the mark's name avoids. The counts were measured, not the mark itself.
+- **The packaged-root opt-out of §6.** Such a child also inherits the environment, so the sweep is expected to end it
+  when it is unpackaged and in no job; that was not measured.
+
+**Tests.** `windows-start-process-escape.test.ts` (real host; it needs a pwsh that exists here only as a Store app and
+skips elsewhere): a worker's one-shot `Start-Process pwsh` server and the node it starts are ended by the owner's stop,
+another owner's escapee and an unmarked process are not, and the sweep log records both ended processes; an injected
+terminate failure leaves the stop unproven (`isProcessStopUnprovenError`) and a retried stop ends it; the run's close
+ends an escapee no owner stop swept; a child carries the persisted mark. With the sweep calls removed (main's
+behavior) the first three fail: the Store pwsh survives the stop, the stop reads proven, and the run's close leaves it.
+`process-escape-marks.test.ts` (portable): the mark's issue, persistence and restart; what each report means for the
+stop; the environment rules; where `closeAgent` runs the sweep.

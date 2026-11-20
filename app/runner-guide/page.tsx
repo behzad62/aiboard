@@ -272,10 +272,12 @@ aiboard models disable <provider:model>`}
           run outside the Job. A server a CLI worker starts, such as a dev server, stops when its attempt ends.
         </p>
         <p className="text-sm text-muted-foreground">
-          One gap remains on Windows, for every worker: a program you installed only from the Microsoft Store (the
-          Store PowerShell, a Store Python, winget) still starts outside the Runner&apos;s Job when a command starts it by
-          name with <code>Start-Process</code> or <code>start</code>, and it can keep running after the Build stops it.
-          Install such tools from their own installers if workers may start them.
+          On Windows, a program you installed only from the Microsoft Store (the Store PowerShell, a Store Python,
+          winget) starts outside the Runner&apos;s Job when a command starts it, for example by name with{" "}
+          <code>Start-Process</code> or <code>start</code>. The Runner finds such a program by a mark in the
+          worker&apos;s environment and ends it when the worker stops. If it can&apos;t end it, the Build pauses. It
+          can&apos;t find one started without that environment, such as one that a Codex MCP server starts. Install such
+          tools from their own installers if workers may start them.
         </p>
       </section>
       <section className="space-y-3">
