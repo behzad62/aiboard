@@ -117,14 +117,14 @@ export function cliLaunchFailureStep(code: string): string {
     case "cli_worker_root_refused":
       return "This CLI refuses to run as root: start AI Board as a normal user.";
     case "job_containment_unverified":
-      return "AI Board could not confirm it can contain the CLI's programs on this PC: update AI Board (`aiboard update`) and check Settings > Providers > CLI workers.";
+      return "AI Board could not confirm it can contain the CLI's programs on this PC: update AI Board (`aiboard update`) and check Settings > CLI workers.";
     case "cli_executable_unknown":
-      return "AI Board could not tell which program to start: set the CLI's program path in Settings > Providers > CLI workers and press Test.";
+      return "AI Board could not tell which program to start: set the CLI's program path in Settings > CLI workers and press Test.";
     case "windows_batch_argv_unverified":
     case "cli_launch_argv_unsafe":
-      return "Windows can't safely start this CLI's .cmd launcher: point Settings > Providers > CLI workers at the CLI's .exe and press Test.";
+      return "Windows can't safely start this CLI's .cmd launcher: point Settings > CLI workers at the CLI's .exe and press Test.";
     default:
-      return `Starting the CLI failed (${code}): check it in Settings > Providers > CLI workers and press Test.`;
+      return `Starting the CLI failed (${code}): check it in Settings > CLI workers and press Test.`;
   }
 }
 
@@ -143,7 +143,7 @@ export function cliTaskFailureText(reason: string | undefined): string | undefin
     return `The task never reached the CLI worker: the Runner could not finish writing its prompt${why ? ` (${why.replace(/\.$/, "")})` : ""}. Its programs were stopped and nothing was collected; the CLI's health is unchanged.`;
   }
   if (reason.startsWith(`${CLI_ATTEMPT_DEADLINE}:`)) {
-    return `${rest(CLI_ATTEMPT_DEADLINE)} Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.`;
+    return `${rest(CLI_ATTEMPT_DEADLINE)} Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > CLI workers.`;
   }
   return reason;
 }

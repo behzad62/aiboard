@@ -1497,7 +1497,7 @@ assert.deepEqual(
   assert.equal(launch?.waitingForOwner, false, "Resume tries the launch again");
   assert.equal(
     `${launch?.title}. ${launch?.detail}`,
-    "Paused: the Runner could not start a CLI worker again. Windows can't safely start this CLI's .cmd launcher: point Settings > Providers > CLI workers at the CLI's .exe and press Test. Then press Resume, or take the CLI worker out of the crew.",
+    "Paused: the Runner could not start a CLI worker again. Windows can't safely start this CLI's .cmd launcher: point Settings > CLI workers at the CLI's .exe and press Test. Then press Resume, or take the CLI worker out of the crew.",
   );
   // The owner gets a next step, never the raw code, for every code the Runner names; an unknown one keeps its code.
   for (const code of ["cli_worker_platform_refused", "cli_worker_root_refused", "job_containment_unverified", "cli_executable_unknown", "cli_launch_argv_unsafe"]) {
@@ -1552,15 +1552,15 @@ assert.deepEqual(
   );
   assert.equal(
     cliTaskFailureText("cli_attempt_deadline: Codex CLI did not finish within its time limit for one attempt (its prompt was still being delivered)."),
-    "Codex CLI did not finish within its time limit for one attempt (its prompt was still being delivered). Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.",
+    "Codex CLI did not finish within its time limit for one attempt (its prompt was still being delivered). Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > CLI workers.",
   );
   assert.equal(
     cliTaskFailureText("cli_attempt_deadline: Claude Code reached its time limit for one attempt before its fix round."),
-    "Claude Code reached its time limit for one attempt before its fix round. Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > Providers > CLI workers.",
+    "Claude Code reached its time limit for one attempt before its fix round. Nothing was collected. If the task needs longer, raise its time limit per attempt in Settings > CLI workers.",
   );
   assert.equal(
     cliTaskFailureText("process_launch_unproven:cli_executable_unknown"),
-    "The Runner could not start the CLI worker. AI Board could not tell which program to start: set the CLI's program path in Settings > Providers > CLI workers and press Test.",
+    "The Runner could not start the CLI worker. AI Board could not tell which program to start: set the CLI's program path in Settings > CLI workers and press Test.",
   );
   assert.equal(cliTaskFailureText("cli_checks_failing: npm test still fails"), "cli_checks_failing: npm test still fails");
   assert.equal(cliTaskFailureText(undefined), undefined);
