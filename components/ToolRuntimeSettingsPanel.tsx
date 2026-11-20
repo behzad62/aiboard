@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { OpenAIFileSearchSettings, ToolRuntimeSettings } from "@/lib/db/schema";
+import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
+import { isInitialized } from "@/lib/client/store";
 import {
   saveOpenAIFileSearch,
   saveToolRuntimeRunner,
@@ -33,9 +35,17 @@ export function ToolRuntimeSettingsPanel({
     setVectorStoreIds(vectorStoreIdsSetting);
   }, [fileSearchEnabledSetting, vectorStoreIdsSetting]);
 
+  const [launcher, setLauncher] = useState(() => getLauncherConnection());
   const persistRunner = (selection: RunnerSelection | null) => {
     // Launcher session tokens are tab-scoped and must never be persisted (as in ProjectAccessSetup).
     if (selection?.source === "launcher") return;
+    if (launcher && selection === null && !getLauncherConnection()) {
+      // The `aiboard` session was disconnected (the manual Disconnect also sends null, but leaves the session):
+      // a Runner saved in this browser stays saved, as in ProjectAccessSetup.
+      setLauncher(null);
+      return;
+    }
+    if (!isInitialized()) return;
     saveToolRuntimeRunner(selection);
     onChanged?.();
   };
