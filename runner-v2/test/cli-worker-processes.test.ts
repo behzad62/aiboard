@@ -3,17 +3,18 @@
 // is started. The OS seam stays win32, so the Windows-only v1 path runs on every CI host; the process host is this
 // host's own.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
-import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses } from "../src/cli-worker-processes.js";
+import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses, type CliWorkerProcessOutput } from "../src/cli-worker-processes.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { MANAGED_OUTPUT_LIVE_TAIL_BYTES } from "../src/managed-process-output.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -34,31 +35,40 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
   return {
     async open(input) {
       const session = await processes.open(input);
-      const running = new Map<string, number>();
+      // Each running process's start time and its reads so far (all, and those that brought no text).
+      const running = new Map<string, { startedAt: number; reads: number; empty: number; lost: Set<string> }>();
       return {
         async start(spec) {
           const began = Date.now();
           const started = await session.start(spec);
           // The CLI's own argv, after the wrapper and the scenario; long arguments (the Test's schema) cut short.
           const name = `${input.purpose} ${spec.args.slice(2).map((arg) => (arg.length > 40 ? `${arg.slice(0, 40)}…` : arg)).join(" ")}`;
-          const startedAt = Date.now();
-          running.set(name, startedAt);
+          const state = { startedAt: Date.now(), reads: 0, empty: 0, lost: new Set<string>() };
+          running.set(name, state);
           let stdoutChars = 0;
           return {
             closeInput: async (text) => await started.closeInput(text),
             async read(waitMs) {
               const output = await started.read(waitMs);
               stdoutChars += output.stdout.length;
+              state.reads += 1;
+              if (!output.stdout && !output.stderr) state.empty += 1;
+              for (const reason of output.lost) state.lost.add(reason);
               if (output.exited) {
                 running.delete(name);
-                notes.push(`${name}: started in ${startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - startedAt} ms, ${stdoutChars} stdout chars`);
+                notes.push(`${name}: started in ${state.startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - state.startedAt} ms, ${stdoutChars} stdout chars, ${state.reads} reads (${state.empty} empty)${state.lost.size ? `, output lost: ${[...state.lost].join(",")}` : ""}`);
               }
               return output;
+            },
+            rewind() {
+              notes.push(`${name}: read again from the start`);
+              stdoutChars = 0;
+              started.rewind();
             },
           };
         },
         async close() {
-          for (const [name, startedAt] of running) notes.push(`${name}: no exit read after ${Date.now() - startedAt} ms`);
+          for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)${state.lost.size ? `, output lost: ${[...state.lost].join(",")}` : ""}`);
           try {
             await session.close();
             notes.push(`${input.purpose} session: stop proven`);
@@ -210,4 +220,180 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
       }
     }
   }
+});
+
+// Codex's real `debug models` prints about 0.8 MB at once (each model carries its instructions). Under the execution
+// host the live reads keep only the newest MANAGED_OUTPUT_LIVE_TAIL_BYTES, so the first read skipped the start, the JSON
+// did not parse, and Settings offered AIBoard's own OpenAI catalog instead of Codex's models (owner, 2026-11-20). The
+// probe now reads its whole output again from the finalized record once the CLI exited. Every run prints its probes'
+// timings, reads and lost output (a passing one too), so these tests' own CI times can be measured.
+async function largeProbeThroughHost(t: TestContext, stateThroughAlias: boolean) {
+  // The real path without 8.3 short names (GitHub's Windows temp is under RUNNER~1): the Runner refuses an output spill
+  // root whose real path is spelled differently (spill_root_invalid), and without a spill the start is gone for good.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
+  const project = join(root, "project"), scenarios = join(root, "scenarios");
+  let state = join(root, "state");
+  for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
+  // The state folder reached through a junction (Windows) or a symlink: the spill root then looks like an alias.
+  const alias = stateThroughAlias ? join(root, "state-alias") : undefined;
+  if (alias) {
+    symlinkSync(state, alias, process.platform === "win32" ? "junction" : "dir");
+    state = alias;
+  }
+  const wrapper = join(root, "fake-cli-wrapper.mjs");
+  writeFileSync(wrapper, [
+    `const scenario = process.argv.splice(2, 1)[0];`,
+    `process.env.AIBOARD_FAKE_CLI_SCENARIO = scenario;`,
+    `await import(${JSON.stringify(pathToFileURL(FAKE_CLI_SCRIPT).href)});`,
+  ].join("\n"));
+  // The CW0 fixture is trimmed to 23 KB; each model gets instructions as long as the real ones, about 1 MB in all.
+  const list = JSON.parse(readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  for (const [index, model] of list.models.entries()) model.base_instructions = `${index}:${"You are Codex, a coding agent. ".repeat(3_000)}`;
+  const models = join(root, "debug-models.json");
+  writeFileSync(models, JSON.stringify(list, null, 1));
+  assert.ok(statSync(models).size > 4 * MANAGED_OUTPUT_LIVE_TAIL_BYTES, "the list is far longer than the live tail");
+  const version = join(root, "version.txt");
+  writeFileSync(version, "codex-cli 0.171.0\n");
+  const scenario = writeFakeCliScenario(scenarios, {
+    cli: "codex-cli",
+    responses: [
+      { args: ["--version"], stdout: version },
+      { args: ["login", "status"], stderr: cliFixture("codex-cli/free/login-status.logged-in.txt") },
+      { args: ["debug", "models"], stdout: models },
+    ],
+    record: "probe-run.json",
+  }, "probe.json");
+  const capabilitiesConfig = emptyRunnerCapabilitiesConfig();
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS });
+  const notes: string[] = [];
+  let bodyFailed = false;
+  try {
+    const detection = new CliWorkerDetection({
+      stateDirectory: state,
+      processes: traced(createExecutionHostCliWorkerProcesses({
+        host,
+        capabilitiesConfig: () => capabilitiesConfig,
+        capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: state }),
+      }), notes),
+      lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
+      platform: "win32",
+      isRoot: () => false,
+      inspect: async () => "file",
+      windowsJobContainment: async () => (process.platform === "win32" ? (await host.windowsProcessFacts?.())?.jobContainment : "verified"),
+      command: (_path, args) => ({ executable: process.execPath, arguments: [wrapper, scenario, ...args] }),
+      probeTimeoutMs: CI_STEP_BOUND_MS,
+    });
+    const check = await detection.check("codex-cli", {});
+    return { check, notes, trace: `\nprocesses:\n  ${notes.join("\n  ")}`, listed: list.models.filter((model) => model.visibility === "list").map((model) => model.slug) };
+  } catch (error) {
+    bodyFailed = true;
+    throw error;
+  } finally {
+    for (const note of notes) t.diagnostic(note);
+    try {
+      await host.close();
+      // The alias first, so removing the folder never walks through it.
+      if (alias) rmSync(alias);
+      rmSync(root, { recursive: true, force: true });
+    } catch (error) {
+      if (!bodyFailed) throw error;
+      console.error(`cleanup after the failure: ${inspect(error, { depth: Infinity })}`);
+    }
+  }
+}
+
+test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async (t) => {
+  const { check, trace, listed } = await largeProbeThroughHost(t, false);
+  assert.equal(check.modelsSource, "cli", `${check.modelsNote ?? "no note"}${trace}`);
+  assert.ok(listed.length > 0);
+  // Whether the live reads fell behind the CLI's one write (and so read it again) depends on the host's speed; the
+  // trace says which happened, and the scripted test below drives the re-read itself.
+  assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
+});
+
+// A record that lost output (here its spill root, reached through an alias, was refused) never reads `complete`, so the
+// probe used to read it as running until its bound (Windows CI run 44765956605). It now ends once the record is
+// released: the probe sees the start is missing and falls back to the catalog, without parsing the tail.
+test("through the execution host: a free probe whose output record lost its start ends at once and is not parsed", { timeout: 120_000 }, async (t) => {
+  const { check, notes, trace } = await largeProbeThroughHost(t, true);
+  assert.ok(notes.some((note) => /^check debug models: started in .* exited 0 after .*output lost: .*spill_root_invalid/.test(note)), `the probe did not end with its loss${trace}`);
+  assert.ok(!notes.some((note) => note.includes("no exit read")), trace);
+  assert.equal(check.modelsSource, "catalog", trace);
+});
+
+/**
+ * A process double whose reads follow a script per probe: `live` is what each read returns before any rewind (as a
+ * host whose live reads skipped the start returns it), `whole` what reads return after one. Rewinds are noted.
+ */
+function scriptedProcesses(scripts: Record<string, { live: CliWorkerProcessOutput; whole?: CliWorkerProcessOutput }>, rewinds: string[]): CliWorkerProcesses {
+  return {
+    async open() {
+      return {
+        async start({ args }) {
+          const name = args.join(" ");
+          const script = scripts[name];
+          if (!script) throw new Error(`no script for ${name}`);
+          let rewound = false;
+          return {
+            async closeInput() {},
+            async read(waitMs) {
+              if (!script.live.exited) await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 20)));
+              return { ...(rewound && script.whole ? script.whole : script.live) };
+            },
+            rewind() { rewound = true; rewinds.push(name); },
+          };
+        },
+        async close() {},
+      };
+    },
+  };
+}
+
+test("a free probe whose live reads skipped its start is read again once it exited, and only then", async (t) => {
+  const state = realpathSync.native(mkdtempSync(join(tmpdir(), "aiboard-cli-scripted-")));
+  t.after(() => rmSync(state, { recursive: true, force: true }));
+  const list = readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8");
+  const listed = (JSON.parse(list) as { models: Array<{ slug: string; visibility: string }> }).models.filter((model) => model.visibility === "list").map((model) => model.slug);
+  const exited = (stdout: string, extra: Partial<CliWorkerProcessOutput> = {}): CliWorkerProcessOutput => ({ stdout, stderr: "", gap: false, lost: [], exited: true, exitCode: 0, ...extra });
+  const base = {
+    "--version": { live: exited("codex-cli 0.171.0\n") },
+    "login status": { live: exited("", { stderr: readFileSync(cliFixture("codex-cli/free/login-status.logged-in.txt"), "utf8") }) },
+  };
+  // The tail only, as the live reads left it once the start was skipped.
+  const tail = list.slice(Math.floor(list.length / 2));
+  const check = async (models: { live: CliWorkerProcessOutput; whole?: CliWorkerProcessOutput }, probeTimeoutMs = CI_STEP_BOUND_MS) => {
+    const rewinds: string[] = [];
+    const detection = new CliWorkerDetection({
+      stateDirectory: state,
+      processes: scriptedProcesses({ ...base, "debug models": models }, rewinds),
+      lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
+      platform: "win32",
+      isRoot: () => false,
+      inspect: async () => "file",
+      windowsJobContainment: async () => "verified",
+      command: (_path, args) => ({ executable: "codex", arguments: [...args] }),
+      probeTimeoutMs,
+    });
+    return { result: await detection.check("codex-cli", {}), rewinds };
+  };
+
+  const reread = await check({ live: exited(tail, { gap: true }), whole: exited(list) });
+  assert.deepEqual(reread.rewinds, ["debug models"]);
+  assert.equal(reread.result.modelsSource, "cli", reread.result.modelsNote ?? "no note");
+  assert.deepEqual(reread.result.models?.filter((model) => model.id !== null).map((model) => model.id), listed);
+
+  // The finalized record skipped a stretch too (no spill): the start stays unknown, so nothing is parsed from the middle.
+  const stillCut = await check({ live: exited(tail, { gap: true }), whole: exited(tail, { gap: true }) });
+  assert.deepEqual(stillCut.rewinds, ["debug models"]);
+  assert.equal(stillCut.result.modelsSource, "catalog");
+
+  // A probe still running at its bound is not read again: it did not finish. 300 ms is a deadline that must pass.
+  const running = await check({ live: { stdout: "", stderr: "", gap: true, lost: [], exited: false, exitCode: null }, whole: exited(list) }, 300);
+  assert.deepEqual(running.rewinds, []);
+  assert.equal(running.result.modelsSource, "catalog");
+
+  // No gap: read once, as before.
+  const whole = await check({ live: exited(list) });
+  assert.deepEqual(whole.rewinds, []);
+  assert.equal(whole.result.modelsSource, "cli");
 });

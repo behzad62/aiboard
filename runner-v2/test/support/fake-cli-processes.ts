@@ -47,13 +47,13 @@ export function fakeProcesses(scenarios: ReadonlyMap<string, string>): FakeProce
             stdio: "pipe",
             windowsHide: true,
           });
-          let stdout = "", stderr = "", exited = false, exitCode: number | null = null;
+          let stdout = "", stderr = "", allStdout = "", allStderr = "", exited = false, exitCode: number | null = null;
           let wake: (() => void) | undefined;
           const signal = () => { const resolve = wake; wake = undefined; resolve?.(); };
           child.stdout.setEncoding("utf8");
           child.stderr.setEncoding("utf8");
-          child.stdout.on("data", (text: string) => { stdout += text; signal(); });
-          child.stderr.on("data", (text: string) => { stderr += text; signal(); });
+          child.stdout.on("data", (text: string) => { stdout += text; allStdout += text; signal(); });
+          child.stderr.on("data", (text: string) => { stderr += text; allStderr += text; signal(); });
           child.on("error", () => undefined);
           child.stdin.on("error", () => undefined);
           const closed = new Promise<void>((resolve) => child.on("close", (code) => { exited = true; exitCode = code; signal(); resolve(); }));
@@ -71,10 +71,15 @@ export function fakeProcesses(scenarios: ReadonlyMap<string, string>): FakeProce
                   wake = () => { clearTimeout(timer); resolve(); };
                 });
               }
-              const output = { stdout, stderr, exited, exitCode };
+              // This double keeps every byte, so it never skips a stretch (the real host's live tail does).
+              const output = { stdout, stderr, gap: false, lost: [], exited, exitCode };
               stdout = "";
               stderr = "";
               return output;
+            },
+            rewind() {
+              stdout = allStdout;
+              stderr = allStderr;
             },
           };
         },

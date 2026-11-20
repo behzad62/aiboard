@@ -43,6 +43,28 @@ const DEFAULT_KEY = "__cli_default__";
 const keyOf = (id: string | null) => id ?? DEFAULT_KEY;
 const idOf = (key: string) => (key === DEFAULT_KEY ? null : key);
 
+/**
+ * What Add adds: the typed id when anything is typed (an invalid one adds nothing, never the list's pick, which the
+ * owner would not see being added), otherwise the model picked from the list. Undefined: nothing to add, or it is
+ * already in `chosen`.
+ */
+export function cliModelToAdd(typed: string, pickedKey: string, chosen: readonly (string | null)[] = []): { id: string | null } | undefined {
+  const text = typed.trim();
+  // "default" is the home's refused id, and DEFAULT_KEY the list's own key for the CLI default: neither is a typed id.
+  const typedId = text && isCliArgumentValue(text) && text !== "default" && text !== DEFAULT_KEY ? text : undefined;
+  const pick = text ? (typedId ? { id: typedId } : undefined) : pickedKey ? { id: idOf(pickedKey) } : undefined;
+  return pick && !chosen.includes(pick.id) ? pick : undefined;
+}
+
+/** Why the typed text is not a model id to add, naming a listed id as the example (a CLI's id, never its display name). */
+export function cliTypedModelError(typed: string, exampleId: string | undefined, chosen: readonly (string | null)[] = []): string | null {
+  const text = typed.trim();
+  if (!text) return null;
+  if (cliModelToAdd(text, "")) return chosen.includes(text) ? "That model is already in the list." : null;
+  if (text === "default" || text === DEFAULT_KEY) return "Pick \"CLI default\" from the list instead.";
+  return `Type the model's id${exampleId ? `, like ${exampleId}` : ""}, not its name: letters, digits and . _ : / - only, with no spaces and no - first (at most 128).`;
+}
+
 export function healthBadgeVariant(health: CliWorkerHealth): "success" | "warning" | "destructive" | "secondary" {
   if (health.state === "ready") return "success";
   if (health.state === "refused") return "destructive";
@@ -174,7 +196,11 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
   const choices: CliWorkerModelChoiceView[] = check?.models.length ? check.models : [{ id: null, name: "CLI default" }];
   const choiceOf = (id: string | null) => choices.find((choice) => choice.id === id);
   const unchosen = choices.filter((choice) => !chosen.some((model) => model.id === choice.id));
-  const typedValid = typedModel.trim() !== "" && isCliArgumentValue(typedModel.trim()) && typedModel.trim() !== "default";
+  // A listed model's id shows what an id looks like: the CLI's id (gpt-6.2-sol), never its display name (GPT-6.2 Sol).
+  const exampleId = choices.find((choice) => choice.id !== null)?.id ?? undefined;
+  const chosenIds = chosen.map((model) => model.id);
+  const toAdd = cliModelToAdd(typedModel, draftModel, chosenIds);
+  const typedError = cliTypedModelError(typedModel, exampleId, chosenIds);
   const testModels = chosen.length ? chosen : [{ id: null }];
   const testTarget = testModels.find((model) => keyOf(model.id) === keyOf(testModel)) ?? testModels[0]!;
   const busy = saving || !canSave;
@@ -332,23 +358,22 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
             <Input
               value={typedModel}
               onChange={(event) => setTypedModel(event.target.value)}
-              placeholder="or type a model id"
+              placeholder={exampleId ? `or type a model id, like ${exampleId}` : "or type a model id"}
               aria-label={`Model id to add to ${name}`}
+              aria-invalid={typedError !== null}
               disabled={busy}
             />
             <Button
               type="button"
               variant="outline"
-              onClick={() => addModel(typedValid ? typedModel.trim() : idOf(draftModel))}
-              disabled={busy || (!typedValid && !draftModel)}
+              onClick={() => { if (toAdd) addModel(toAdd.id); }}
+              disabled={busy || !toAdd}
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Add
             </Button>
           </div>
-          {typedModel.trim() !== "" && !typedValid && (
-            <p className="text-xs text-destructive">A model id uses letters, digits and . _ : / - only (at most 128).</p>
-          )}
+          {typedError && <p className="text-xs text-destructive">{typedError}</p>}
         </div>
       )}
 

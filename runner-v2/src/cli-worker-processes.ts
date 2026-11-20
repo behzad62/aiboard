@@ -12,6 +12,7 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
@@ -21,10 +22,31 @@ import type { ManagedProcessOwner } from "./managed-process-transport.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
 
-/** What a read returned since the previous one. `exited`: the process ended and its output was read to the end. */
+/**
+ * Poll intervals (not bounds) for a process that ended but whose record is not released yet. The host answers such a
+ * read at once, so without a pause the reader asked again at once: a grant issued and revoked and the record saved on
+ * every turn, and on a busy host that loop can hold the event loop the release itself needs (Windows CI run 44758126056:
+ * two probes printing 18 and 0 characters read as exited only after 26 s, a third not within 55 s). The first pause is
+ * short, as a release usually follows the exit at once, and each empty read doubles it up to the cap. The pause comes
+ * before the next read, never after one, so a release just before the reader's deadline is still read.
+ */
+const SETTLE_FIRST_PAUSE_MS = 10;
+const SETTLE_MAX_PAUSE_MS = 250;
+
+/**
+ * What a read returned since the previous one. `exited`: the process ended, its record was released, and what the
+ * record keeps was read to the end (a record that lost output ends the read too; `gap` and `lost` say what is missing).
+ */
 export interface CliWorkerProcessOutput {
   stdout: string;
   stderr: string;
+  /**
+   * Output the record no longer held was skipped, so what came before this read's text is missing (a CLI that printed
+   * more than the live tail before it was read: `codex debug models` prints about 0.8 MB at once).
+   */
+  gap: boolean;
+  /** Why the Runner's record of this output lost bytes (bounded-output-spool.ts reason codes); empty when nothing was. */
+  lost: readonly string[];
   exited: boolean;
   exitCode: number | null;
 }
@@ -34,6 +56,12 @@ export interface CliWorkerProcess {
   closeInput(text?: string): Promise<void>;
   /** Waits up to `waitMs` for new output and returns what arrived since the last read. */
   read(waitMs: number): Promise<CliWorkerProcessOutput>;
+  /**
+   * The next read starts again at the first byte. Once the process ended, its output is read from the finalized
+   * record (managed-process-output.ts: the spill keeps up to 64 MiB a stream), so a probe whose live reads skipped a
+   * stretch reads it whole.
+   */
+  rewind(): void;
 }
 
 export interface CliWorkerProcessSession {
@@ -102,21 +130,43 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
         managed.start({ command: input.executable, args: [...input.args], cwd: ".", interactive: true }, context, workspacePath));
       const processId = started.processId;
       let cursor: string | undefined;
+      let settlePause = 0;
       return Object.freeze({
         async closeInput(text?: string) {
           await invoke("process.write_stdin", (context) =>
             managed.writeInput(processId, { writeId: randomUUID(), ...(text ? { data: text } : {}), closeInput: true }, context));
         },
         async read(waitMs: number): Promise<CliWorkerProcessOutput> {
+          // The last read found the process ended, nothing new and no release: the host would answer at once, so this
+          // read pauses first, then reads, so even a read whose pause takes all of its wait still reads a late release.
+          if (settlePause > 0) {
+            const pause = Math.min(settlePause, Math.max(0, waitMs));
+            if (pause > 0) await delay(pause);
+          }
           const result = await invoke("process.read_output", (context) =>
             managed.readOutput(processId, { ...(cursor ? { cursor } : {}), waitMs: Math.max(0, Math.min(Math.round(waitMs), MANAGED_OUTPUT_WAIT_MAX_MS)), maxBytes: MANAGED_OUTPUT_READ_MAX_BYTES }, context));
           cursor = result.cursor;
-          let stdout = "", stderr = "";
+          let stdout = "", stderr = "", gap = false, more = false;
+          const lost = new Set<string>();
           for (const slice of result.slices) {
+            if (slice.gap) gap = true;
+            if (slice.hasMore) more = true;
+            for (const reason of slice.lossReasons) lost.add(reason);
             if (slice.stream === "stderr") stderr += slice.text;
             else stdout += slice.text;
           }
-          return { stdout, stderr, exited: result.status !== "running" && result.complete, exitCode: result.exitCode };
+          const ended = result.status !== "running";
+          // Not `result.complete`, which also needs a record that lost nothing: a lossy record never reads complete, so
+          // its reader waited out its whole bound (Windows CI runs 44764091636 and 44765956605: a probe whose spill root
+          // was refused, spill_root_invalid, was released lossy and read as running for 57 s).
+          const exited = ended && result.source !== "live" && !more;
+          settlePause = ended && !exited && !stdout && !stderr
+            ? (settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS)
+            : 0;
+          return { stdout, stderr, gap, lost: [...lost], exited, exitCode: result.exitCode };
+        },
+        rewind() {
+          cursor = undefined;
         },
       });
     },

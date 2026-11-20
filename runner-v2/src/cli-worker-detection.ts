@@ -524,7 +524,18 @@ export class CliWorkerDetection {
     const command = this.command(path, args);
     const started = await session.start({ executable: command.executable, args: command.arguments });
     try { await started.closeInput(); } catch { /* it exited before reading stdin */ }
-    const output = await readUntil(started, this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS, () => false);
+    // The bound starts once the probe runs, as it always did; a re-read below gets only what is left of it.
+    const deadline = Date.now() + (this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS);
+    let output = await readUntil(started, deadline - Date.now(), () => false);
+    // A probe that printed more than the live tail before its first read (`codex debug models`, about 0.8 MB at once)
+    // lost its start to the live reads, so its JSON could not parse. Once it exited, its whole output is read again
+    // from the first byte, within the same bound; a probe still running is read as it is (it did not finish).
+    if (output.gap && output.exited) {
+      started.rewind();
+      output = await readUntil(started, deadline - Date.now(), () => false);
+      // Still a gap: the output passed even the finalized record's bound, so its start stays unknown.
+      if (output.gap) return { exitCode: null, stdout: "", stderr: output.stderr };
+    }
     return { exitCode: output.exited ? output.exitCode : null, stdout: output.stdout, stderr: output.stderr };
   }
 
@@ -764,19 +775,20 @@ function resetFrom(failure: ProviderFailure, now: number): { resetsAt?: string }
  * Reads a process until it exits (and its output was read to the end), `done()` holds, or `timeoutMs` passes. Each
  * stream is kept up to CLI_PROBE_OUTPUT_MAX_CHARS; `onStdout` sees every stdout chunk (the live stream reader).
  */
-async function readUntil(started: CliWorkerProcess, timeoutMs: number, done: () => boolean, onStdout?: (chunk: string) => void): Promise<{ stdout: string; stderr: string; exited: boolean; exitCode: number | null }> {
+async function readUntil(started: CliWorkerProcess, timeoutMs: number, done: () => boolean, onStdout?: (chunk: string) => void): Promise<{ stdout: string; stderr: string; gap: boolean; exited: boolean; exitCode: number | null }> {
   const deadline = Date.now() + timeoutMs;
-  let stdout = "", stderr = "";
+  let stdout = "", stderr = "", gap = false;
   for (;;) {
     const remaining = deadline - Date.now();
     const output = await started.read(Math.max(0, Math.min(remaining, READ_WAIT_MS)));
+    if (output.gap) gap = true;
     if (output.stdout) {
       onStdout?.(output.stdout);
       if (stdout.length < CLI_PROBE_OUTPUT_MAX_CHARS) stdout = (stdout + output.stdout).slice(0, CLI_PROBE_OUTPUT_MAX_CHARS);
     }
     if (output.stderr && stderr.length < CLI_PROBE_OUTPUT_MAX_CHARS) stderr = (stderr + output.stderr).slice(0, CLI_PROBE_OUTPUT_MAX_CHARS);
-    if (output.exited) return { stdout, stderr, exited: true, exitCode: output.exitCode };
-    if (done() || Date.now() >= deadline) return { stdout, stderr, exited: false, exitCode: null };
+    if (output.exited) return { stdout, stderr, gap, exited: true, exitCode: output.exitCode };
+    if (done() || Date.now() >= deadline) return { stdout, stderr, gap, exited: false, exitCode: null };
   }
 }
 
