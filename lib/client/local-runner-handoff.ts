@@ -93,7 +93,9 @@ function defaultFetch(): FetchLike {
   if (typeof fetchImpl !== "function") {
     throw new LocalRunnerHandoffError("unreachable", "This browser cannot reach the local Runner.");
   }
-  return fetchImpl as FetchLike;
+  // Bound to the global: a browser's fetch called on any other object (`input.fetchImpl(...)`) rejects with
+  // "Illegal invocation", which the exchange would report as an unreachable Runner.
+  return (fetchImpl as FetchLike).bind(globalThis);
 }
 
 function isValidPort(port: number): boolean {
@@ -361,8 +363,10 @@ async function exchangeAtPort(input: {
   fetchImpl: FetchLike;
 }): Promise<{ session: LauncherSession; peers: PeerDescriptor[] }> {
   let response: { ok: boolean; status: number; json(): Promise<unknown> };
+  // Called as a plain function, never as `input.fetchImpl(...)`: a caller's unbound browser fetch needs no `this`.
+  const fetchImpl = input.fetchImpl;
   try {
-    response = await input.fetchImpl(`http://127.0.0.1:${input.port}/v1/local-pair/exchange`, {
+    response = await fetchImpl(`http://127.0.0.1:${input.port}/v1/local-pair/exchange`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-AIBoard-Pair-Version": "1" },
       body: JSON.stringify({ version: 1, code: input.code }),
