@@ -307,7 +307,9 @@ function spawnSubagentTool(
         try { await options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
         if (failures.length > 0) throw new AgentCleanupUnverifiedError(failures, "The subagent's stop is still not proven.");
       });
-      const result = await withManagedBuildToolLifecycle(managedRuntime, () => withManagedProcessAgentLifecycle(options.managedProcesses, owner, () => withLanguageAgentLifecycle(options.language, owner, () => withMcpAgentLifecycle(options.mcpManager, owner, () => runAgentLoop({
+      // The managed stop is outermost, as in the retained cleanup above: its escape sweep needs every launch of the
+      // subagent's session released first, the managed Build tools' MCP servers included (process-escape-marks.ts).
+      const result = await withManagedProcessAgentLifecycle(options.managedProcesses, owner, () => withManagedBuildToolLifecycle(managedRuntime, () => withLanguageAgentLifecycle(options.language, owner, () => withMcpAgentLifecycle(options.mcpManager, owner, () => runAgentLoop({
         model,
         registry: toolRuntime,
         beforeModelTurn: () => managedRuntime?.prepare() ?? Promise.resolve(),

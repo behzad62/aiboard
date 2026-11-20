@@ -306,6 +306,7 @@ test("editing subagents inherit the managed Build source and close it on return"
   const sessions=new SqliteAgentSessionStore(join(root,"sessions.sqlite"),artifacts);
   const ledger=new SqliteToolLedger(join(root,"tools.sqlite"));
   let turns=0;let calls=0;let closed=0;
+  const order:string[]=[];
   const model:AgentModel={complete:async request=>{
     assert.ok(request.tools.some(t=>t.name==="mcp.fixture.lookup"));
     return {blocks:[{type:"tool_call",callId:`child-${++turns}`,name:turns===1?"mcp.fixture.lookup":"return_to_parent",arguments:turns===1?{}:{summary:"Found the fact",artifactHashes:[]}}],stopReason:"tool_calls"};
@@ -313,12 +314,16 @@ test("editing subagents inherit the managed Build source and close it on return"
   try {
     const registry=new ToolRegistry();
     for(const tool of createSubagentTools({model,runId:"run_1",parentSessionId:"worker",taskId:"T1",parentActorId:"worker",permissionProfile:"full",workspacePath:workspace,artifacts,ledger,sessions,
-      managedBuildTools:{generation:async()=>1,tools:async()=>({tools:[{definition:{name:"mcp.fixture.lookup",description:"Lookup",inputSchema:{type:"object"},readOnly:true,effect:"none"},validate:input=>({ok:true,value:input}),execute:async()=>{calls++;return {isError:false,content:[]};}}],close:async()=>{closed++;}})},
+      managedBuildTools:{generation:async()=>1,tools:async()=>({tools:[{definition:{name:"mcp.fixture.lookup",description:"Lookup",inputSchema:{type:"object"},readOnly:true,effect:"none"},validate:input=>({ok:true,value:input}),execute:async()=>{calls++;return {isError:false,content:[]};}}],close:async()=>{closed++;order.push("managed tools closed");}})},
+      managedProcesses:{closeAgent:async()=>{order.push("managed processes stopped");}} as unknown as ManagedProcessService,
     }))registry.register(tool);
     const result=await registry.invoke({type:"tool_call",callId:"child",name:"spawn_subagent",arguments:{assignment:"Look up a fact",maxTurns:3}},
       {runId:"run_1",sessionId:"worker",actor:{role:"worker",id:"worker"},workspacePath:workspace});
     assert.equal(result.isError,false,result.error?.message ?? "");
     assert.equal(calls,1);assert.equal(closed,1);
+    // The managed tools' MCP servers run under the subagent's session: they close before its managed stop, whose escape
+    // sweep needs every launch of the session released (process-escape-marks.ts).
+    assert.deepEqual(order,["managed tools closed","managed processes stopped"]);
   } finally {sessions.close();ledger.close();rmSync(root,{recursive:true,force:true});}
 });
 

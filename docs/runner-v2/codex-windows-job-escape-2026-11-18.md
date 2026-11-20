@@ -495,8 +495,11 @@ app policy on a Windows PowerShell root; not elevated).**
   it would end one that is packaged and fail on one that is not. So a session's sweep first requires every launch of
   that session (and of its subagents) to be released in the run's own stores: managed records, streaming sessions
   (language and MCP servers, managed processes) and one-shot commands. A live one leaves the stop unproven, and the
-  retried stop sweeps once it is gone. Every stop path closes its language and MCP servers before the managed stop,
-  and current callers give each actor its own session, so this does not fire today; it is the guard, not a deferral.
+  retried stop sweeps once it is gone. So every stop path closes the session's other launches before its managed
+  stop: language and MCP servers everywhere, a subagent's managed Build tools (its managed stop is now outermost,
+  subagent-tools.ts), and a worker's subagents before the worker's own managed stop in `retryStop`
+  (native-worker-driver.ts); the review's re-check found those two orders reversed. Current callers give each actor its
+  own session.
 - **Subagents and launches during a sweep.** A session's sweep covers its subagents' sessions
   (`<session>:subagent:<id>`), because after a restart the worker's retried stop reaches only the subagents with a
   managed record left. A session with no launch since its last settled sweep is not swept again (nothing can carry its

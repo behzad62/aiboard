@@ -308,6 +308,16 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     }
     try { await this.options.language?.closeAgent?.(owner); } catch (error) { failures.push(error); }
     try { await this.options.mcpManager?.closeAgent(owner); } catch (error) { failures.push(error); }
+    // Its subagents run under their own owners. Their retained cleanups ran
+    // above; after a Runner restart only their managed-process records are
+    // left, so every live one of this attempt's subagents is stopped too.
+    // Before the worker's own managed stop: its escape sweep covers the
+    // subagents' sessions and needs their launches released first.
+    try {
+      for (const subagent of await this.subagentOwnersWithLiveProcesses(owner)) {
+        try { await this.options.managedProcesses!.closeAgent(subagent); } catch (error) { failures.push(error); }
+      }
+    } catch (error) { failures.push(error); }
     try { await this.options.managedProcesses?.closeAgent(owner); } catch (error) { failures.push(error); }
     // CW5 (§3.10, §3.11 case 2): a CLI attempt's stop is proven only with its browser record proven too.
     const cli = this.cliRuntime(this.persistedRuntimeAssignment(assignment)?.runtimeId);
@@ -315,14 +325,6 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       const unproven = await proveCliStop(cli.deps, owner);
       if (unproven) failures.push(new Error(`The CLI worker's stop is not proven: ${unproven}`));
     }
-    // Its subagents run under their own owners. Their retained cleanups ran
-    // above; after a Runner restart only their managed-process records are
-    // left, so every live one of this attempt's subagents is stopped too.
-    try {
-      for (const subagent of await this.subagentOwnersWithLiveProcesses(owner)) {
-        try { await this.options.managedProcesses!.closeAgent(subagent); } catch (error) { failures.push(error); }
-      }
-    } catch (error) { failures.push(error); }
     if (failures.length > 0) {
       throw new AgentCleanupUnverifiedError(failures, `The worker's stop is still not proven: ${failures.map((failure) => errorMessage(failure)).join("; ")}`);
     }

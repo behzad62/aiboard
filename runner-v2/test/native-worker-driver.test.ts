@@ -385,15 +385,16 @@ test("native worker proves its managed-process stop before an outcome counts, an
     await assert.rejects(driver.retryStop(assignment), (error: unknown) =>
       error instanceof AggregateError && /still not proven/.test(error.message));
     await driver.retryStop(assignment);
-    assert.deepEqual(closes, [owner, owner, subagent, owner, subagent],
-      "each retry stops the same exact owner again, and this attempt's live subagent processes, never another attempt's");
+    // The subagents first: the worker's managed stop sweeps its subagents' sessions too and needs their launches released.
+    assert.deepEqual(closes, [owner, subagent, owner, subagent, owner],
+      "each retry stops this attempt's live subagent processes, then the same exact owner again, never another attempt's");
     // A fresh driver, as after a Runner restart, has nothing retained in memory: its retry still
     // repeats the owner's language-server and managed-process stops.
     const languageCloses: unknown[] = [];
     const language = { closeAgent: async (actual: unknown) => { languageCloses.push(actual); } } as unknown as LanguageIntelligenceProvider;
     await new NativeWorkerDriver({ ...driverOptions, language }).retryStop(assignment);
     assert.deepEqual(languageCloses, [owner]);
-    assert.deepEqual(closes.slice(5), [owner, subagent]);
+    assert.deepEqual(closes.slice(5), [subagent, owner]);
   } finally {
     sessions?.close();
     ledger?.close();
