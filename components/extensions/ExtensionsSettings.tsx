@@ -48,7 +48,8 @@ import {
   type SourceInspectionDto,
   type SourceRequestDto,
 } from "@/lib/client/runner-extensions";
-import { getToolRuntimeRunner, getToolRuntimeSettings, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { isInitialized, onStoreReady } from "@/lib/client/store";
+import { getToolRuntimeRunnerIfLoaded, getToolRuntimeSettings, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
 
 /** A source to inspect that another part of the page asked for (adopt, move to Runner-hosted). */
 type InspectRequest = { id: number } & ({ source: SourceRequestDto } | { adopt: string });
@@ -61,6 +62,7 @@ const POLL_MS = 1_500;
  * and sends the user's own actions. Readiness, not a saved form, drives every success label.
  */
 export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { settings?: ToolRuntimeSettings; onChanged?: () => void; onOpenTools: () => void }) {
+  const [storeLoaded, setStoreLoaded] = useState(() => isInitialized());
   const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => runnerConnection());
   const [inventory, setInventory] = useState<ExtensionInventoryDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +76,16 @@ export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { setti
   }, []);
 
   useEffect(() => {
-    const update = () => setConnection(runnerConnection());
+    const update = () => {
+      setStoreLoaded(isInitialized());
+      setConnection(runnerConnection());
+    };
     window.addEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
-    return () => window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
+    const stopReady = onStoreReady(update);
+    return () => {
+      window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
+      stopReady();
+    };
   }, []);
 
   const load = useCallback(async () => {
@@ -107,6 +116,14 @@ export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { setti
     const timer = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(timer);
   }, [busy, load]);
+
+  if (!storeLoaded) {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground" role="status">Loading…</CardContent>
+      </Card>
+    );
+  }
 
   if (!connection) {
     return (
@@ -837,6 +854,6 @@ function sourceForUpdate(item: ExtensionItemDto): SourceRequestDto | undefined {
 }
 
 function runnerConnection(): NativeRunnerConnection | null {
-  const runner = getToolRuntimeRunner();
+  const runner = getToolRuntimeRunnerIfLoaded();
   return runner?.url && runner.token ? { url: runner.url, token: runner.token } : null;
 }

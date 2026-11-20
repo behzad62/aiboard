@@ -17,7 +17,7 @@ import {
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
-import { getUserSettings, updateBrowserToolRuntimeRunner } from "./store";
+import { getUserSettings, isInitialized, updateBrowserToolRuntimeRunner } from "./store";
 import { saveHome, settingsPatchOps } from "./home-client";
 
 export interface ToolRuntimeSignal {
@@ -111,6 +111,15 @@ export function getToolRuntimeSettings(): ToolRuntimeSettings {
 
 export function getToolRuntimeRunner(): ToolRuntimeRunnerSettings | null {
   return getToolRuntimeSettings().runner ?? null;
+}
+
+/**
+ * The saved Runner, or null while this browser's store is still loading. A Settings card renders before the store
+ * has loaded (a large store can take a while), and reading the store then throws "Client store not initialized",
+ * which takes down the whole page. Such a card shows its loading state and reads again on `onStoreReady`.
+ */
+export function getToolRuntimeRunnerIfLoaded(): ToolRuntimeRunnerSettings | null {
+  return isInitialized() ? getToolRuntimeRunner() : null;
 }
 
 export const TOOL_RUNTIME_CHANGED_EVENT = "aiboard-tool-runtime-changed";

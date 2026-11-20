@@ -10,13 +10,14 @@ import {
   type NativeBrowserInstallState,
   type NativeRunnerConnection,
 } from "@/lib/client/runner-v2";
-import { getToolRuntimeRunner, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { isInitialized, onStoreReady } from "@/lib/client/store";
+import { getToolRuntimeRunnerIfLoaded, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
 
 const POLL_MS = 1_500;
 const BROWSER_LABELS: Record<string, string> = { chrome: "Google Chrome", msedge: "Microsoft Edge", chromium: "Playwright Chromium" };
 
 function runnerConnection(): NativeRunnerConnection | null {
-  const runner = getToolRuntimeRunner();
+  const runner = getToolRuntimeRunnerIfLoaded();
   return runner?.url && runner.token ? { url: runner.url, token: runner.token } : null;
 }
 
@@ -26,15 +27,23 @@ function runnerConnection(): NativeRunnerConnection | null {
  * Build never downloads a browser.
  */
 export function BrowserInstallSettings() {
+  const [storeLoaded, setStoreLoaded] = useState(() => isInitialized());
   const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => runnerConnection());
   const [state, setState] = useState<NativeBrowserInstallState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    const update = () => setConnection(runnerConnection());
+    const update = () => {
+      setStoreLoaded(isInitialized());
+      setConnection(runnerConnection());
+    };
     window.addEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
-    return () => window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
+    const stopReady = onStoreReady(update);
+    return () => {
+      window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
+      stopReady();
+    };
   }, []);
 
   const load = useCallback(async () => {
@@ -80,7 +89,9 @@ export function BrowserInstallSettings() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {!connection ? (
+        {!storeLoaded ? (
+          <p className="text-muted-foreground" role="status">Loading…</p>
+        ) : !connection ? (
           <p className="text-muted-foreground">Connect the Runner to see and install browsers.</p>
         ) : (
           <>
