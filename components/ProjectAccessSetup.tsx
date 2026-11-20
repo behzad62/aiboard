@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RunnerSetup, type RunnerSelection } from "@/components/RunnerSetup";
-import { getToolRuntimeRunnerIfLoaded, saveToolRuntimeRunner } from "@/lib/client/tool-runtime";
+import { getToolRuntimeRunnerIfLoaded, notifyToolRuntimeChanged, saveToolRuntimeRunner } from "@/lib/client/tool-runtime";
 import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
 import { isInitialized } from "@/lib/client/store";
 import { useStoreLoaded } from "@/lib/client/use-store-loaded";
@@ -42,6 +42,7 @@ export function ProjectAccessSetup({ onRunnerChange }: ProjectAccessSetupProps) 
           // saved in this browser stays saved, and the picker goes on without the session (waiting for the store
           // if it is still loading).
           setLauncher(null);
+          notifyToolRuntimeChanged();
           onRunnerChange?.(null);
           return;
         }

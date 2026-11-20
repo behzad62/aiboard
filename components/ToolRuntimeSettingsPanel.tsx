@@ -10,6 +10,7 @@ import type { OpenAIFileSearchSettings, ToolRuntimeSettings } from "@/lib/db/sch
 import { getLauncherConnection } from "@/lib/client/local-runner-handoff";
 import { isInitialized } from "@/lib/client/store";
 import {
+  notifyToolRuntimeChanged,
   saveOpenAIFileSearch,
   saveToolRuntimeRunner,
 } from "@/lib/client/tool-runtime";
@@ -41,8 +42,10 @@ export function ToolRuntimeSettingsPanel({
     if (selection?.source === "launcher") return;
     if (launcher && selection === null && !getLauncherConnection()) {
       // The `aiboard` session was disconnected (the manual Disconnect also sends null, but leaves the session):
-      // a Runner saved in this browser stays saved, as in ProjectAccessSetup.
+      // a Runner saved in this browser stays saved, as in ProjectAccessSetup. The picker starts again from it, and
+      // the cards that followed the session (Browser for Builds) read their Runner again.
       setLauncher(null);
+      notifyToolRuntimeChanged();
       return;
     }
     if (!isInitialized()) return;
@@ -84,7 +87,7 @@ export function ToolRuntimeSettingsPanel({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <RunnerSetup initialSelection={initialRunner} onChange={persistRunner} />
+          <RunnerSetup key={launcher ? "launcher" : "saved"} initialSelection={initialRunner} onChange={persistRunner} />
         </CardContent>
       </Card>
 

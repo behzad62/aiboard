@@ -143,7 +143,11 @@ export function sameRunnerConnection<T extends { url: string; token: string }>(c
 
 export const TOOL_RUNTIME_CHANGED_EVENT = "aiboard-tool-runtime-changed";
 
-function notifyToolRuntimeChanged(): void {
+/**
+ * Tells every component that follows the Runner to read it again: saving a Runner does this, and so does
+ * disconnecting this tab's `aiboard` session, which saves nothing.
+ */
+export function notifyToolRuntimeChanged(): void {
   clearToolRuntimeStateCache();
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(TOOL_RUNTIME_CHANGED_EVENT));
