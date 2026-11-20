@@ -43,6 +43,24 @@ const DEFAULT_KEY = "__cli_default__";
 const keyOf = (id: string | null) => id ?? DEFAULT_KEY;
 const idOf = (key: string) => (key === DEFAULT_KEY ? null : key);
 
+/**
+ * What Add adds: the typed id when anything is typed (an invalid one adds nothing, never the list's pick, which the
+ * owner would not see being added), otherwise the model picked from the list. Undefined: nothing to add.
+ */
+export function cliModelToAdd(typed: string, pickedKey: string): { id: string | null } | undefined {
+  const text = typed.trim();
+  if (text) return isCliArgumentValue(text) && text !== "default" ? { id: text } : undefined;
+  return pickedKey ? { id: idOf(pickedKey) } : undefined;
+}
+
+/** Why the typed text is not a model id, naming a listed id as the example (a CLI's id, never its display name). */
+export function cliTypedModelError(typed: string, exampleId: string | undefined): string | null {
+  const text = typed.trim();
+  if (!text || cliModelToAdd(text, "")) return null;
+  if (text === "default") return "Pick \"CLI default\" from the list instead.";
+  return `Type the model's id${exampleId ? `, like ${exampleId}` : ""}, not its name: letters, digits and . _ : / - only, with no spaces (at most 128).`;
+}
+
 export function healthBadgeVariant(health: CliWorkerHealth): "success" | "warning" | "destructive" | "secondary" {
   if (health.state === "ready") return "success";
   if (health.state === "refused") return "destructive";
@@ -174,7 +192,10 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
   const choices: CliWorkerModelChoiceView[] = check?.models.length ? check.models : [{ id: null, name: "CLI default" }];
   const choiceOf = (id: string | null) => choices.find((choice) => choice.id === id);
   const unchosen = choices.filter((choice) => !chosen.some((model) => model.id === choice.id));
-  const typedValid = typedModel.trim() !== "" && isCliArgumentValue(typedModel.trim()) && typedModel.trim() !== "default";
+  // A listed model's id shows what an id looks like: the CLI's id (gpt-6.2-sol), never its display name (GPT-6.2 Sol).
+  const exampleId = choices.find((choice) => choice.id !== null)?.id ?? undefined;
+  const toAdd = cliModelToAdd(typedModel, draftModel);
+  const typedError = cliTypedModelError(typedModel, exampleId);
   const testModels = chosen.length ? chosen : [{ id: null }];
   const testTarget = testModels.find((model) => keyOf(model.id) === keyOf(testModel)) ?? testModels[0]!;
   const busy = saving || !canSave;
@@ -332,23 +353,22 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
             <Input
               value={typedModel}
               onChange={(event) => setTypedModel(event.target.value)}
-              placeholder="or type a model id"
+              placeholder={exampleId ? `or type a model id, like ${exampleId}` : "or type a model id"}
               aria-label={`Model id to add to ${name}`}
+              aria-invalid={typedError !== null}
               disabled={busy}
             />
             <Button
               type="button"
               variant="outline"
-              onClick={() => addModel(typedValid ? typedModel.trim() : idOf(draftModel))}
-              disabled={busy || (!typedValid && !draftModel)}
+              onClick={() => { if (toAdd) addModel(toAdd.id); }}
+              disabled={busy || !toAdd}
             >
               <Plus className="h-4 w-4" aria-hidden="true" />
               Add
             </Button>
           </div>
-          {typedModel.trim() !== "" && !typedValid && (
-            <p className="text-xs text-destructive">A model id uses letters, digits and . _ : / - only (at most 128).</p>
-          )}
+          {typedError && <p className="text-xs text-destructive">{typedError}</p>}
         </div>
       )}
 

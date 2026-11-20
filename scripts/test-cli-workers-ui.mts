@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { CliWorkerFreeChecks, CliWorkerLastTest, CliWorkerPanel } from "../components/CliWorkersSettings";
+import { CliWorkerFreeChecks, CliWorkerLastTest, CliWorkerPanel, cliModelToAdd, cliTypedModelError } from "../components/CliWorkersSettings";
 import { BuildCrewPicker } from "../components/build/BuildCrewPicker";
 import { CliAttemptCard, CliAttemptsPanel, cliRerunNote } from "../components/build/CliAttemptsPanel";
 import { buildCrewCliAccess, buildCrewCliRefusal, selectBuildCrewRuntimes, type BuildCrew } from "../lib/client/build-crew";
@@ -407,6 +407,32 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   }
   assert.match(CLI_WORKER_CONSENT_NOTE, /runs any command as you, in the task's worktree, with its own permission prompts turned off/);
   pass("Settings shows the free checks, agy's stated usage, each Test reason and the stated reset time; a refused CLI can't be turned on or tested");
+}
+
+// ------------------------------------------------------------------ Settings: adding a model by its id
+{
+  // The owner typed "GPT 6.2 Sol" (a display name) while the list showed "GPT-5.6 Sol" (2026-11-20): Add added the
+  // list's pick. Typed text, when there is any, is all Add adds, and a name is refused with an id to copy.
+  assert.equal(cliModelToAdd("GPT 6.2 Sol", "gpt-5.6-sol"), undefined, "an invalid typed id adds nothing, never the list's pick");
+  assert.deepEqual(cliModelToAdd(" gpt-6.2-sol ", "gpt-5.6-sol"), { id: "gpt-6.2-sol" }, "a typed id wins over the pick");
+  assert.deepEqual(cliModelToAdd("", "gpt-5.6-sol"), { id: "gpt-5.6-sol" }, "with nothing typed, the pick is added");
+  assert.deepEqual(cliModelToAdd("  ", "__cli_default__"), { id: null }, "the CLI default from the list");
+  assert.equal(cliModelToAdd("", ""), undefined, "nothing typed or picked");
+  assert.equal(cliModelToAdd("default", ""), undefined, "\"default\" is the CLI default's own key, not an id");
+  assert.equal(cliTypedModelError("", "gpt-6.2-sol"), null);
+  assert.equal(cliTypedModelError("gpt-6.2-sol", "gpt-6.2-sol"), null);
+  assert.equal(cliTypedModelError("GPT 6.2 Sol", "gpt-6.2-sol"),
+    "Type the model's id, like gpt-6.2-sol, not its name: letters, digits and . _ : / - only, with no spaces (at most 128).");
+  assert.match(cliTypedModelError("x".repeat(129), undefined)!, /^Type the model's id, not its name/);
+  assert.equal(cliTypedModelError("default", "gpt-6.2-sol"), "Pick \"CLI default\" from the list instead.");
+  const agy = parsed.workers.find((check) => check.providerId === "agy")!;
+  const firstId = agy.models.find((model) => model.id !== null)!.id!;
+  const markup = renderToStaticMarkup(createElement(CliWorkerPanel, {
+    providerId: "agy", entry: { enabled: true, consentedAt: "2026-11-18T11:00:00.000Z", models: [{ id: null }] },
+    check: agy, canSave: true, onSave: async () => {}, onTest: async () => null, now: NOW,
+  }));
+  assert.ok(markup.includes(`placeholder="or type a model id, like ${firstId}"`), "the field shows a listed id as the example");
+  pass("Settings: Add takes the typed id when there is one (an invalid one adds nothing) and names a listed id as the example");
 }
 
 // ------------------------------------------------------------------ Settings: CLI workers have their own tab

@@ -25,6 +25,11 @@ import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
 export interface CliWorkerProcessOutput {
   stdout: string;
   stderr: string;
+  /**
+   * Output that bounded live retention no longer held was skipped, so what came before this read's text is missing
+   * (a CLI that printed more than the live tail before it was read: `codex debug models` prints about 0.8 MB at once).
+   */
+  gap: boolean;
   exited: boolean;
   exitCode: number | null;
 }
@@ -34,6 +39,12 @@ export interface CliWorkerProcess {
   closeInput(text?: string): Promise<void>;
   /** Waits up to `waitMs` for new output and returns what arrived since the last read. */
   read(waitMs: number): Promise<CliWorkerProcessOutput>;
+  /**
+   * The next read starts again at the first byte. Once the process ended, its output is read from the finalized
+   * record (managed-process-output.ts: the spill keeps up to 64 MiB a stream), so a probe whose live reads skipped a
+   * stretch reads it whole.
+   */
+  rewind(): void;
 }
 
 export interface CliWorkerProcessSession {
@@ -111,12 +122,16 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
           const result = await invoke("process.read_output", (context) =>
             managed.readOutput(processId, { ...(cursor ? { cursor } : {}), waitMs: Math.max(0, Math.min(Math.round(waitMs), MANAGED_OUTPUT_WAIT_MAX_MS)), maxBytes: MANAGED_OUTPUT_READ_MAX_BYTES }, context));
           cursor = result.cursor;
-          let stdout = "", stderr = "";
+          let stdout = "", stderr = "", gap = false;
           for (const slice of result.slices) {
+            if (slice.gap) gap = true;
             if (slice.stream === "stderr") stderr += slice.text;
             else stdout += slice.text;
           }
-          return { stdout, stderr, exited: result.status !== "running" && result.complete, exitCode: result.exitCode };
+          return { stdout, stderr, gap, exited: result.status !== "running" && result.complete, exitCode: result.exitCode };
+        },
+        rewind() {
+          cursor = undefined;
         },
       });
     },

@@ -3,7 +3,7 @@
 // is started. The OS seam stays win32, so the Windows-only v1 path runs on every CI host; the process host is this
 // host's own.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +14,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { CliWorkerDetection } from "../src/cli-worker-detection.js";
 import { createExecutionHostCliWorkerProcesses, type CliWorkerProcesses } from "../src/cli-worker-processes.js";
 import { createExecutionHost } from "../src/execution-host.js";
+import { MANAGED_OUTPUT_LIVE_TAIL_BYTES } from "../src/managed-process-output.js";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
@@ -54,6 +55,11 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
                 notes.push(`${name}: started in ${startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - startedAt} ms, ${stdoutChars} stdout chars`);
               }
               return output;
+            },
+            rewind() {
+              notes.push(`${name}: read again from the start`);
+              stdoutChars = 0;
+              started.rewind();
             },
           };
         },
@@ -208,6 +214,77 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
         if (!bodyFailed) throw error;
         console.error(`the test folder could not be removed: ${inspect(error)}`);
       }
+    }
+  }
+});
+
+// Codex's real `debug models` prints about 0.8 MB at once (each model carries its instructions). Under the execution
+// host the live reads keep only the newest MANAGED_OUTPUT_LIVE_TAIL_BYTES, so the first read skipped the start, the JSON
+// did not parse, and Settings offered AIBoard's own OpenAI catalog instead of Codex's models (owner, 2026-11-20). The
+// probe now reads its whole output again from the finalized record once the CLI exited.
+test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
+  const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
+  for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
+  const wrapper = join(root, "fake-cli-wrapper.mjs");
+  writeFileSync(wrapper, [
+    `const scenario = process.argv.splice(2, 1)[0];`,
+    `process.env.AIBOARD_FAKE_CLI_SCENARIO = scenario;`,
+    `await import(${JSON.stringify(pathToFileURL(FAKE_CLI_SCRIPT).href)});`,
+  ].join("\n"));
+  // The CW0 fixture is trimmed to 23 KB; each model gets instructions as long as the real ones, about 1 MB in all.
+  const list = JSON.parse(readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8")) as { models: Array<Record<string, unknown>> };
+  for (const [index, model] of list.models.entries()) model.base_instructions = `${index}:${"You are Codex, a coding agent. ".repeat(3_000)}`;
+  const models = join(root, "debug-models.json");
+  writeFileSync(models, JSON.stringify(list, null, 1));
+  assert.ok(statSync(models).size > 4 * MANAGED_OUTPUT_LIVE_TAIL_BYTES, "the list is far longer than the live tail");
+  const version = join(root, "version.txt");
+  writeFileSync(version, "codex-cli 0.171.0\n");
+  const scenario = writeFakeCliScenario(scenarios, {
+    cli: "codex-cli",
+    responses: [
+      { args: ["--version"], stdout: version },
+      { args: ["login", "status"], stderr: cliFixture("codex-cli/free/login-status.logged-in.txt") },
+      { args: ["debug", "models"], stdout: models },
+    ],
+    record: "probe-run.json",
+  }, "probe.json");
+  const capabilitiesConfig = emptyRunnerCapabilitiesConfig();
+  const host = createExecutionHost({ projectRoot: project, stateDirectory: state, artifacts: new ArtifactStore(join(state, "artifacts")), ambientEnvironment: snapshotNativeBuildAmbientEnvironment(), ...PROCESS_HOST_FACTS });
+  const notes: string[] = [];
+  let bodyFailed = false;
+  try {
+    const detection = new CliWorkerDetection({
+      stateDirectory: state,
+      processes: traced(createExecutionHostCliWorkerProcesses({
+        host,
+        capabilitiesConfig: () => capabilitiesConfig,
+        capabilityContract: async () => await createRunnerCapabilityContract(capabilitiesConfig, { commandSearchDirectory: state }),
+      }), notes),
+      lookup: async (name) => (name === "codex" ? { status: "found", path: "C:\\Tools\\codex.exe" } : { status: "missing" }),
+      platform: "win32",
+      isRoot: () => false,
+      inspect: async () => "file",
+      windowsJobContainment: async () => (process.platform === "win32" ? (await host.windowsProcessFacts?.())?.jobContainment : "verified"),
+      command: (_path, args) => ({ executable: process.execPath, arguments: [wrapper, scenario, ...args] }),
+      probeTimeoutMs: CI_STEP_BOUND_MS,
+    });
+    const check = await detection.check("codex-cli", {});
+    const trace = `\nprocesses:\n  ${notes.join("\n  ")}`;
+    assert.equal(check.modelsSource, "cli", `${check.modelsNote ?? "no note"}${trace}`);
+    const listed = list.models.filter((model) => model.visibility === "list").map((model) => model.slug);
+    assert.ok(listed.length > 0);
+    assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
+  } catch (error) {
+    bodyFailed = true;
+    throw error;
+  } finally {
+    try {
+      await host.close();
+      rmSync(root, { recursive: true, force: true });
+    } catch (error) {
+      if (!bodyFailed) throw error;
+      console.error(`cleanup after the failure: ${inspect(error, { depth: Infinity })}`);
     }
   }
 });
