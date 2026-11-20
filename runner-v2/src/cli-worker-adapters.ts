@@ -156,6 +156,10 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
       return { status: "refused", source: "home", path: override, reason: "The executable path must be an absolute path." };
     const form = executableForm(override, platform);
     if (!form) return { status: "refused", source: "home", path: override, reason: windowsFormReason(override) };
+    // An app execution alias cannot be stat'ed (EACCES), so a Store Codex set in Settings is refused by its path first,
+    // with its reason, never reported as "could not be inspected".
+    const lexical = await withoutPackagedCodex({ ...input, realPath: async () => "absent" }, platform, { status: "found", path: override, source: "home", form });
+    if (lexical.status !== "found") return lexical;
     const state = await (input.inspect ?? inspectPath)(override);
     if (state === "absent") return { status: "missing", source: "home" };
     if (state === "unknown") return { status: "unknown", source: "home", reason: `${override} could not be inspected.` };

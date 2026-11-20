@@ -840,6 +840,9 @@ test("§3.11c: on Windows a packaged (Microsoft Store) Codex is refused, by its 
     assert.match(lookedUp.status === "refused" ? lookedUp.reason : "", /packaged \(Microsoft Store\) program.*Install the standalone Codex CLI/);
     const home = await resolveCliExecutable({ providerId: "codex-cli", executablePath: path, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "file", realPath: realPath("absent") });
     assert.equal(home.status, "refused", `home ${path}`);
+    // An app execution alias cannot be stat'ed: the path alone refuses it, before any inspection.
+    const alias = await resolveCliExecutable({ providerId: "codex-cli", executablePath: path, lookup: async () => { throw new Error("not looked up"); }, cwd: "C:\\w", platform: "win32", inspect: async () => "unknown", realPath: realPath("unknown") });
+    assert.equal(alias.status, "refused", `alias ${path}`);
   }
   // A link or junction into a package folder counts: the real path decides too.
   const linked = await resolveCliExecutable({ providerId: "codex-cli", lookup: found("C:\\tools\\codex.exe"), cwd: "C:\\w", platform: "win32",
