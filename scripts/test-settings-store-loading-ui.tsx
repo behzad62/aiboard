@@ -28,7 +28,9 @@ assert.match(browserCard(), /Loading…/);
 assert.doesNotMatch(browserCard(), CONNECT_BROWSERS, "a loading store is not a missing Runner");
 assert.match(extensions(), /Loading…/);
 assert.doesNotMatch(extensions(), CONNECT_EXTENSIONS, "a loading store is not a missing Runner");
-assert.doesNotThrow(() => renderToStaticMarkup(<ProjectAccessSetup />), "the Build Runner picker renders while the store loads");
+let picker = "";
+assert.doesNotThrow(() => { picker = renderToStaticMarkup(<ProjectAccessSetup />); }, "the Build Runner picker renders while the store loads");
+assert.match(picker, /<input type="password"[^>]*\sdisabled=""/, "without a session the picker waits for the store (saving a Runner needs it)");
 
 // 2. Store still loading, connected with `aiboard`: the cards use the session at once.
 const SESSION_TOKEN = `session_${"S".repeat(43)}`;
@@ -40,6 +42,9 @@ for (const html of [browserCard(), extensions()]) {
   assert.doesNotMatch(html, CONNECT_EXTENSIONS);
 }
 assert.match(browserCard(), INSTALL_BUTTON);
+picker = renderToStaticMarkup(<ProjectAccessSetup />);
+assert.match(picker, /127\.0\.0\.1:8787/, "the Build Runner picker shows the session while the store loads");
+assert.doesNotMatch(picker, /<input[^>]*\sdisabled=""/, "with a session the picker does not wait for the store");
 
 // 3. Store loaded, still connected with `aiboard`: the session wins (it is never saved in the store).
 __resetClientStoreForTests();
