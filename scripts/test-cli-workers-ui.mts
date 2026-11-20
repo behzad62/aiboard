@@ -422,9 +422,16 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.equal(cliTypedModelError("", "gpt-6.2-sol"), null);
   assert.equal(cliTypedModelError("gpt-6.2-sol", "gpt-6.2-sol"), null);
   assert.equal(cliTypedModelError("GPT 6.2 Sol", "gpt-6.2-sol"),
-    "Type the model's id, like gpt-6.2-sol, not its name: letters, digits and . _ : / - only, with no spaces (at most 128).");
+    "Type the model's id, like gpt-6.2-sol, not its name: letters, digits and . _ : / - only, with no spaces and no - first (at most 128).");
   assert.match(cliTypedModelError("x".repeat(129), undefined)!, /^Type the model's id, not its name/);
+  assert.match(cliTypedModelError("-gpt", undefined)!, /no - first/);
   assert.equal(cliTypedModelError("default", "gpt-6.2-sol"), "Pick \"CLI default\" from the list instead.");
+  // A model already in the list is not added twice: Add stays off and the field says why.
+  assert.equal(cliModelToAdd("gpt-6.2-sol", "", [null, "gpt-6.2-sol"]), undefined);
+  assert.equal(cliModelToAdd("", "__cli_default__", [null]), undefined);
+  assert.deepEqual(cliModelToAdd("gpt-6.2-astra", "", [null, "gpt-6.2-sol"]), { id: "gpt-6.2-astra" });
+  assert.equal(cliTypedModelError("gpt-6.2-sol", "gpt-6.2-sol", ["gpt-6.2-sol"]), "gpt-6.2-sol is already in the list.");
+  assert.equal(cliTypedModelError("gpt-6.2-astra", "gpt-6.2-sol", ["gpt-6.2-sol"]), null);
   const agy = parsed.workers.find((check) => check.providerId === "agy")!;
   const firstId = agy.models.find((model) => model.id !== null)!.id!;
   const markup = renderToStaticMarkup(createElement(CliWorkerPanel, {

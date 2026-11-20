@@ -522,9 +522,10 @@ export class CliWorkerDetection {
   /** One free probe (§3.2): 8 s, output cut, stdin closed at once. The session's close stops and proves it. */
   private async runProbe(session: CliWorkerProcessSession, path: string, args: readonly string[]): Promise<CliProbeOutput> {
     const command = this.command(path, args);
-    const deadline = Date.now() + (this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS);
     const started = await session.start({ executable: command.executable, args: command.arguments });
     try { await started.closeInput(); } catch { /* it exited before reading stdin */ }
+    // The bound starts once the probe runs, as it always did; a re-read below gets only what is left of it.
+    const deadline = Date.now() + (this.options.probeTimeoutMs ?? CLI_WORKER_PROBE_TIMEOUT_MS);
     let output = await readUntil(started, deadline - Date.now(), () => false);
     // A probe that printed more than the live tail before its first read (`codex debug models`, about 0.8 MB at once)
     // lost its start to the live reads, so its JSON could not parse. Once it exited, its whole output is read again

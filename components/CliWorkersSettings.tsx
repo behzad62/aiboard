@@ -45,20 +45,22 @@ const idOf = (key: string) => (key === DEFAULT_KEY ? null : key);
 
 /**
  * What Add adds: the typed id when anything is typed (an invalid one adds nothing, never the list's pick, which the
- * owner would not see being added), otherwise the model picked from the list. Undefined: nothing to add.
+ * owner would not see being added), otherwise the model picked from the list. Undefined: nothing to add, or it is
+ * already in `chosen`.
  */
-export function cliModelToAdd(typed: string, pickedKey: string): { id: string | null } | undefined {
+export function cliModelToAdd(typed: string, pickedKey: string, chosen: readonly (string | null)[] = []): { id: string | null } | undefined {
   const text = typed.trim();
-  if (text) return isCliArgumentValue(text) && text !== "default" ? { id: text } : undefined;
-  return pickedKey ? { id: idOf(pickedKey) } : undefined;
+  const pick = text ? (isCliArgumentValue(text) && text !== "default" ? { id: text } : undefined) : pickedKey ? { id: idOf(pickedKey) } : undefined;
+  return pick && !chosen.includes(pick.id) ? pick : undefined;
 }
 
-/** Why the typed text is not a model id, naming a listed id as the example (a CLI's id, never its display name). */
-export function cliTypedModelError(typed: string, exampleId: string | undefined): string | null {
+/** Why the typed text is not a model id to add, naming a listed id as the example (a CLI's id, never its display name). */
+export function cliTypedModelError(typed: string, exampleId: string | undefined, chosen: readonly (string | null)[] = []): string | null {
   const text = typed.trim();
-  if (!text || cliModelToAdd(text, "")) return null;
+  if (!text) return null;
+  if (cliModelToAdd(text, "")) return chosen.includes(text) ? `${text} is already in the list.` : null;
   if (text === "default") return "Pick \"CLI default\" from the list instead.";
-  return `Type the model's id${exampleId ? `, like ${exampleId}` : ""}, not its name: letters, digits and . _ : / - only, with no spaces (at most 128).`;
+  return `Type the model's id${exampleId ? `, like ${exampleId}` : ""}, not its name: letters, digits and . _ : / - only, with no spaces and no - first (at most 128).`;
 }
 
 export function healthBadgeVariant(health: CliWorkerHealth): "success" | "warning" | "destructive" | "secondary" {
@@ -194,8 +196,9 @@ export function CliWorkerPanel({ providerId, entry, check, canSave, canTest = tr
   const unchosen = choices.filter((choice) => !chosen.some((model) => model.id === choice.id));
   // A listed model's id shows what an id looks like: the CLI's id (gpt-6.2-sol), never its display name (GPT-6.2 Sol).
   const exampleId = choices.find((choice) => choice.id !== null)?.id ?? undefined;
-  const toAdd = cliModelToAdd(typedModel, draftModel);
-  const typedError = cliTypedModelError(typedModel, exampleId);
+  const chosenIds = chosen.map((model) => model.id);
+  const toAdd = cliModelToAdd(typedModel, draftModel, chosenIds);
+  const typedError = cliTypedModelError(typedModel, exampleId, chosenIds);
   const testModels = chosen.length ? chosen : [{ id: null }];
   const testTarget = testModels.find((model) => keyOf(model.id) === keyOf(testModel)) ?? testModels[0]!;
   const busy = saving || !canSave;

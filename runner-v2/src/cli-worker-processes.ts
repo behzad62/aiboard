@@ -12,6 +12,7 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
@@ -20,6 +21,16 @@ import { MANAGED_OUTPUT_READ_MAX_BYTES, MANAGED_OUTPUT_WAIT_MAX_MS } from "./man
 import type { ManagedProcessOwner } from "./managed-process-transport.js";
 import type { RunnerCapabilitiesConfig } from "./runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
+
+/**
+ * Poll intervals (not bounds) for a process that ended but whose record is not released yet. The host answers such a
+ * read at once, so without a pause the reader asked again at once: a grant issued and revoked and the record saved on
+ * every turn, and on a busy host that loop can hold the event loop the release itself needs (Windows CI run 44758126056:
+ * two probes printing 18 and 0 characters read as exited only after 26 s, a third not within 55 s). The first pause is
+ * short, as a release usually follows the exit at once, and each empty read doubles it up to the cap.
+ */
+const SETTLE_FIRST_PAUSE_MS = 10;
+const SETTLE_MAX_PAUSE_MS = 250;
 
 /** What a read returned since the previous one. `exited`: the process ended and its output was read to the end. */
 export interface CliWorkerProcessOutput {
@@ -113,6 +124,7 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
         managed.start({ command: input.executable, args: [...input.args], cwd: ".", interactive: true }, context, workspacePath));
       const processId = started.processId;
       let cursor: string | undefined;
+      let settlePause = 0;
       return Object.freeze({
         async closeInput(text?: string) {
           await invoke("process.write_stdin", (context) =>
@@ -128,7 +140,17 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
             if (slice.stream === "stderr") stderr += slice.text;
             else stdout += slice.text;
           }
-          return { stdout, stderr, gap, exited: result.status !== "running" && result.complete, exitCode: result.exitCode };
+          const ended = result.status !== "running";
+          const exited = ended && result.complete;
+          // Ended, nothing new, not released yet: the next read would be answered at once, so this one waits first.
+          if (ended && !exited && !stdout && !stderr) {
+            settlePause = settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS;
+            const pause = Math.min(settlePause, Math.max(0, waitMs));
+            if (pause > 0) await delay(pause);
+          } else {
+            settlePause = 0;
+          }
+          return { stdout, stderr, gap, exited, exitCode: result.exitCode };
         },
         rewind() {
           cursor = undefined;

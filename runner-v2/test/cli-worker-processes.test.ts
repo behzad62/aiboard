@@ -35,24 +35,27 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
   return {
     async open(input) {
       const session = await processes.open(input);
-      const running = new Map<string, number>();
+      // Each running process's start time and its reads so far (all, and those that brought no text).
+      const running = new Map<string, { startedAt: number; reads: number; empty: number }>();
       return {
         async start(spec) {
           const began = Date.now();
           const started = await session.start(spec);
           // The CLI's own argv, after the wrapper and the scenario; long arguments (the Test's schema) cut short.
           const name = `${input.purpose} ${spec.args.slice(2).map((arg) => (arg.length > 40 ? `${arg.slice(0, 40)}…` : arg)).join(" ")}`;
-          const startedAt = Date.now();
-          running.set(name, startedAt);
+          const state = { startedAt: Date.now(), reads: 0, empty: 0 };
+          running.set(name, state);
           let stdoutChars = 0;
           return {
             closeInput: async (text) => await started.closeInput(text),
             async read(waitMs) {
               const output = await started.read(waitMs);
               stdoutChars += output.stdout.length;
+              state.reads += 1;
+              if (!output.stdout && !output.stderr) state.empty += 1;
               if (output.exited) {
                 running.delete(name);
-                notes.push(`${name}: started in ${startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - startedAt} ms, ${stdoutChars} stdout chars`);
+                notes.push(`${name}: started in ${state.startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - state.startedAt} ms, ${stdoutChars} stdout chars, ${state.reads} reads (${state.empty} empty)`);
               }
               return output;
             },
@@ -64,7 +67,7 @@ function traced(processes: CliWorkerProcesses, notes: string[]): CliWorkerProces
           };
         },
         async close() {
-          for (const [name, startedAt] of running) notes.push(`${name}: no exit read after ${Date.now() - startedAt} ms`);
+          for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)`);
           try {
             await session.close();
             notes.push(`${input.purpose} session: stop proven`);
@@ -221,8 +224,9 @@ test("through the execution host: checks and a Test run with AIBOARD_MCP_DEPTH=2
 // Codex's real `debug models` prints about 0.8 MB at once (each model carries its instructions). Under the execution
 // host the live reads keep only the newest MANAGED_OUTPUT_LIVE_TAIL_BYTES, so the first read skipped the start, the JSON
 // did not parse, and Settings offered AIBoard's own OpenAI catalog instead of Codex's models (owner, 2026-11-20). The
-// probe now reads its whole output again from the finalized record once the CLI exited.
-test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async () => {
+// probe now reads its whole output again from the finalized record once the CLI exited. Every run prints its probes'
+// timings and reads (a passing one too), so this test's own CI times can be measured.
+test("through the execution host: a free probe that prints far more than the live tail at once is read whole", { timeout: 120_000 }, async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "aiboard-cli-probe-")));
   const project = join(root, "project"), state = join(root, "state"), scenarios = join(root, "scenarios");
   for (const folder of [project, state, scenarios]) mkdirSync(folder, { recursive: true });
@@ -275,10 +279,13 @@ test("through the execution host: a free probe that prints far more than the liv
     const listed = list.models.filter((model) => model.visibility === "list").map((model) => model.slug);
     assert.ok(listed.length > 0);
     assert.deepEqual(check.models?.filter((model) => model.id !== null).map((model) => model.id), listed, trace);
+    // The live reads did skip the start (the list is far past the live tail), so the list came from the re-read.
+    assert.ok(notes.includes("check debug models: read again from the start"), `the probe was not read again${trace}`);
   } catch (error) {
     bodyFailed = true;
     throw error;
   } finally {
+    for (const note of notes) t.diagnostic(note);
     try {
       await host.close();
       rmSync(root, { recursive: true, force: true });
