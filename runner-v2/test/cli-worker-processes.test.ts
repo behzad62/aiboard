@@ -82,14 +82,14 @@ function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: ()
     async open(input) {
       const session = await processes.open(input);
       // Each running process's start time and its reads so far (all, and those that brought no text).
-      const running = new Map<string, { startedAt: number; reads: number; empty: number }>();
+      const running = new Map<string, { startedAt: number; reads: number; empty: number; lost: Set<string> }>();
       return {
         async start(spec) {
           const began = Date.now();
           const started = await session.start(spec);
           // The CLI's own argv, after the wrapper and the scenario; long arguments (the Test's schema) cut short.
           const name = `${input.purpose} ${spec.args.slice(2).map((arg) => (arg.length > 40 ? `${arg.slice(0, 40)}…` : arg)).join(" ")}`;
-          const state = { startedAt: Date.now(), reads: 0, empty: 0 };
+          const state = { startedAt: Date.now(), reads: 0, empty: 0, lost: new Set<string>() };
           running.set(name, state);
           let stdoutChars = 0;
           return {
@@ -99,9 +99,10 @@ function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: ()
               stdoutChars += output.stdout.length;
               state.reads += 1;
               if (!output.stdout && !output.stderr) state.empty += 1;
+              for (const reason of output.lost) state.lost.add(reason);
               if (output.exited) {
                 running.delete(name);
-                notes.push(`${name}: started in ${state.startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - state.startedAt} ms, ${stdoutChars} stdout chars, ${state.reads} reads (${state.empty} empty)`);
+                notes.push(`${name}: started in ${state.startedAt - began} ms, exited ${output.exitCode} after ${Date.now() - state.startedAt} ms, ${stdoutChars} stdout chars, ${state.reads} reads (${state.empty} empty)${state.lost.size ? `, output lost: ${[...state.lost].join(",")}` : ""}`);
               }
               return output;
             },
@@ -113,7 +114,7 @@ function traced(processes: CliWorkerProcesses, notes: string[], beforeClose?: ()
           };
         },
         async close() {
-          for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)`);
+          for (const [name, state] of running) notes.push(`${name}: no exit read after ${Date.now() - state.startedAt} ms, ${state.reads} reads (${state.empty} empty)${state.lost.size ? `, output lost: ${[...state.lost].join(",")}` : ""}`);
           if (running.size && beforeClose) for (const line of beforeClose()) notes.push(`  before the stop: ${line}`);
           try {
             await session.close();
@@ -376,7 +377,7 @@ test("a free probe whose live reads skipped its start is read again once it exit
   t.after(() => rmSync(state, { recursive: true, force: true }));
   const list = readFileSync(cliFixture("codex-cli/free/debug-models.json"), "utf8");
   const listed = (JSON.parse(list) as { models: Array<{ slug: string; visibility: string }> }).models.filter((model) => model.visibility === "list").map((model) => model.slug);
-  const exited = (stdout: string, extra: Partial<CliWorkerProcessOutput> = {}): CliWorkerProcessOutput => ({ stdout, stderr: "", gap: false, exited: true, exitCode: 0, ...extra });
+  const exited = (stdout: string, extra: Partial<CliWorkerProcessOutput> = {}): CliWorkerProcessOutput => ({ stdout, stderr: "", gap: false, lost: [], exited: true, exitCode: 0, ...extra });
   const base = {
     "--version": { live: exited("codex-cli 0.171.0\n") },
     "login status": { live: exited("", { stderr: readFileSync(cliFixture("codex-cli/free/login-status.logged-in.txt"), "utf8") }) },
@@ -410,7 +411,7 @@ test("a free probe whose live reads skipped its start is read again once it exit
   assert.equal(stillCut.result.modelsSource, "catalog");
 
   // A probe still running at its bound is not read again: it did not finish. 300 ms is a deadline that must pass.
-  const running = await check({ live: { stdout: "", stderr: "", gap: true, exited: false, exitCode: null }, whole: exited(list) }, 300);
+  const running = await check({ live: { stdout: "", stderr: "", gap: true, lost: [], exited: false, exitCode: null }, whole: exited(list) }, 300);
   assert.deepEqual(running.rewinds, []);
   assert.equal(running.result.modelsSource, "catalog");
 

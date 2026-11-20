@@ -72,7 +72,7 @@ export function fakeProcesses(scenarios: ReadonlyMap<string, string>): FakeProce
                 });
               }
               // This double keeps every byte, so it never skips a stretch (the real host's live tail does).
-              const output = { stdout, stderr, gap: false, exited, exitCode };
+              const output = { stdout, stderr, gap: false, lost: [], exited, exitCode };
               stdout = "";
               stderr = "";
               return output;

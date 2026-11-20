@@ -33,15 +33,20 @@ import type { RunnerCapabilityContract } from "./runner-capability-contract.js";
 const SETTLE_FIRST_PAUSE_MS = 10;
 const SETTLE_MAX_PAUSE_MS = 250;
 
-/** What a read returned since the previous one. `exited`: the process ended and its output was read to the end. */
+/**
+ * What a read returned since the previous one. `exited`: the process ended, its record was released, and what the
+ * record keeps was read to the end (a record that lost output ends the read too; `gap` and `lost` say what is missing).
+ */
 export interface CliWorkerProcessOutput {
   stdout: string;
   stderr: string;
   /**
-   * Output that bounded live retention no longer held was skipped, so what came before this read's text is missing
-   * (a CLI that printed more than the live tail before it was read: `codex debug models` prints about 0.8 MB at once).
+   * Output the record no longer held was skipped, so what came before this read's text is missing (a CLI that printed
+   * more than the live tail before it was read: `codex debug models` prints about 0.8 MB at once).
    */
   gap: boolean;
+  /** Why the Runner's record of this output lost bytes (bounded-output-spool.ts reason codes); empty when nothing was. */
+  lost: readonly string[];
   exited: boolean;
   exitCode: number | null;
 }
@@ -141,18 +146,23 @@ function bindingSession(binding: ExecutionHostRunBinding, runId: string, actor: 
           const result = await invoke("process.read_output", (context) =>
             managed.readOutput(processId, { ...(cursor ? { cursor } : {}), waitMs: Math.max(0, Math.min(Math.round(waitMs), MANAGED_OUTPUT_WAIT_MAX_MS)), maxBytes: MANAGED_OUTPUT_READ_MAX_BYTES }, context));
           cursor = result.cursor;
-          let stdout = "", stderr = "", gap = false;
+          let stdout = "", stderr = "", gap = false, more = false;
+          const lost = new Set<string>();
           for (const slice of result.slices) {
             if (slice.gap) gap = true;
+            if (slice.hasMore) more = true;
+            for (const reason of slice.lossReasons) lost.add(reason);
             if (slice.stream === "stderr") stderr += slice.text;
             else stdout += slice.text;
           }
           const ended = result.status !== "running";
-          const exited = ended && result.complete;
+          // Not `result.complete`, which also needs a record that lost nothing: a lossy record never reads complete, so
+          // its reader waited out its whole bound (Windows CI run 44764091636: released, never complete, for 57 s).
+          const exited = ended && result.source !== "live" && !more;
           settlePause = ended && !exited && !stdout && !stderr
             ? (settlePause ? Math.min(settlePause * 2, SETTLE_MAX_PAUSE_MS) : SETTLE_FIRST_PAUSE_MS)
             : 0;
-          return { stdout, stderr, gap, exited, exitCode: result.exitCode };
+          return { stdout, stderr, gap, lost: [...lost], exited, exitCode: result.exitCode };
         },
         rewind() {
           cursor = undefined;
