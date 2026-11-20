@@ -427,11 +427,13 @@ const ENTRIES: Partial<Record<"codex-cli" | "claude-code" | "agy", HomeCliWorker
   assert.match(setup, /\{\(token\.trim\(\) \|\| \(launcher && launcherAccessCeiling\)\) && \(\s*<div[^>]*>\s*<Label[^>]*>Access ceiling/,
     "the access ceiling shows for a launcher session where the page asks for it");
   assert.match(setup, /launcherAccessCeiling = false,/, "off unless asked");
-  assert.match(readFileSync("components/ProjectAccessSetup.tsx", "utf8"), /<RunnerSetup\s+initialSelection=\{initialSelection\}\s+launcherAccessCeiling/);
+  assert.match(readFileSync("components/ProjectAccessSetup.tsx", "utf8"), /<RunnerSetup[^>]*\slauncherAccessCeiling[\s/>]/, "the Build picker asks for the ceiling");
   assert.match(readFileSync("components/DiscussionSessionSettings.tsx", "utf8"), /launcherAccessCeiling=\{!discussion\.nativeBuildRunId\}/);
   const tools = readFileSync("components/ToolRuntimeSettingsPanel.tsx", "utf8");
   assert.doesNotMatch(tools, /launcherAccessCeiling/, "no ceiling for a launcher session in the Tools tab");
-  assert.match(tools, /if \(selection\?\.source === "launcher"\) return;\s*saveToolRuntimeRunner\(selection\);/, "the Tools tab never saves a launcher session");
+  // The refusal comes first; a session disconnect and a store still loading return before the save too.
+  const refuseLauncher = tools.search(/if \(selection\?\.source === "launcher"\) return;/);
+  assert.ok(refuseLauncher >= 0 && refuseLauncher < tools.indexOf("saveToolRuntimeRunner(selection)"), "the Tools tab never saves a launcher session");
   pass("the access ceiling (and so Full access) can be chosen for a Build connected through aiboard, and only there");
 }
 

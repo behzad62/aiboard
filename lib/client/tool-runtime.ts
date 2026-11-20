@@ -17,7 +17,8 @@ import {
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
-import { getUserSettings, updateBrowserToolRuntimeRunner } from "./store";
+import { getLauncherConnection } from "./local-runner-handoff";
+import { getUserSettings, isInitialized, updateBrowserToolRuntimeRunner } from "./store";
 import { saveHome, settingsPatchOps } from "./home-client";
 
 export interface ToolRuntimeSignal {
@@ -113,9 +114,40 @@ export function getToolRuntimeRunner(): ToolRuntimeRunnerSettings | null {
   return getToolRuntimeSettings().runner ?? null;
 }
 
+/**
+ * The saved Runner, or null while this browser's store is still loading. A component can render before the store
+ * has loaded (a large store can take a while), and reading the store then throws "Client store not initialized",
+ * which takes down the whole page. Such a component reads again once the store is ready (`useStoreLoaded`).
+ */
+export function getToolRuntimeRunnerIfLoaded(): ToolRuntimeRunnerSettings | null {
+  return isInitialized() ? getToolRuntimeRunner() : null;
+}
+
+/**
+ * The Runner a Settings card talks to: this tab's `aiboard` session first, then a Runner saved in this browser.
+ * The session is never saved (its token belongs to this tab), so the saved Runner alone would tell everyone who
+ * connected with `aiboard` to connect a Runner. The session needs no store; the saved Runner is read only once the
+ * store has loaded.
+ */
+export function getSettingsRunnerConnection(): { url: string; token: string } | null {
+  const launcher = getLauncherConnection();
+  if (launcher) return { url: launcher.url, token: launcher.token };
+  const runner = getToolRuntimeRunnerIfLoaded();
+  return runner?.url && runner.token ? { url: runner.url, token: runner.token } : null;
+}
+
+/** Keeps `current` when `next` is the same Runner, so a re-read does not re-run effects that depend on it. */
+export function sameRunnerConnection<T extends { url: string; token: string }>(current: T | null, next: T | null): T | null {
+  return current && next && current.url === next.url && current.token === next.token ? current : next;
+}
+
 export const TOOL_RUNTIME_CHANGED_EVENT = "aiboard-tool-runtime-changed";
 
-function notifyToolRuntimeChanged(): void {
+/**
+ * Tells every component that follows the Runner to read it again: saving a Runner does this, and so does
+ * disconnecting this tab's `aiboard` session, which saves nothing.
+ */
+export function notifyToolRuntimeChanged(): void {
   clearToolRuntimeStateCache();
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(TOOL_RUNTIME_CHANGED_EVENT));

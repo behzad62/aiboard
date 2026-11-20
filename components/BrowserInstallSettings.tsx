@@ -10,15 +10,11 @@ import {
   type NativeBrowserInstallState,
   type NativeRunnerConnection,
 } from "@/lib/client/runner-v2";
-import { getToolRuntimeRunner, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { getSettingsRunnerConnection, sameRunnerConnection, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { useStoreLoaded } from "@/lib/client/use-store-loaded";
 
 const POLL_MS = 1_500;
 const BROWSER_LABELS: Record<string, string> = { chrome: "Google Chrome", msedge: "Microsoft Edge", chromium: "Playwright Chromium" };
-
-function runnerConnection(): NativeRunnerConnection | null {
-  const runner = getToolRuntimeRunner();
-  return runner?.url && runner.token ? { url: runner.url, token: runner.token } : null;
-}
 
 /**
  * Settings → Tools → Browser for Builds (VF7b). Builds browse with the Playwright CLI the Runner ships, using an
@@ -26,16 +22,19 @@ function runnerConnection(): NativeRunnerConnection | null {
  * Build never downloads a browser.
  */
 export function BrowserInstallSettings() {
-  const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => runnerConnection());
+  const storeLoaded = useStoreLoaded();
+  const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => getSettingsRunnerConnection());
   const [state, setState] = useState<NativeBrowserInstallState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
+  // Re-read when the store loads (a saved Runner becomes readable) or the Runner setting changes.
   useEffect(() => {
-    const update = () => setConnection(runnerConnection());
+    const update = () => setConnection((current) => sameRunnerConnection(current, getSettingsRunnerConnection()));
+    update();
     window.addEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
     return () => window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
-  }, []);
+  }, [storeLoaded]);
 
   const load = useCallback(async () => {
     if (!connection) return;
@@ -80,7 +79,9 @@ export function BrowserInstallSettings() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        {!connection ? (
+        {!connection && !storeLoaded ? (
+          <p className="text-muted-foreground" role="status">Loading…</p>
+        ) : !connection ? (
           <p className="text-muted-foreground">Connect the Runner to see and install browsers.</p>
         ) : (
           <>

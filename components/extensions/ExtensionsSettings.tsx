@@ -48,7 +48,8 @@ import {
   type SourceInspectionDto,
   type SourceRequestDto,
 } from "@/lib/client/runner-extensions";
-import { getToolRuntimeRunner, getToolRuntimeSettings, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { getSettingsRunnerConnection, getToolRuntimeSettings, sameRunnerConnection, TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { useStoreLoaded } from "@/lib/client/use-store-loaded";
 
 /** A source to inspect that another part of the page asked for (adopt, move to Runner-hosted). */
 type InspectRequest = { id: number } & ({ source: SourceRequestDto } | { adopt: string });
@@ -61,7 +62,8 @@ const POLL_MS = 1_500;
  * and sends the user's own actions. Readiness, not a saved form, drives every success label.
  */
 export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { settings?: ToolRuntimeSettings; onChanged?: () => void; onOpenTools: () => void }) {
-  const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => runnerConnection());
+  const storeLoaded = useStoreLoaded();
+  const [connection, setConnection] = useState<NativeRunnerConnection | null>(() => getSettingsRunnerConnection());
   const [inventory, setInventory] = useState<ExtensionInventoryDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -73,19 +75,22 @@ export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { setti
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
+  // Re-read when the store loads (a saved Runner becomes readable) or the Runner setting changes.
   useEffect(() => {
-    const update = () => setConnection(runnerConnection());
+    const update = () => setConnection((current) => sameRunnerConnection(current, getSettingsRunnerConnection()));
+    update();
     window.addEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
     return () => window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, update);
-  }, []);
+  }, [storeLoaded]);
 
   const load = useCallback(async () => {
     if (!connection) return;
     setLoading(true);
     try {
       // The single provider-hosted server from browser settings is listed here too (idempotent). Its
-      // token stays in this browser; only name, URL and enabled state are recorded.
-      const remote = getToolRuntimeSettings().remoteMcpServer;
+      // token stays in this browser; only name, URL and enabled state are recorded. It is read from the
+      // store, so only once the store has loaded (this runs again then).
+      const remote = storeLoaded ? getToolRuntimeSettings().remoteMcpServer : undefined;
       if (remote?.url) {
         await recordProviderHostedMcp(connection, { name: remote.name || "remote", url: remote.url, enabled: remote.enabled, hasToken: Boolean(remote.authorizationToken) }).catch(() => undefined);
       }
@@ -96,7 +101,7 @@ export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { setti
     } finally {
       setLoading(false);
     }
-  }, [connection]);
+  }, [connection, storeLoaded]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -107,6 +112,14 @@ export function ExtensionsSettings({ settings, onChanged, onOpenTools }: { setti
     const timer = setInterval(() => void load(), POLL_MS);
     return () => clearInterval(timer);
   }, [busy, load]);
+
+  if (!connection && !storeLoaded) {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground" role="status">Loading…</CardContent>
+      </Card>
+    );
+  }
 
   if (!connection) {
     return (
@@ -836,7 +849,3 @@ function sourceForUpdate(item: ExtensionItemDto): SourceRequestDto | undefined {
   return undefined;
 }
 
-function runnerConnection(): NativeRunnerConnection | null {
-  const runner = getToolRuntimeRunner();
-  return runner?.url && runner.token ? { url: runner.url, token: runner.token } : null;
-}
