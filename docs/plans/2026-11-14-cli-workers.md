@@ -451,6 +451,13 @@ Written before the code change that lifts Codex's Windows refusal. The trace rea
     - The early delivery works with the real CLI: both attempts were collected about 2 s after `turn.completed`, before Codex exited.
     - Telling Codex to stop its processes works for what its commands start, and its listed PIDs were right. It is not containment: Codex does not count the processes its harness starts, and the owner's stop is still what ends them.
     - The known `Start-Process` gap was not reached here: node is not a Store app on this PC.
+  - **For the per-worker environment mark (the approved fix for the `Start-Process` gap: at a Windows worker's stop, end only the processes that carry the worker's mark).** The observer kept the number of variables per environment (no names but credential-like ones), the same in both attempts:
+    - codex.exe had 42 variables.
+    - Its command shells had 57–69, its hook shells 58 and their Python 47, and the `Start-Process` server 57. Those are the full environment and more, so a mark Codex inherits reaches every command's process tree, the server included.
+    - Its stdio MCP servers (Blender, ComfyUI, Krita, mule-mcp) had 19–22, and the ComfyUI CLI they ran had 27. Codex's source agrees: rmcp-client's `stdio_server_launcher.rs` starts an MCP stdio server with `inherit: Core`, a fixed allowlist of names, plus the server's configured `env` and `env_vars`. So a mark in the worker's environment does not reach Codex's MCP servers or what they start, unless the user's config names it.
+    - Codex's bundled node plugin had 39.
+    - Which names those were was not recorded, so no specific mark was measured. The case the mark would miss is a Store program that an MCP server starts by name.
+    - A user's `shell_environment_policy` (`inherit = "core"` or `"none"`, `exclude`, `include_only`) can also drop the mark from the commands' environment. Its name should avoid KEY, SECRET and TOKEN, the words Codex's exclude patterns target.
   - **Not measured:** a model-unavailable run (no usage-limit or unavailable model came up), the Test form's sandbox, and the `Start-Process` gap with the real Codex.
 
 ### 3.12 Full access only
