@@ -14,13 +14,14 @@
  * - Facts CW3 and CW4 enforce (per-OS refusals §3.11, root §3.12, `.cmd` argument safety §3.2); nothing here
  *   enforces them.
  *
- * Pure apart from the lookup's file inspection (a read). It spawns nothing and writes nothing.
+ * Pure apart from the lookup's file inspection and a real-path read (both reads). It spawns nothing and writes nothing.
  */
 
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 
 import type { CheckToolLookup } from "./check-tool-lookup.js";
+import { isWindowsAppsPathEntry } from "./child-environment.js";
 import {
   CLI_DEFAULT_MODEL_ID,
   isCliArgumentValue,
@@ -49,10 +50,14 @@ export type CliPlatform = "win32" | "linux" | "darwin";
 /**
  * Where each CLI may run as a worker in v1 (§3.11, CWD-10, CWD-11). CW3 reports these in the free checks and CW4
  * refuses them as crew rules; this table only states them. An OS not listed is refused: nothing was measured there.
+ *
+ * Codex runs on Windows since its Job escape was traced and closed (§3.11c): Codex ran every command through the Store
+ * pwsh it found by name on its PATH, and a packaged program an unpackaged process in the Job starts is created outside
+ * the Job. R3 takes the WindowsApps folders off every managed child's PATH, so Codex falls to an unpackaged
+ * PowerShell, and a packaged Codex itself is refused (`resolveCliExecutable`).
  */
 export const CLI_WORKER_PLATFORM_REFUSALS: Readonly<Record<CliWorkerProviderId, Readonly<Partial<Record<CliPlatform, string>>>>> = Object.freeze({
   "codex-cli": Object.freeze({
-    win32: "Codex CLI workers are not available on Windows yet: in AIBoard's tests some processes Codex started ran outside the job AIBoard stops, and that is still being traced.",
     linux: "Codex CLI workers are not available on Linux: Codex runs its commands outside the process group AIBoard can stop.",
     darwin: "Codex CLI workers are not available on macOS: Codex's commands were not measured there, and on Linux they leave the process group AIBoard can stop.",
   }),
@@ -131,6 +136,11 @@ export interface CliExecutableLookupInput {
   platform?: NodeJS.Platform;
   /** Test seam: what is at a path. */
   inspect?: (path: string) => Promise<"file" | "absent" | "unknown">;
+  /**
+   * Test seam: the real path of a found executable, for the packaged-Codex refusal (§3.11c). "absent" when the path
+   * names nothing to resolve (the lexical check then decides alone), "unknown" when it could not be resolved.
+   */
+  realPath?: (path: string) => Promise<string | "absent" | "unknown">;
 }
 
 /**
@@ -149,7 +159,7 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
     const state = await (input.inspect ?? inspectPath)(override);
     if (state === "absent") return { status: "missing", source: "home" };
     if (state === "unknown") return { status: "unknown", source: "home", reason: `${override} could not be inspected.` };
-    return { status: "found", path: override, source: "home", form };
+    return await withoutPackagedCodex(input, platform, { status: "found", path: override, source: "home", form });
   }
   const found = await input.lookup(CLI_WORKER_EXECUTABLES[input.providerId], { cwd: input.cwd });
   if (found.status === "missing") return { status: "missing", source: "path" };
@@ -160,7 +170,40 @@ export async function resolveCliExecutable(input: CliExecutableLookupInput): Pro
     return { status: "refused", source: "path", path: found.path, reason: `${paths.basename(found.path)} was found in the lookup's own folder, not on PATH; AIBoard does not launch it.` };
   const form = executableForm(found.path, platform);
   if (!form) return { status: "refused", source: "path", path: found.path, reason: windowsFormReason(found.path) };
-  return { status: "found", path: found.path, source: "path", form };
+  return await withoutPackagedCodex(input, platform, { status: "found", path: found.path, source: "path", form });
+}
+
+/**
+ * §3.11c: on Windows a Codex installed as a packaged (MSIX / Microsoft Store) program is refused. The managed launch
+ * would pin it and start it as the Job's packaged root (R3), the one shape whose own children can be created outside
+ * the Job without the Job seeing them (the CW0b report §6), and Codex was never measured that way. Its path and its
+ * real path are both checked, so a junction or a link into a WindowsApps folder counts. Only Codex: Claude Code and
+ * agy keep the launch they were measured with.
+ */
+async function withoutPackagedCodex(
+  input: CliExecutableLookupInput,
+  platform: NodeJS.Platform,
+  found: Extract<CliExecutableResolution, { status: "found" }>,
+): Promise<CliExecutableResolution> {
+  if (platform !== "win32" || input.providerId !== "codex-cli") return found;
+  const refused = (): CliExecutableResolution => ({
+    status: "refused", source: found.source, path: found.path,
+    reason: `${win32.basename(found.path)} is a packaged (Microsoft Store) program, which AIBoard does not run as a Codex CLI worker: its processes could run outside the job AIBoard stops. Install the standalone Codex CLI and set its path in Settings.`,
+  });
+  if (isWindowsAppsPathEntry(win32.dirname(found.path))) return refused();
+  const real = await (input.realPath ?? realPathOf)(found.path);
+  if (real === "unknown") return { status: "unknown", source: found.source, reason: `${found.path} could not be resolved to its real path.` };
+  if (real !== "absent" && isWindowsAppsPathEntry(win32.dirname(real))) return refused();
+  return found;
+}
+
+async function realPathOf(path: string): Promise<string | "absent" | "unknown"> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
+  }
 }
 
 /** The command each CLI installs on PATH. */
@@ -610,6 +653,12 @@ export interface CliRunInput {
   /** Codex's `-o` file as read after exit; null or undefined when it could not be read. */
   outputFile?: string | Uint8Array | null;
   /**
+   * Codex: the Runner took the result before the exit, because the stream had `turn.completed` and the `-o` file
+   * parsed while processes Codex left in the Job kept it running (§3.11c). Then a completed turn with no exit code
+   * is read as a completed run.
+   */
+  resultDelivered?: boolean;
+  /**
    * The Runner stopped the CLI mid-turn: its attempt deadline, or the Build was cancelled. Then any reading other than
    * a result is `stopped`, never a provider failure (§3.8): what the CLI printed while it was being stopped ("Request
    * was aborted.", "Turn interrupted", a reconnect notice) says nothing about its provider.
@@ -794,9 +843,11 @@ class CodexStreamReader extends JsonLineReader {
   read(input: Omit<CliRunInput, "stdout">): CliRunReading {
     const now = input.now ?? Date.now();
     const base = { ...(this.threadId ? { sessionId: this.threadId } : {}), turnEnded: this.turnEnded, ...(this.usage ? { usage: this.usage } : {}) };
-    // A result is this run's: the turn completed, Codex exited 0, and the -o file parses. The file exists even when a
-    // run failed or was killed (0 bytes, CW0), and one left by an earlier attempt has no turn.completed in this stream.
-    const completedRun = this.completed && this.failedMessage === undefined && input.exitCode === 0;
+    // A result is this run's: the turn completed, Codex exited 0 (or the Runner took the result before the exit), and
+    // the -o file parses. The file exists even when a run failed or was killed (0 bytes, CW0), and one left by an
+    // earlier attempt has no turn.completed in this stream.
+    const completedRun = this.completed && this.failedMessage === undefined &&
+      (input.exitCode === 0 || (input.exitCode === null && input.resultDelivered === true));
     const fileText = input.outputFile === undefined || input.outputFile === null ? "" : typeof input.outputFile === "string"
       ? input.outputFile : Buffer.from(input.outputFile).toString("utf8");
     const parsed = completedRun && fileText.trim() ? parseCliWorkerResultText(fileText) : undefined;

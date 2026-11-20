@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import {
   cliAttemptRecords,
@@ -18,12 +18,13 @@ import {
   type CliWorkerOwner,
   type CliWorkerRuntimeConfig,
 } from "../src/cli-worker-runtime.js";
+import { isWindowsAppsPathEntry } from "../src/child-environment.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { workerSubmissionContext } from "../src/worker-runtime.js";
-import { FAKE_CLI_SCENARIO_ENV, cliFixture, fakeGrandchildAlive, type FakeCliRecord } from "./support/fake-cli.js";
+import { FAKE_CLI_SCENARIO_ENV, cliFixture, fakeGrandchildAlive, fakeProcessAlive, type FakeCliRecord } from "./support/fake-cli.js";
 import { fixtureGitContext, runGit } from "./support/git-fixture.js";
 import { RUN, TASK, WORKER, SESSION, CLAUDE_SESSION, OWNER, WINDOWS, harness, claudeStream, records, done, CLI_RUNTIME_TEST_CONCURRENCY } from "./support/cli-worker-runtime-harness.js";
 
@@ -42,14 +43,14 @@ describe("CW5 loop: runs over time and the managed launcher", { concurrency: CLI
     assert.ok(argv.includes(CLAUDE_SESSION));
   });
 
-  test("the Codex branch, run against the fake under a lifted test refusal: a stale -o file is deleted and read only after exit", async (t) => {
+  test("the Codex branch on Windows (§3.11c lifted its refusal there), run against the fake: a stale -o file is deleted and read only after exit", async (t) => {
     const h = await harness(t, "codex");
     const folder = cliWorkerStateFolder(h.state, RUN, SESSION);
     mkdirSync(folder, { recursive: true });
     writeFileSync(join(folder, "last-message.json"), JSON.stringify(done("A stale earlier result.")));
     const launcher = h.launcher({ cli: "codex-cli", stdout: cliFixture("codex-cli/killed.windows.stdout.jsonl"), exitCode: 1 });
     const codex: CliWorkerRuntimeConfig = { runtimeId: "codex-cli:default", providerId: "codex-cli", model: null };
-    const result = await runCliWorkerAttempt(h.deps(launcher, { platformRefusal: () => undefined }), h.input({ config: codex }));
+    const result = await runCliWorkerAttempt(h.deps(launcher), h.input({ config: codex }));
     // The stale file never stands in for this run's result: the run without one is the CLI's failure.
     assert.equal(result.type, "provider_failure", JSON.stringify(result));
     assert.ok(launcher.starts[0]!.args.includes("-o"));
@@ -57,9 +58,24 @@ describe("CW5 loop: runs over time and the managed launcher", { concurrency: CLI
 
     const h2 = await harness(t, "codex-ok");
     const okLauncher = h2.launcher({ cli: "codex-cli", stdout: cliFixture("codex-cli/success.windows.stdout.jsonl"), outputFile: cliFixture("codex-cli/success.windows.last-message.json") });
-    const second = await runCliWorkerAttempt(h2.deps(okLauncher, { platformRefusal: () => undefined, rerunChecks: h2.rerun }), h2.input({ config: codex }));
+    const second = await runCliWorkerAttempt(h2.deps(okLauncher, { rerunChecks: h2.rerun }), h2.input({ config: codex }));
     assert.notEqual(second.type, "provider_failure", JSON.stringify(second));
     assert.equal(records(h2)[0]?.outcome, "done");
+  });
+
+  // §3.11c: under the Windows Job a managed process counts as running until the Job is empty, so a server a Codex
+  // command left running kept the run from ever exiting, and the attempt ran to its deadline without a result. The fake
+  // stays up past the attempt's 60 s limit after its turn: the result must be taken from the stream and the -o file.
+  test("§3.11c: a Codex still up after turn.completed and a whole -o file (a server it left) is collected without waiting for its exit", async (t) => {
+    const h = await harness(t, "codex-held");
+    const launcher = h.launcher({ cli: "codex-cli", stdout: cliFixture("codex-cli/success.windows.stdout.jsonl"),
+      outputFile: cliFixture("codex-cli/success.windows.last-message.json"), holdMs: 120_000 });
+    const codex: CliWorkerRuntimeConfig = { runtimeId: "codex-cli:default", providerId: "codex-cli", model: null };
+    const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: h.rerun }), h.input({ config: codex }));
+    assert.equal(result.type, "submitted", JSON.stringify(result));
+    assert.equal(records(h)[0]?.outcome, "done");
+    const file = JSON.parse(readFileSync(join(cliWorkerStateFolder(h.state, RUN, SESSION), "run-1.result.json"), "utf8")) as { exited: boolean; exitCode: number | null; stoppedBy?: string };
+    assert.deepEqual([file.exited, file.exitCode, file.stoppedBy], [false, null, undefined], "taken before the exit, never by the deadline");
   });
 
   test("restart: a run the Runner stopped during keeps its recorded tip, so the stopped CLI's commits are undone too", async (t) => {
@@ -169,6 +185,68 @@ describe("CW5 loop: runs over time and the managed launcher", { concurrency: CLI
     } finally {
       // The host too, not only the run's binding: its Job host and fact probe keep pipes open, and on GitHub's Windows
       // image an unclosed host kept this file's process alive after its last test (CI run 44307474932).
+      try {
+        await run.close();
+      } finally {
+        await managedHost.close();
+      }
+    }
+  });
+
+  // §3.11c, CW0's escape: Codex ran every command through the Store pwsh it found by name on its PATH, and the server
+  // that command started with Start-Process outlived the stop, outside the Job. The fake picks its shell as Codex 0.169
+  // does (fake-cli.mjs codexBackground) on the PATH the Runner gave it. On a PC whose only pwsh is the Store one (the
+  // owner's), the test fails with R3's child filter removed (child-environment.ts filterPathEntries): the node escapes.
+  test("§3.11c: a Codex worker under the managed launcher picks an unpackaged shell, sees no API key, and the background server it starts dies with the owner's stop", {
+    skip: process.platform !== "win32" && "Codex CLI workers run on Windows only, and the escape is a Windows Job's",
+  }, async (t) => {
+    const h = await harness(t, "codex-managed");
+    const record = join(h.root, "fake", "codex-managed.json");
+    const names = ["pwsh", "powershell", "python3", "python", "py"];
+    const scenarioPath = h.scenario({
+      cli: "codex-cli", stdout: cliFixture("codex-cli/success.windows.stdout.jsonl"), outputFile: cliFixture("codex-cli/success.windows.last-message.json"),
+      record, recordResolution: names, recordSensitive: ["OPENAI_API_KEY", "CODEX_API_KEY"],
+      actions: [{ write: "value.txt", content: "two\n" }, { codexBackground: 60_000 }],
+    });
+    // Synthetic values only: the child environment drops both names (sensitive-redaction.ts), so the CLI never sees one.
+    const ambient = { ...snapshotNativeBuildAmbientEnvironment(), [FAKE_CLI_SCENARIO_ENV]: scenarioPath,
+      OPENAI_API_KEY: "SYNTHETIC_CODEX_TEST_KEY", CODEX_API_KEY: "SYNTHETIC_CODEX_TEST_KEY" };
+    const managedHost = createExecutionHost({ projectRoot: h.project, stateDirectory: h.state, artifacts: h.artifacts, ambientEnvironment: ambient,
+      processHostFacts: { portableDuplex: "unavailable", windowsBatchArgv: "unavailable", exactTreeBirth: "verified", jobContainment: "verified" } });
+    const run = await managedHost.bindRun({
+      runId: RUN, permissionProfile: "full", capabilityContract: { digest: "d".repeat(64) } as RunnerCapabilityContract,
+      capabilitiesConfig: emptyRunnerCapabilitiesConfig(), processEnvironment: h.owners.environmentFor,
+    });
+    let ran: FakeCliRecord | undefined;
+    try {
+      const launcher = createManagedCliProcessLauncher({ managedProcesses: run.managedProcesses, executionGrants: run.executionGrants, permissionProfile: "full" });
+      const facts = await managedHost.windowsProcessFacts?.();
+      assert.equal(facts?.jobContainment, "verified", "the injected facts reach the launch");
+      const codex: CliWorkerRuntimeConfig = { runtimeId: "codex-cli:default", providerId: "codex-cli", model: null };
+      // No refusal is lifted: production's per-OS table allows Codex on Windows.
+      const result = await runCliWorkerAttempt(h.deps(launcher, { rerunChecks: h.rerun, host: { ...WINDOWS, jobContainment: facts!.jobContainment } }), h.input({ config: codex }));
+      assert.equal(result.type, "submitted", JSON.stringify(result));
+      ran = JSON.parse(readFileSync(record, "utf8")) as FakeCliRecord;
+      const shell = ran.codexShell;
+      assert.ok(shell, "the fake ran CW0's background command");
+      assert.equal(shell.exitCode, 0, shell.stderr ?? "the shell failed");
+      assert.ok(shell.backgroundPid, "Start-Process reported the background node's ID");
+      assert.equal(shell.backgroundStarted, true, "the background node ran (it wrote its marker) before the stop");
+      t.diagnostic(`Codex's shell here: ${shell.shell}`);
+      assert.equal(isWindowsAppsPathEntry(dirname(shell.shell)), false, `the shell Codex picks is unpackaged: ${shell.shell}`);
+      for (const name of names) {
+        const found: string | null | undefined = ran.resolved?.[name];
+        assert.ok(found === null || (found !== undefined && !isWindowsAppsPathEntry(dirname(found))), `${name} resolves to no packaged alias: ${found}`);
+      }
+      assert.deepEqual(ran.sensitivePresent, { OPENAI_API_KEY: false, CODEX_API_KEY: false });
+      // The attempt ended with the owner's verified stop: the node Start-Process started is gone with the Job.
+      assert.equal(await fakeProcessAlive(shell.backgroundPid, shell.backgroundToken), false, "the background server did not outlive the stop");
+    } finally {
+      // A failed run must not leave the node behind: only the fake's own process, told apart by its token, is stopped.
+      const shell = ran?.codexShell;
+      if (shell?.backgroundPid && await fakeProcessAlive(shell.backgroundPid, shell.backgroundToken).catch(() => false)) {
+        try { process.kill(shell.backgroundPid); } catch { /* gone */ }
+      }
       try {
         await run.close();
       } finally {

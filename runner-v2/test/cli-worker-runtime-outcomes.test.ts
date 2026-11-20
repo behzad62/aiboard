@@ -193,8 +193,8 @@ describe("CW5 loop: outcomes and case 1", { concurrency: CLI_RUNTIME_TEST_CONCUR
       { type: "settled", outcome: { type: "failed", reason: `${PROCESS_LAUNCH_UNPROVEN_PREFIX}job_containment_unverified` } });
     assert.deepEqual(await refused({ platform: "linux", isRoot: false }),
       { type: "settled", outcome: { type: "failed", reason: `${PROCESS_LAUNCH_UNPROVEN_PREFIX}cli_worker_platform_refused` } });
-    // Codex CLI stays refused on every OS (CW0b).
-    for (const platform of ["win32", "linux", "darwin"] as const) {
+    // Codex CLI stays refused on Linux and macOS; on Windows it runs (§3.11c).
+    for (const platform of ["linux", "darwin"] as const) {
       assert.deepEqual(await refused({ ...WINDOWS, platform }, { runtimeId: "codex-cli:default", providerId: "codex-cli", model: null }),
         { type: "settled", outcome: { type: "failed", reason: `${PROCESS_LAUNCH_UNPROVEN_PREFIX}cli_worker_platform_refused` } });
     }

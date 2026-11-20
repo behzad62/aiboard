@@ -17,10 +17,21 @@
 //   "grandchildMs": 0,                              // start a child that lives this long
 //   "grandchildDetached": false,                    // see below: true for a "grandchild proven stopped" test
 //   "actions": [{ "write": "docs/project/x.md", "content": "…" }, { "commit": "message" },  // in the cwd, before output
-//               { "run": ["playwright-cli", "--json", "goto", "http://…"] }],  // a command on PATH, as the CLI's shell runs it
-//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, grandchildToken?, mcpDepth?, runs? } before any output
-//   "recordMcpDepth": false                         // true: the record carries AIBOARD_MCP_DEPTH, the only variable it reads
+//               { "run": ["playwright-cli", "--json", "goto", "http://…"] },  // a command on PATH, as the CLI's shell runs it
+//               { "codexBackground": 60000 }],  // Windows: CW0's escape shape, below
+//   "record": "run.json",                           // written: { argv, stdin, cwd, grandchildPid?, grandchildToken?, mcpDepth?, runs?, codexShell?, resolved?, sensitivePresent? } before any output
+//   "recordMcpDepth": false,                        // true: the record carries AIBOARD_MCP_DEPTH, the only variable it reads
+//   "recordResolution": ["pwsh", "python3"],        // the record names where each resolves on the fake's own PATH (or null)
+//   "recordSensitive": ["OPENAI_API_KEY"]           // the record says whether each is set; never its value
 // }
+//
+// "codexBackground" (Windows only, docs/plans/2026-11-14-cli-workers.md §3.11c): the fake picks its shell exactly as
+// Codex 0.169 does on Windows (codex-rs/shell-command/src/shell_detect.rs `get_powershell_shell`): `pwsh` on its own
+// PATH, then C:\Program Files\PowerShell\7\pwsh.exe, then `powershell` on its PATH, then System32's powershell.exe.
+// Through that shell it runs CW0's background command, a `Start-Process` of a node that lives the given milliseconds,
+// and records the shell, the node's ID, the token in its command line and whether the node wrote its start marker
+// (`codexShell`), so a test can tell whether it outlived the stop. With the Store pwsh first on PATH that node is in no
+// job at all and outlives the stop (CW0; measured again with this fake, §3.11c).
 //
 // Launching it: tests run [process.execPath, FAKE_CLI_SCRIPT, ...argv] (fake-cli.ts). That is the seam on Windows too:
 // the CLI lookup accepts only an .exe or a .cmd, and a .cmd can never carry Claude Code's inline schema (both Windows
@@ -43,8 +54,8 @@
 // -o file is created empty, the grandchild started, the actions run, the record written, and the output replayed.
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 const scenarioPath = process.env.AIBOARD_FAKE_CLI_SCENARIO;
 if (!scenarioPath) {
@@ -89,12 +100,17 @@ async function run() {
       { stdio: "ignore", detached: scenario.grandchildDetached === true });
   }
   const runs = [];
-  for (const action of scenario.actions ?? []) act(action, runs);
+  const shells = [];
+  for (const action of scenario.actions ?? []) act(action, runs, shells);
   if (scenario.record) {
     writeFileSync(at(scenario.record), JSON.stringify({
       argv, stdin, cwd: process.cwd(), ...(grandchild ? { grandchildPid: grandchild.pid, grandchildToken } : {}), ...(runs.length ? { runs } : {}),
       // Only this one variable of the environment is ever written down.
       ...(scenario.recordMcpDepth === true ? { mcpDepth: process.env.AIBOARD_MCP_DEPTH ?? null } : {}),
+      ...(shells.length ? { codexShell: shells[0] } : {}),
+      ...(Array.isArray(scenario.recordResolution) ? { resolved: Object.fromEntries(scenario.recordResolution.map((name) => [name, which(name) ?? null])) } : {}),
+      // Whether each name is set, never what it holds.
+      ...(Array.isArray(scenario.recordSensitive) ? { sensitivePresent: Object.fromEntries(scenario.recordSensitive.map((name) => [name, environmentHas(name)])) } : {}),
     }, null, 2));
   }
   const stdout = read(scenario.stdout).toString("utf8");
@@ -113,7 +129,35 @@ async function run() {
 // What a CLI may do in its worktree at Full access: write a file (docs/project/** included), commit, or run a command
 // found on PATH in its environment (CW8: `playwright-cli`, which reaches the owner's browser session). A run's exit code
 // and output are recorded, never thrown: a failed command is something a CLI sees and reports.
-function act(action, runs) {
+function act(action, runs, shells) {
+  if (typeof action.codexBackground === "number") {
+    if (process.platform !== "win32") throw new Error("fake-cli: codexBackground is Windows only");
+    const shell = codexWindowsShell();
+    const token = `aiboard-fake-codex-background-${randomUUID()}`;
+    // The node proves it started by writing a marker beside the scenario (never in the worktree), so a background
+    // command that failed at once can never pass for one the stop ended.
+    const marker = join(base, `${token}.started`).replaceAll("\\", "/");
+    const script = `require('fs').writeFileSync('${marker}', 'up'); setTimeout(() => {}, ${Math.round(action.codexBackground)}); // ${token}`;
+    // CW0's command: Start-Process returns at once, so the shell exits while the node it started keeps running.
+    // Start-Process joins -ArgumentList with spaces and quotes nothing, so the script goes in as one quoted argument.
+    // The shell writes the node's ID (or its error) to files: Windows PowerShell's Start-Process lets the node inherit the
+    // shell's handles, so a piped stdout would stay open until the node exits. The shell's stdio is therefore ignored;
+    // which handles the node holds does not change which job it is in.
+    const pidFile = join(base, `${token}.pid`).replaceAll("\\", "/");
+    const errorFile = join(base, `${token}.error`).replaceAll("\\", "/");
+    const command = `try { $p = Start-Process -FilePath '${process.execPath.replaceAll("'", "''")}' -ArgumentList '-e', '"${script.replaceAll("'", "''")}"' -WindowStyle Hidden -PassThru -ErrorAction Stop; Set-Content -LiteralPath '${pidFile}' -Value $p.Id } catch { Set-Content -LiteralPath '${errorFile}' -Value "$_"; exit 1 }`;
+    // -NoProfile keeps the owner's profile out of the test; Codex passes -Command alone, and the profile does not change
+    // which program the shell is.
+    const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-Command", command], { cwd: process.cwd(), stdio: "ignore", windowsHide: true });
+    const pid = existsSync(pidFile) ? Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10) : Number.NaN;
+    // A bound on the proof, not on the CLI: a node that never writes its marker records backgroundStarted: false.
+    const waitUntil = Date.now() + 15_000;
+    while (!existsSync(marker) && Date.now() < waitUntil) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    shells.push({ shell, exitCode: result.status, ...(Number.isSafeInteger(pid) && pid > 0 ? { backgroundPid: pid } : {}), backgroundToken: token,
+      backgroundStarted: existsSync(marker),
+      ...(result.status === 0 ? {} : { stderr: (existsSync(errorFile) ? readFileSync(errorFile, "utf8") : String(result.error ?? "")).slice(0, 2_000) }) });
+    return;
+  }
   if (Array.isArray(action.run)) {
     const [command, ...args] = action.run;
     // A Windows command shim (.cmd) runs through cmd.exe, as a CLI's shell runs it; the tests' arguments hold no cmd
@@ -137,6 +181,45 @@ function act(action, runs) {
     return;
   }
   throw new Error(`fake-cli: unknown action ${JSON.stringify(action)}`);
+}
+
+// Codex 0.169 on Windows (shell_detect.rs): `which("pwsh")`, the MSI pwsh's default folder, `which("powershell")`,
+// System32's Windows PowerShell.
+function codexWindowsShell() {
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const systemRoot = process.env.SystemRoot ?? "C:\\Windows";
+  return which("pwsh") ?? existingFile(join(programFiles, "PowerShell", "7", "pwsh.exe")) ??
+    which("powershell") ?? existingFile(join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")) ?? "cmd.exe";
+}
+
+// A name on this process's own PATH, with PATHEXT on Windows, as Codex's `which` crate looks it up. An app execution
+// alias (the WindowsApps pwsh.exe) cannot be opened as a file (stat fails with EACCES), yet `which` finds it, so an
+// entry that exists as a directory entry counts.
+function which(name) {
+  const path = Object.entries(process.env).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+  const extensions = process.platform === "win32"
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const folder of path.split(delimiter)) {
+    if (!folder.trim()) continue;
+    for (const extension of extensions) {
+      const found = existingFile(join(folder.trim().replace(/^"(.*)"$/, "$1"), `${name}${extension.toLowerCase()}`));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function existingFile(path) {
+  try {
+    return lstatSync(path).isDirectory() ? undefined : path;
+  } catch {
+    return undefined;
+  }
+}
+
+function environmentHas(name) {
+  return Object.keys(process.env).some((key) => (process.platform === "win32" ? key.toUpperCase() === name.toUpperCase() : key === name));
 }
 
 function sameArgs(expected, actual) {

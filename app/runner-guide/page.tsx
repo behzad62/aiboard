@@ -195,7 +195,7 @@ aiboard models disable <provider:model>`}
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">CLI workers</h2>
         <p>
-          A Build can use Claude Code and agy, signed in on this computer, as workers next to API models (Runner 0.3.21
+          A Build can use Codex CLI, Claude Code and agy, signed in on this computer, as workers next to API models (Runner 0.3.21
           or newer: <code>aiboard update</code>). Turn each one on in Settings &gt; Providers &gt; CLI workers.
           Settings shows whether the CLI is installed and logged in, and suggests models. Test sends one tiny prompt in
           the CLI&apos;s most restricted mode, in an empty folder, and uses a little of that CLI&apos;s usage.
@@ -248,9 +248,7 @@ aiboard models disable <provider:model>`}
         </p>
         <p className="text-sm text-muted-foreground">
           CLI workers run on Windows only for now, and only where Windows passes the Runner&apos;s Job check; Settings
-          says when it doesn&apos;t. Codex CLI is refused on Windows for now: in AI Board&apos;s tests, some processes it
-          started ran outside the Runner&apos;s Job, and that is still being traced. On Linux and macOS, every CLI worker
-          is refused:
+          says when it doesn&apos;t. On Linux and macOS, every CLI worker is refused:
         </p>
         <ul className="list-disc space-y-1 pl-6 text-sm text-muted-foreground">
           <li>
@@ -261,6 +259,13 @@ aiboard models disable <provider:model>`}
         </ul>
         <p className="text-sm text-muted-foreground">
           Use Claude Code&apos;s native <code>claude.exe</code>: its npm <code>.cmd</code> shim is refused.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Codex CLI workers need a Runner newer than 0.3.22. Use the standalone Codex CLI (its installer or npm): a
+          Microsoft Store Codex is refused, because the programs it starts could run outside the Runner&apos;s Job. A
+          Codex worker&apos;s commands run in Windows PowerShell, or in PowerShell 7 if you installed it from its
+          installer: the Microsoft Store PowerShell is left off the worker&apos;s PATH, because the programs it starts
+          run outside the Job. A server a CLI worker starts, such as a dev server, stops when its attempt ends.
         </p>
       </section>
       <section className="space-y-3">

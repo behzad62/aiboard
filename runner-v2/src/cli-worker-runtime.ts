@@ -67,7 +67,7 @@ import {
   type CliCheckDecision,
   type CliCheckRerun,
 } from "./cli-worker-evidence.js";
-import type { CliWorkerResultV1 } from "./cli-worker-result.js";
+import { parseCliWorkerResultText, type CliWorkerResultV1 } from "./cli-worker-result.js";
 import type { WorkingTreeIdentity } from "./command-evidence-identity.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
@@ -258,8 +258,8 @@ export interface CliWorkerRuntimeDeps {
   /** How long one read waits for output; the deadline and the abort are checked between reads. */
   readWaitMs?: number;
   /**
-   * Test seam only: the per-OS refusals (CW0b, cliWorkerPlatformRefusal). Production never sets it, so Codex CLI stays
-   * refused on every OS; a test lifts it to run the Codex branch against the fake CLI.
+   * Test seam only: the per-OS refusals (§3.11, cliWorkerPlatformRefusal). Production never sets it, so every CLI stays
+   * refused on Linux and macOS; a test lifts it to run a CLI's branch against the fake CLI on such a host.
    */
   platformRefusal?: (providerId: CliWorkerProviderId, platform: NodeJS.Platform) => string | undefined;
 }
@@ -565,13 +565,15 @@ async function runCliWorkerRun(deps: CliWorkerRuntimeDeps, input: CliWorkerAttem
       // From here the CLI may read the fix round: a later launch gives it the task again too.
       if (fixRound && !fixRound.sent) await writeFixRound(folder, { ...fixRound, sent: true });
       const run = await waitForRun(deps, input, handle, adapter.createStreamReader(), adapter.resultDelivery,
-        buildCliWorkerStdin(providerId, prompt), deadlineAt, now, runNumber);
-      // Codex's -o file is complete only at its exit (§3.5 step 4).
-      const outputFile = providerId === "codex-cli" && run.exited ? await readBounded(outputPath) : undefined;
+        buildCliWorkerStdin(providerId, prompt), deadlineAt, now, runNumber,
+        providerId === "codex-cli" ? () => codexOutputComplete(outputPath) : undefined);
+      // Codex's -o file is complete at its exit (§3.5 step 4), or once its turn completed and the file parses (§3.11c).
+      const outputFile = providerId === "codex-cli" && (run.exited || run.delivered) ? await readBounded(outputPath) : undefined;
       const reading = run.reader.read({
         stderr: run.stderr,
         exitCode: run.exited ? run.exitCode : null,
         ...(outputFile !== undefined ? { outputFile } : {}),
+        ...(run.delivered ? { resultDelivered: true } : {}),
         now: now(),
       });
       file = {
@@ -1063,6 +1065,20 @@ interface RunWait {
   exited: boolean;
   exitCode: number | null;
   stoppedBy?: "deadline" | "cancelled";
+  /** Codex: its turn completed and its -o file parsed while its Job still ran (§3.11c). */
+  delivered?: boolean;
+}
+
+/**
+ * §3.11c: whether Codex's -o file holds a whole result. Under the Windows Job the managed process counts as running
+ * until every process in the Job has exited, so a server a Codex command left running would hold the run to its
+ * deadline. Once the stream has `turn.completed` and the file parses, the result is Codex's, as Claude Code's `result`
+ * event is; the owner's stop then ends what is left, and only a proven stop collects. A file Codex is still writing
+ * does not parse, so it is read again on the next pass.
+ */
+async function codexOutputComplete(outputPath: string): Promise<boolean> {
+  const bytes = await readBounded(outputPath);
+  return bytes !== null && bytes.byteLength > 0 && parseCliWorkerResultText(Buffer.from(bytes).toString("utf8")).ok;
 }
 
 async function waitForRun(
@@ -1075,6 +1091,8 @@ async function waitForRun(
   deadline: number,
   now: () => number,
   runNumber: number,
+  /** For `exit_output_file`: whether the result is whole before the exit (codexOutputComplete). */
+  outputComplete?: () => Promise<boolean>,
 ): Promise<RunWait> {
   const live = liveTail(input, runNumber);
   const chunks = stdinChunks(stdin);
@@ -1102,6 +1120,7 @@ async function waitForRun(
   let exited = false;
   let exitCode: number | null = null;
   let stoppedBy: RunWait["stoppedBy"];
+  let delivered = false;
   try {
     for (;;) {
       if (input.signal?.aborted) {
@@ -1128,12 +1147,16 @@ async function waitForRun(
       }
       // Claude Code's and agy's result event ends the turn, even while a background task keeps the process up.
       if (delivery === "result_event" && reader.turnEnded) break;
+      if (delivery === "exit_output_file" && reader.turnEnded && outputComplete && await outputComplete()) {
+        delivered = true;
+        break;
+      }
     }
   } finally {
     reader.end();
     live.finish();
   }
-  return { reader, stderr, exited, exitCode, ...(stoppedBy ? { stoppedBy } : {}) };
+  return { reader, stderr, exited, exitCode, ...(stoppedBy ? { stoppedBy } : {}), ...(delivered ? { delivered } : {}) };
 }
 
 /** The prompt on stdin in writes ManagedProcessService accepts, never splitting a surrogate pair. */

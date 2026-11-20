@@ -109,9 +109,9 @@ test("CW4 a Build with a CLI worker under project or guarded access is refused; 
 
 test("CW4 a CLI refused on this OS or under root is refused with the refusal's reason", () => {
   const cases: [CliWorkerProviderId, CliCrewHost, string, RegExp][] = [
-    // On Windows, Codex waits for CW0b's fix (CWD-11).
-    ["codex-cli", WINDOWS, "cli_worker_platform_refused", /Codex CLI workers are not available on Windows yet/],
+    // Codex runs on Windows since §3.11c (below); Linux and macOS stay refused (CWD-11).
     ["codex-cli", { platform: "linux", isRoot: false }, "cli_worker_platform_refused", /not available on Linux/],
+    ["codex-cli", { platform: "darwin", isRoot: false }, "cli_worker_platform_refused", /Codex CLI workers are not available on macOS/],
     ["claude-code", { platform: "linux", isRoot: false }, "cli_worker_platform_refused", /Claude Code workers are not available on Linux/],
     ["claude-code", { platform: "darwin", isRoot: false }, "cli_worker_platform_refused", /not available on macOS/],
     ["agy", { platform: "linux", isRoot: false }, "cli_worker_platform_refused", /agy workers are not available on Linux yet/],
@@ -125,6 +125,9 @@ test("CW4 a CLI refused on this OS or under root is refused with the refusal's r
     assert.equal(refused.runtimeId, runtimeId);
     assert.match(refused.message, message);
   }
+  // §3.11c: Codex is a crew worker on Windows, as root too (only Claude Code refuses root).
+  assert.doesNotThrow(() => assertCliCrewRules(CONFIGS, spec({ workerRuntimeIds: ["google:gemini", "codex-cli:default"] }), WINDOWS));
+  assert.doesNotThrow(() => assertCliCrewRules(CONFIGS, spec({ workerRuntimeIds: ["codex-cli:default"] }), { platform: "win32", isRoot: true }));
   // agy runs as root (only Claude Code refuses it), and API-only crews pass on every host.
   assert.doesNotThrow(() => assertCliCrewRules(CONFIGS, spec({ workerRuntimeIds: ["agy:default"] }), { platform: "win32", isRoot: true }));
   for (const platform of ["win32", "linux", "darwin", "freebsd"] as const) {
@@ -141,7 +144,7 @@ test("CW4 selectRuntimeCandidates applies the rules and marks CLI runtimes worke
   ]);
   assert.deepEqual(selected.workers.map((candidate) => candidate.runtimeId), ["google:gemini", "agy:default"]);
   // A crew change and a recovered spec go through the same function.
-  assert.equal(refusal(() => selectRuntimeCandidates(CONFIGS, spec({ workerRuntimeIds: ["codex-cli:default"] }), WINDOWS)).code, "cli_worker_platform_refused");
+  assert.equal(refusal(() => selectRuntimeCandidates(CONFIGS, spec({ workerRuntimeIds: ["codex-cli:default"] }), { platform: "linux", isRoot: false })).code, "cli_worker_platform_refused");
   assert.equal(refusal(() => selectRuntimeCandidates(CONFIGS, spec({ reviewerRuntimeId: "agy:default" }), WINDOWS)).code, "cli_runtime_role_refused");
   // API-only selection is unchanged: no candidate is marked.
   assert.equal(selectRuntimeCandidates(CONFIGS, spec(), WINDOWS).all.some((candidate) => "workerOnly" in candidate), false);
@@ -343,8 +346,8 @@ test("CW4 a Build whose crew breaks a CLI rule is refused by prepareSpec before 
       [{ verifierRuntimeIds: ["openai:sol", "agy:default"] }, "cli_runtime_role_refused"],
       [{ workerRuntimeIds: ["google:gemini", "agy:default"], permissionProfile: "project" }, "cli_workers_require_full_access"],
       [{ workerRuntimeIds: ["google:gemini", "agy:default"], permissionProfile: "guarded" }, "cli_workers_require_full_access"],
-      // On Windows, Codex CLI workers wait for CW0b's fix.
-      [{ workerRuntimeIds: ["google:gemini", "codex-cli:default"] }, "cli_worker_platform_refused"],
+      // Codex runs on Windows (§3.11c), under Full access only, as every CLI.
+      [{ workerRuntimeIds: ["google:gemini", "codex-cli:default"], permissionProfile: "project" }, "cli_workers_require_full_access"],
     ];
     for (const [crew, code] of cases) {
       await assert.rejects(

@@ -34,10 +34,15 @@ export interface FakeCliScenario {
   grandchildMs?: number;
   /** Spawn the grandchild detached; on Windows the only form that outlives the fake (fake-cli.mjs says why). */
   grandchildDetached?: boolean;
-  actions?: Array<{ write: string; content?: string } | { commit: string } | { run: string[] }>;
+  /** `codexBackground`: Windows only, CW0's escape shape through the shell Codex would pick (fake-cli.mjs, §3.11c). */
+  actions?: Array<{ write: string; content?: string } | { commit: string } | { run: string[] } | { codexBackground: number }>;
   record?: string;
   /** The record carries `AIBOARD_MCP_DEPTH`, the only environment variable the fake writes down. */
   recordMcpDepth?: boolean;
+  /** The record names where each of these resolves on the fake's own PATH (`resolved`). */
+  recordResolution?: string[];
+  /** The record says whether each of these is set in the fake's environment (`sensitivePresent`), never its value. */
+  recordSensitive?: string[];
 }
 
 /** What the fake wrote to `record`. */
@@ -51,6 +56,15 @@ export interface FakeCliRecord {
   mcpDepth?: string | null;
   /** The `run` actions' commands, in order, with their exit codes and output. */
   runs?: Array<{ args: string[]; exitCode: number | null; stdout: string; stderr: string }>;
+  /** The first `codexBackground` action: the shell the fake picked as Codex would, and the background node it started. */
+  codexShell?: {
+    shell: string; exitCode: number | null; backgroundPid?: number; backgroundToken: string;
+    /** The background node wrote its marker: it really ran, so its absence after the stop is the stop's doing. */
+    backgroundStarted: boolean;
+    stderr?: string;
+  };
+  resolved?: Record<string, string | null>;
+  sensitivePresent?: Record<string, boolean>;
 }
 
 /**
@@ -62,23 +76,29 @@ export interface FakeCliRecord {
 export async function fakeGrandchildAlive(record: FakeCliRecord): Promise<boolean> {
   const pid = record.grandchildPid;
   if (!pid) throw new Error("The fake recorded no grandchild.");
+  if (process.platform === "win32" && !record.grandchildToken) throw new Error("The fake recorded no grandchild token.");
+  return await fakeProcessAlive(pid, record.grandchildToken ?? "");
+}
+
+/** As fakeGrandchildAlive, for any process the fake started whose command line carries `token` (the codexBackground node). */
+export async function fakeProcessAlive(pid: number, token: string): Promise<boolean> {
   try {
     process.kill(pid, 0);
   } catch {
     return false;
   }
   if (process.platform !== "win32") return true;
-  if (!record.grandchildToken) throw new Error("The fake recorded no grandchild token.");
+  if (!token) throw new Error("No token to tell the fake's process from a later one.");
   // Async, so a slow query never blocks the event loop.
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
     `Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop | Select-Object Name, CommandLine | ConvertTo-Json -Compress`],
   { encoding: "utf8", windowsHide: true });
   const found = stdout.trim() ? JSON.parse(stdout) as { Name?: string | null; CommandLine?: string | null } : undefined;
-  if (found?.CommandLine?.includes(record.grandchildToken)) return true;
+  if (found?.CommandLine?.includes(token)) return true;
   // Which of the two it was (a later process on the ID, or the grandchild gone between the calls), for the CI log. Only
   // the name: another process's command line may hold anything.
   const holder = !found ? "no process" : `${JSON.stringify(found.Name ?? "an unnamed process")}${found.CommandLine ? "" : " (command line unreadable)"}`;
-  console.error(`fakeGrandchildAlive: ID ${pid} answered without the grandchild's token; it now holds ${holder}`);
+  console.error(`fakeProcessAlive: ID ${pid} answered without the token; it now holds ${holder}`);
   return false;
 }
 

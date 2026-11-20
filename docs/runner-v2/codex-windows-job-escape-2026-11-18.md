@@ -423,6 +423,8 @@ Windows PowerShell root the same call kept both in the Job, and node died with i
   cleanup") and its run then fails to close. Main does the same for a CreateProcess failure; it is a follow-up for the
   managed runtime's failed-start cleanup.
 
-**Not changed.** Codex CLI workers stay refused on Windows. Lifting that still needs the owner's trace (§4.1), a
+**Update 2026-11-20.** Codex's Windows refusal was lifted after Codex's own source settled M1 and M3 and a fake Codex reproduced the escape under the real Job: docs/plans/2026-11-14-cli-workers.md §3.11c.
+
+**Not changed (2026-11-18).** Codex CLI workers stay refused on Windows. Lifting that still needs the owner's trace (§4.1), a
 CW0-style measurement with Codex runs and an answer to the packaged-root opt-out above, with the owner's go. No host
 census, per-PID killer, breakaway, or change to the user's Codex config.
