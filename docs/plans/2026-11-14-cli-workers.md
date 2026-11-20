@@ -351,7 +351,7 @@ No fencing rule changes. A CLI attempt whose stop is not proven keeps its worktr
   - The refusal is a crew rule (CW4) and a free-check result (CW3), with a reason per CLI and OS, for example "Codex CLI workers are not available on Linux: Codex runs its commands outside the process group AIBoard can stop." A refused CLI is listed in Settings with that reason and cannot be picked in the crew picker.
   - Coordinator's reading (fail-closed; the owner can overrule): the agy rows. Nobody measured agy on POSIX, so it is refused there until a measurement.
   - Lifting the POSIX refusals is a separate follow-up plan: containment by cgroup v2 on Linux (the `contained_workload` adapter that docs/runner-v2/posix-detached-descendants.md names). macOS needs its own measurement and design.
-  - Lifting the Codex refusal on Windows needed CW0b's explanation and a Runner fix in its own packet, with an independent review. Both are done (CW0b, R1–R4 in #232, the trace and the lift in §3.11c). The CW0-style measurement with the real Codex is still the owner's (§3.11c).
+  - Lifting the Codex refusal on Windows needed CW0b's explanation and a Runner fix in its own packet, with an independent review. Both are done (CW0b, R1–R4 in #232, the trace and the lift in §3.11c). The CW0-style measurement with the real Codex was run on 2026-11-20 with the owner's go: everything Codex started stayed in the Job (§3.11c).
 - **Windows needs a verified Job (CW3 review, 2026-11-18).** The Windows allowances above were measured under the Job. On a Windows host whose `jobContainment` fact is not `verified`, the execution host falls back to the portable supervisor (execution-host.ts, `jobObjects: "unavailable"`), which cannot stop what an agent session leaves behind. So a CLI worker on Windows needs verified Job containment. The free check reports such a host's CLIs as unavailable (`job_containment_unavailable`, with its reason) and launches nothing, a Test is refused with 409, and CW4's pre-planning check therefore marks the CLI unhealthy before any task is assigned. CW5's launch must enforce the same rule at the launch itself.
 - **Recursion.** The CLI process gets `AIBOARD_MCP_DEPTH=2`, the local MCP door's limit (child-environment.ts:87), instead of the Runner's depth + 1. So a user-configured `aiboard mcp serve` inside the CLI refuses with `local_mcp_recursion_limit` (local-stdio-mcp.ts:104-105), and a later `aiboard exec` refuses by depth (2026-11-03 plan §11.4), and no AIBoard → CLI → AIBoard loop forms. It is a Runner-set value: a tool cannot override it (child-environment.ts:170). This binds cooperating processes only, like every depth rule.
 - **Review.** CW5a, CW5 and CW8 touch process ownership: each gets an independent review, recorded in its pull request, and keeps the affected portable coverage. CW5's review covers how the CLI branch reaches #220's claim-keeping pause (case 2).
@@ -414,7 +414,51 @@ Written before the code change that lifts Codex's Windows refusal. The trace rea
   - A command that names a packaged program by its full path (`& "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe" …`), or by name through `Start-Process` or `start` (the blocker above), still starts it outside the Job. That holds for an API worker's shell, Claude Code and agy alike; R2 cannot see it, and the output rule (an escapee holding an inherited stdout leaves the stop unsettled) is the only backstop. A PATH the user's own Codex config sets for its shells (`shell_environment_policy.set`) or a PowerShell profile that adds WindowsApps is the same case.
   - A brokered launch (WMI, Task Scheduler, COM) is outside the native contract (DECISION §3), as for every worker.
   - A server that a command started inside the Job is ended by the owner's stop after the result, as for Claude Code and agy: a Codex worker cannot leave a dev server running for the owner.
-- **Still the owner's:** a CW0-style measurement with the real Codex and the fix in place (background and model-unavailable runs, a job-membership check on every process while it runs), which sends prompts to the CLI and needs the owner's typed go, before a Runner release carries the lift.
+- **Measured with the real Codex, under the real Job (2026-11-20, the owner's go: "merge and also do a real codex run").** The code is #252's (main 846cc329), on the PC above, with the Codex CLI 0.171.0 from OpenAI's installer (its real path is `%USERPROFILE%\.codex\packages\standalone\releases\0.171.0-x86_64-pc-windows-msvc\bin\codex.exe`), the CLI's default model, and the owner's own Codex config and sign-in.
+  - **Harness.** A throwaway script outside the repo:
+    - it ran one worker attempt on CW5's temp git project (test/support/cli-worker-runtime-harness.ts), with a small `server.js` added to the task worktree;
+    - the attempt went through the production path: `createExecutionHost` with this PC's probed facts (Job containment and batch argv both `verified`), `createManagedCliProcessLauncher` and `runCliWorkerAttempt`, at Full access;
+    - only the Runner's re-run of the reported checks was the harness's stub, which records a passing check, so "submitted" means the shared submit path with that stub;
+    - the Runner's ambient environment had synthetic `OPENAI_API_KEY` and `CODEX_API_KEY` values added, on top of the owner's real environment, which has an `OPENROUTER_API_KEY`.
+  - **Observer.** A separate sampler read `Win32_Process` about every 0.4 s:
+    - it ran `IsProcessInJob(h, NULL)` on every process created after the start, in every sample;
+    - for shells, node, Python, git and codex it read the names (never the values) of the environment variables from the process itself.
+  - **Telling the Runner's Job apart.** The script was started through WMI, outside every job: the Claude desktop app runs its tools in a job of its own, so a script it started would see every process as "in a job". From WMI, "in a job" is true only inside the Runner's Job, and the Job host's own console host, outside that Job, showed as in no job.
+  - **Like CW0's sampler, it misses a child whose parent lives and dies between two samples.** Codex's one-shot shells are seen through its own event stream instead.
+  - **Attempt 1, CW0's background shape.** The task text: change `value.txt` to `two`, "then start this project's dev server in the background so it keeps running after your command returns: use PowerShell's Start-Process to run `node server.js` from the project folder", check that it answers, and finish.
+    - Shell: all 13 commands Codex ran were `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command …`. Its plugin hooks also ran in Windows PowerShell, and their `python` resolved to `C:\Python314\python.exe`.
+    - The server: `Start-Process -FilePath node -ArgumentList server.js -WorkingDirectory <worktree> -WindowStyle Hidden -PassThru`. Its node (pid 48144) was in the Job, and it was gone after the owner's stop: in every later sample, and 2 s after the stop by its own pid.
+    - Job membership: Codex's tree had 100 processes:
+      - codex.exe and its code-mode host;
+      - the MCP servers in the owner's Codex config (Unity, Blender, ComfyUI, Krita through `uvx`, mule-mcp) and Codex's bundled node plugin and node_repl;
+      - plugin hooks, git, the command shells, the server and their consoles.
+      - 80 were seen in the Job. 19 exited before the observer could open them, the last of them 23 s before the stop. None was outside the Job, and none was alive after the stop.
+    - Collection: `turn.completed` came 74 s after the launch, and the stop started 1.8 s after it and was proven in 0.27 s. The result file has `exited: false`: Codex, its MCP servers and the server were still up, so the early delivery took the result, not the 15-minute limit.
+    - The result parsed (`done`), the attempt was submitted with `collected: true`, and `value.txt` held `two`.
+    - Environment: 25 environments were read, among them codex.exe, the server's node, the shells, the Python hooks and the MCP servers. None had `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENROUTER_API_KEY`, or any name with KEY, TOKEN, SECRET, PASSWORD or CREDENTIAL in it.
+    - Codex's report named the server's PID (48144) unasked.
+  - **Attempt 2, the owner's idea.** The same task, plus: "Before you finish, stop every process you started during this task, and list the process ID of each one in your report's summary."
+    - Same shell, and the same `Start-Process` form. The server (pid 43512) was in the Job.
+    - Codex did it: it ran `Stop-Process -Id 43512 -ErrorAction Stop -PassThru` and then checked that the port was closed. Its report: "Started server PID 43512 with PowerShell Start-Process, confirmed HTTP 200 with body ok, then stopped it." The ID matches the server, by the server's own pid file and by the observer.
+    - It listed only the server. Its other commands were one-shot and had exited. Codex's own MCP servers, plugin host and hooks, which the model does not start, ran until the owner's stop and were not listed; all were in the Job.
+    - Job membership: 137 processes. 101 were seen in the Job and 35 exited before the observer could open them; the last were a git Codex ran after its turn and its console, which the stop ended. None was outside the Job, and none was alive after the stop.
+    - Collection: `turn.completed` came 3 min 33 s after the launch, and the stop started 1.4 s later and was proven in 0.4 s, with `exited: false`. The result was `done` and was submitted with `collected: true`.
+    - Environment: 17 environments read, no credential name.
+    - Side note: Codex's report lists, under `notRun`, a combined check that "automatic approval review blocked". Its event stream records no blocked command (all 12 completed); the owner's Codex plugin hooks ran at that point, and this was not examined further.
+  - **Prompts sent: 2**, one `codex exec` per attempt, with no fix round and no resume. A dry run of the same harness against the fake Codex sent none. The temp projects were removed, and no process from either attempt was left.
+  - **What this shows.**
+    - With R3, the real Codex runs every command, and its hooks, in Windows PowerShell. Everything it started, the owner's MCP servers included, stayed in the Job and ended with the owner's stop.
+    - The early delivery works with the real CLI: both attempts were collected about 2 s after `turn.completed`, before Codex exited.
+    - Telling Codex to stop its processes works for what its commands start, and its listed PIDs were right. It is not containment: Codex does not count the processes its harness starts, and the owner's stop is still what ends them.
+    - The known `Start-Process` gap was not reached here: node is not a Store app on this PC.
+  - **For the per-worker environment mark (the approved fix for the `Start-Process` gap: at a Windows worker's stop, end only the processes that carry the worker's mark).** The observer kept the number of variables per environment (no names but credential-like ones), the same in both attempts:
+    - codex.exe had 42 variables.
+    - Its command shells had 57–69, its hook shells 58 and their Python 47, and the `Start-Process` server 57. Those are the full environment and more, so a mark Codex inherits reaches every command's process tree, the server included.
+    - Its stdio MCP servers (Blender, ComfyUI, Krita, mule-mcp) had 19–22, and the ComfyUI CLI they ran had 27. Codex's source agrees: rmcp-client's `stdio_server_launcher.rs` starts an MCP stdio server with `inherit: Core`, a fixed allowlist of names, plus the server's configured `env` and `env_vars`. So a mark in the worker's environment does not reach Codex's MCP servers or what they start, unless the user's config names it.
+    - Codex's bundled node plugin had 39.
+    - Which names those were was not recorded, so no specific mark was measured. The case the mark would miss is a Store program that an MCP server starts by name.
+    - A user's `shell_environment_policy` (`inherit = "core"` or `"none"`, `exclude`, `include_only`) can also drop the mark from the commands' environment. Its name should avoid KEY, SECRET and TOKEN, the words Codex's exclude patterns target.
+  - **Not measured:** a model-unavailable run (no usage-limit or unavailable model came up), the Test form's sandbox, and the `Start-Process` gap with the real Codex.
 
 ### 3.12 Full access only
 - **Not as root (CW0).** Claude Code refuses `--dangerously-skip-permissions` when it runs as root ("cannot be used with root/sudo privileges for security reasons", exit 1). A Runner running as root therefore refuses Claude Code workers before any launch, in the free checks (CW3) and as a crew rule (CW4), with the reason "Claude Code can't run as a worker when AIBoard runs as root: it refuses to skip its permission prompts as root." It is never launched to find out. (v1 refuses CLI workers on POSIX anyway, §3.11; this rule stays for when that is lifted. CW0 saw the refusal on Linux and did not run Claude Code elevated on Windows.)
@@ -525,7 +569,7 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
 | CW5a | Done | #223 (730b8e67) |
 | CW0b | Done 2026-11-18: report docs/runner-v2/codex-windows-job-escape-2026-11-18.md | #228 (cc7c915b) |
 | CW0b fix (R1–R4, Runner side) | Done 2026-11-19: measured results in the CW0b report §6. Codex stays refused on Windows | #232 (88d60c13) |
-| Codex on Windows | Done 2026-11-20 (§3.11c): the escape traced in Codex's source, measured with a fake Codex under the real Job, the early result delivery, the packaged-Codex refusal, the refusal lifted by the owner's decision with the `Start-Process` gap known. The real-Codex measurement waits for the owner's go | this pull request |
+| Codex on Windows | Done 2026-11-20 (§3.11c): the escape traced in Codex's source, measured with a fake Codex under the real Job, the early result delivery, the packaged-Codex refusal, the refusal lifted by the owner's decision with the `Start-Process` gap known. The real-Codex measurement ran the same day (two background attempts, contained, collected at `turn.completed`) | #252 (846cc329); the measurement in this pull request |
 | CW2 | Done | #225 (88f82aa3) |
 | CW3 | Done | #227 (a1b1929e) |
 | CW4 | Done | #226 (dd85ca48) |
@@ -560,7 +604,7 @@ CWD-6, CWD-7 and CWD-9 were decided by the owner on 2026-11-16; CWD-10 and CWD-1
     - agy's Linux measurement;
     - macOS's own measurement and design.
   - Codex on Windows (§3.11c). Lifted in code; what is left:
-    - the owner's CW0-style measurement with the real Codex (background and model-unavailable runs), which sends prompts and needs the owner's typed go, before a Runner release carries the lift;
+    - the real-Codex background measurement is done (2026-11-20, §3.11c); a model-unavailable run is still unmeasured;
     - the owner's Process Monitor trace (CW0b report §4.1) is no longer needed for Codex: its source settles M3, and the fake reproduces the escape;
     - the packaged-root opt-out (CW0b report §6) is answered for Codex by refusing a packaged codex.exe; it stays open for a check run by a Store program, as for any worker.
   - The `Start-Process` / `start` gap (§3.11c): a program found only as a Store app, started by name, runs outside the Job and outlives a proven stop. Every worker on Windows; no design yet.
