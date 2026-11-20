@@ -517,6 +517,29 @@ export class ManagedProcessService {
 
   async closeAgent(owner: ManagedProcessOwner): Promise<void> {
     await this.stopMatching(record => sameOwner(record, owner));
+    await this.sweepEscapes(owner);
+  }
+
+  /**
+   * The Start-Process gap (process-escape-marks.ts): after the owner's managed processes are proven stopped, the run's
+   * runtime ends the processes that carry the owner's mark outside every Job. A sweep that fails or leaves one is an
+   * unproven stop (`process_cleanup_unverified`). While another actor still has a live process in the same session
+   * (they share the mark), it cannot sweep without risking that one, so the stop is unproven until that one stops;
+   * the runtime refuses the same way for the session's other live launches (execution-host.ts).
+   * With no runtime registered for the run there is nothing to sweep with: its binding closed, and that close swept
+   * every pending mark (or failed and stays unclosed).
+   */
+  private async sweepEscapes(owner: ManagedProcessOwner): Promise<void> {
+    const runtime = this.runtimes.get(owner.runId);
+    if (!runtime?.sweepEscapes) return;
+    if ([...this.records.values()].some(record => record.runId === owner.runId && record.sessionId === owner.sessionId && record.status !== "stopped")) {
+      throw new ManagedProcessError("process_cleanup_unverified", "Processes started outside the Runner's Job cannot be swept while another actor of this session still runs a process.");
+    }
+    try { await runtime.sweepEscapes({ sessionId: owner.sessionId }); }
+    catch (error) {
+      if (error instanceof ManagedProcessError && error.code === "process_cleanup_unverified") throw error;
+      throw new ManagedProcessError("process_cleanup_unverified", `Processes started outside the Runner's Job are not proven stopped: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   async close(): Promise<void> {
     if (this.closed) return;

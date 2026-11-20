@@ -614,6 +614,8 @@ export function buildCliWorkerPrompt(input: CliWorkerPromptInput): string {
     "- Files under docs/project/ belong to the Architect. Do not change them.",
     "- Verify by impact, narrowest check first. Never weaken, skip or delete a test to make it pass. Run each check as its own command: one program and its arguments, without &&, pipes or redirection.",
     ...(input.browserNote?.trim() ? [`- ${input.browserNote.trim()}`] : []),
+    // The Start-Process gap (process-escape-marks.ts): an extra layer only; the Runner's stop ends what is left.
+    "- Before you end your turn, stop every process you started that is still running (a server, a watcher, anything started in the background, with Start-Process or with start); do not leave one running for later.",
     "- End your turn with the JSON result the schema describes. outcome is \"done\" when the task is complete, \"needs_decision\" with a question when you need the Architect to decide something, or \"cannot_do\" with replanReason when the task cannot be done as planned.",
     "- List every check you ran in checks, as its executable and arguments, with the acceptance criterion ids it supports. AIBoard runs each listed check again itself; only those runs count as evidence. Put checks you could not run in notRun, with why.",
   ];

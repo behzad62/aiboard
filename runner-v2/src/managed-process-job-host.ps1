@@ -1586,6 +1586,348 @@ public static class ManagedProcessJobHost
         throw new Win32Exception(Marshal.GetLastWin32Error(), operation);
     }
 }
+
+// The stop-time escape sweep (Start-Process gap, docs/runner-v2/codex-windows-job-escape-2026-11-18.md §7). A packaged
+// (Store) program that a process in the Job starts is created outside the Job, so the Job's stop never sees it. The
+// Runner gives every process it starts for one owner a random environment mark, and after that owner's stop this
+// takes one snapshot of the host's processes and ends those that carry the mark. Each fact is read through the one
+// handle that would end the process: its creation time (no later than the mark's issue means it is never ended), its
+// user and session, and the mark in its environment. A process is ended only when the mark is read through that
+// handle; nothing else (a parent PID, a name) ever authorizes it. A process whose facts cannot be read is reported as
+// unreadable and never ended. A marked process that cannot be ended, whose exit is not seen, or that sits in a job
+// without being packaged (a Runner Job member, or a job the Runner cannot attribute) leaves the sweep unproven.
+public static class ManagedProcessEscapeSweep
+{
+    private const uint PROCESS_TERMINATE = 0x0001;
+    private const uint PROCESS_VM_READ = 0x0010;
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint TOKEN_QUERY = 0x0008;
+    private const uint TH32CS_SNAPPROCESS = 0x00000002;
+    private const int TokenUser = 1;
+    private const int ProcessBasicInformation = 0;
+    private const uint WAIT_OBJECT_0 = 0;
+    private const int APPMODEL_ERROR_NO_PACKAGE = 15700;
+    private const int ERROR_INSUFFICIENT_BUFFER = 122;
+    // x64 offsets: PEB.ProcessParameters, RTL_USER_PROCESS_PARAMETERS.Environment and .EnvironmentSize (Vista and later).
+    private const int PebProcessParametersOffset = 0x20;
+    private const int ParametersEnvironmentOffset = 0x80;
+    private const int ParametersEnvironmentSizeOffset = 0x3F0;
+    private const long MaxEnvironmentBytes = 4L * 1024 * 1024;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PROCESSENTRY32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public UIntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_BASIC_INFORMATION
+    {
+        public IntPtr ExitStatus;
+        public IntPtr PebBaseAddress;
+        public IntPtr AffinityMask;
+        public IntPtr BasePriority;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool Process32FirstW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool Process32NextW(IntPtr snapshot, ref PROCESSENTRY32W entry);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] buffer, IntPtr size, out IntPtr read);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern int GetPackageFullName(IntPtr process, ref uint length, StringBuilder name);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder name, ref uint size);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr info, int length, out int returned);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool ConvertSidToStringSidW(IntPtr sid, out IntPtr text);
+    [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
+    [DllImport("ntdll.dll")] private static extern int NtQueryInformationProcess(IntPtr process, int infoClass, ref PROCESS_BASIC_INFORMATION info, int length, out int returned);
+
+    private sealed class Entry
+    {
+        public uint Pid;
+        public long Created;
+        public string Image = "";
+        public string Reason;
+        public bool Packaged;
+        public bool InJob;
+    }
+
+    /// <summary>
+    /// Ends every process of this user and session, created after <paramref name="sinceFileTime"/>, whose environment
+    /// holds exactly <paramref name="markName"/>=<paramref name="markValue"/>. Repeats the snapshot until one round
+    /// finds no marked process left, at most <paramref name="maxRounds"/> rounds. Returns the report as one JSON line.
+    /// </summary>
+    public static string Sweep(string markName, string markValue, long sinceFileTime, int exitWaitMs, int maxRounds, string fault)
+    {
+        if (IntPtr.Size != 8) throw new InvalidOperationException("The escape sweep reads 64-bit process parameters only.");
+        if (string.IsNullOrEmpty(markName) || string.IsNullOrEmpty(markValue) || sinceFileTime <= 0 || exitWaitMs < 1 || maxRounds < 1)
+            throw new ArgumentException("The escape sweep request is invalid.");
+        if (fault == "query_fails") throw new InvalidOperationException("injected escape sweep query failure");
+        uint self = GetCurrentProcessId();
+        uint mySession;
+        if (!ProcessIdToSessionId(self, out mySession)) throw new Win32Exception(Marshal.GetLastWin32Error(), "ProcessIdToSessionId");
+        string mySid = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+        var ended = new List<Entry>();
+        var unended = new List<Entry>();
+        var unreadable = new Dictionary<string, Entry>();
+        int unqueried = 0;
+        bool settled = false;
+        int rounds = 0;
+        while (rounds < maxRounds)
+        {
+            rounds++;
+            int marked = 0;
+            unqueried = 0;
+            foreach (uint pid in SnapshotProcessIds())
+            {
+                if (pid == 0 || pid == 4 || pid == self) continue;
+                uint session;
+                if (!ProcessIdToSessionId(pid, out session)) { unqueried++; continue; }
+                if (session != mySession) continue;
+                Entry entry;
+                IntPtr handle = Inspect(pid, sinceFileTime, mySid, markName, markValue, out entry, ref unqueried);
+                if (entry == null) continue;
+                if (handle == IntPtr.Zero)
+                {
+                    unreadable[pid + ":" + entry.Created] = entry;
+                    continue;
+                }
+                try
+                {
+                    marked++;
+                    if (entry.Reason != null)
+                    {
+                        unended.Add(entry);
+                        continue;
+                    }
+                    if (entry.InJob && !entry.Packaged)
+                    {
+                        entry.Reason = "in_job_not_packaged";
+                        unended.Add(entry);
+                        continue;
+                    }
+                    if (fault == "terminate_fails")
+                    {
+                        entry.Reason = "injected_terminate_failure";
+                        unended.Add(entry);
+                        continue;
+                    }
+                    bool terminated = TerminateProcess(handle, 1);
+                    int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
+                    if (WaitForSingleObject(handle, (uint)exitWaitMs) == WAIT_OBJECT_0) ended.Add(entry);
+                    else
+                    {
+                        entry.Reason = terminated ? "exit_not_seen" : "terminate_failed_" + terminateError;
+                        unended.Add(entry);
+                    }
+                }
+                finally { CloseHandle(handle); }
+            }
+            if (unended.Count > 0) break;
+            if (marked == 0) { settled = true; break; }
+        }
+        var json = new StringBuilder();
+        json.Append("{\"settled\":").Append(settled && unended.Count == 0 ? "true" : "false");
+        json.Append(",\"rounds\":").Append(rounds);
+        json.Append(",\"ended\":"); AppendEntries(json, ended);
+        json.Append(",\"unended\":"); AppendEntries(json, unended);
+        json.Append(",\"unreadable\":"); AppendEntries(json, unreadable.Values);
+        json.Append(",\"unqueried\":").Append(unqueried).Append("}");
+        return json.ToString();
+    }
+
+    // Opens the process once and reads every fact through that handle. Returns the handle (the caller ends and closes
+    // it) for a marked process; IntPtr.Zero with an entry for an unreadable one; IntPtr.Zero and no entry otherwise.
+    private static IntPtr Inspect(uint pid, long since, string mySid, string markName, string markValue, out Entry entry, ref int unqueried)
+    {
+        entry = null;
+        IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | PROCESS_TERMINATE | SYNCHRONIZE, false, pid);
+        if (handle == IntPtr.Zero)
+        {
+            // Not openable for reading and ending (an elevated or protected process, or one that just exited). Its
+            // creation time decides whether it is reported: one older than the mark is never this owner's.
+            IntPtr limited = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (limited == IntPtr.Zero) { unqueried++; return IntPtr.Zero; }
+            try
+            {
+                long created = CreationTime(limited);
+                if (created == 0) { unqueried++; return IntPtr.Zero; }
+                if (created <= since) return IntPtr.Zero;
+                entry = new Entry { Pid = pid, Created = created, Image = ImagePath(limited), Reason = "open_denied" };
+                return IntPtr.Zero;
+            }
+            finally { CloseHandle(limited); }
+        }
+        bool keep = false;
+        try
+        {
+            long created = CreationTime(handle);
+            if (created == 0) { unqueried++; return IntPtr.Zero; }
+            if (created <= since) return IntPtr.Zero;
+            if (WaitForSingleObject(handle, 0) == WAIT_OBJECT_0) return IntPtr.Zero; // already exited
+            string image = ImagePath(handle);
+            string sid = TokenUserSid(handle);
+            if (sid == null) { entry = new Entry { Pid = pid, Created = created, Image = image, Reason = "token_unreadable" }; return IntPtr.Zero; }
+            if (!string.Equals(sid, mySid, StringComparison.OrdinalIgnoreCase)) return IntPtr.Zero;
+            string environment = ReadEnvironment(handle);
+            if (environment == null) { entry = new Entry { Pid = pid, Created = created, Image = image, Reason = "environment_unreadable" }; return IntPtr.Zero; }
+            if (!HasMark(environment, markName, markValue)) return IntPtr.Zero;
+            // Marked: this owner's process. What follows decides only whether it may be ended; a fact that cannot be
+            // read sets a reason, and the caller then counts it as not ended (the sweep is unproven).
+            entry = new Entry { Pid = pid, Created = created, Image = image };
+            bool inJob;
+            if (!IsProcessInJob(handle, IntPtr.Zero, out inJob)) entry.Reason = "job_unreadable";
+            entry.InJob = inJob;
+            uint length = 0;
+            int packageResult = GetPackageFullName(handle, ref length, null);
+            entry.Packaged = packageResult == ERROR_INSUFFICIENT_BUFFER;
+            if (packageResult != APPMODEL_ERROR_NO_PACKAGE && !entry.Packaged && entry.Reason == null) entry.Reason = "package_unreadable";
+            keep = true;
+            return handle;
+        }
+        finally { if (!keep) CloseHandle(handle); }
+    }
+
+    private static long CreationTime(IntPtr handle)
+    {
+        long creation, exit, kernel, user;
+        return GetProcessTimes(handle, out creation, out exit, out kernel, out user) ? creation : 0;
+    }
+
+    private static string ImagePath(IntPtr handle)
+    {
+        var buffer = new StringBuilder(1024);
+        uint size = (uint)buffer.Capacity;
+        return QueryFullProcessImageNameW(handle, 0, buffer, ref size) ? buffer.ToString() : "";
+    }
+
+    private static string TokenUserSid(IntPtr handle)
+    {
+        IntPtr token;
+        if (!OpenProcessToken(handle, TOKEN_QUERY, out token)) return null;
+        IntPtr info = IntPtr.Zero;
+        try
+        {
+            int needed;
+            GetTokenInformation(token, TokenUser, IntPtr.Zero, 0, out needed);
+            if (needed <= 0) return null;
+            info = Marshal.AllocHGlobal(needed);
+            if (!GetTokenInformation(token, TokenUser, info, needed, out needed)) return null;
+            IntPtr text;
+            if (!ConvertSidToStringSidW(Marshal.ReadIntPtr(info), out text)) return null;
+            try { return Marshal.PtrToStringUni(text); } finally { LocalFree(text); }
+        }
+        finally
+        {
+            if (info != IntPtr.Zero) Marshal.FreeHGlobal(info);
+            CloseHandle(token);
+        }
+    }
+
+    private static string ReadEnvironment(IntPtr handle)
+    {
+        var basic = new PROCESS_BASIC_INFORMATION();
+        int returned;
+        if (NtQueryInformationProcess(handle, ProcessBasicInformation, ref basic, Marshal.SizeOf(typeof(PROCESS_BASIC_INFORMATION)), out returned) != 0) return null;
+        if (basic.PebBaseAddress == IntPtr.Zero) return null;
+        IntPtr parameters = ReadPointer(handle, basic.PebBaseAddress + PebProcessParametersOffset);
+        if (parameters == IntPtr.Zero) return null;
+        IntPtr environment = ReadPointer(handle, parameters + ParametersEnvironmentOffset);
+        long size = (long)ReadPointer(handle, parameters + ParametersEnvironmentSizeOffset);
+        if (environment == IntPtr.Zero || size <= 0 || size > MaxEnvironmentBytes || size % 2 != 0) return null;
+        var bytes = new byte[size];
+        IntPtr read;
+        if (!ReadProcessMemory(handle, environment, bytes, new IntPtr(size), out read) || (long)read != size) return null;
+        return Encoding.Unicode.GetString(bytes);
+    }
+
+    private static IntPtr ReadPointer(IntPtr handle, IntPtr address)
+    {
+        var bytes = new byte[8];
+        IntPtr read;
+        if (!ReadProcessMemory(handle, address, bytes, new IntPtr(8), out read) || (long)read != 8) return IntPtr.Zero;
+        return new IntPtr(BitConverter.ToInt64(bytes, 0));
+    }
+
+    // Exact entry match: the name compared as Windows does (ordinal, ignoring case), the value byte for byte.
+    public static bool HasMark(string environment, string markName, string markValue)
+    {
+        foreach (string item in environment.Split('\0'))
+        {
+            if (item.Length == 0) break;
+            int equals = item.IndexOf('=', 1);
+            if (equals <= 0) continue;
+            if (string.Equals(item.Substring(0, equals), markName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(item.Substring(equals + 1), markValue, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    private static List<uint> SnapshotProcessIds()
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateToolhelp32Snapshot");
+        var pids = new List<uint>();
+        try
+        {
+            var entry = new PROCESSENTRY32W();
+            entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32W));
+            if (!Process32FirstW(snapshot, ref entry)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Process32First");
+            do { pids.Add(entry.th32ProcessID); } while (Process32NextW(snapshot, ref entry));
+        }
+        finally { CloseHandle(snapshot); }
+        return pids;
+    }
+
+    private static void AppendEntries(StringBuilder json, IEnumerable<Entry> entries)
+    {
+        json.Append('[');
+        bool first = true;
+        foreach (Entry entry in entries)
+        {
+            if (!first) json.Append(',');
+            first = false;
+            json.Append("{\"pid\":").Append(entry.Pid).Append(",\"created\":\"").Append(entry.Created).Append('"');
+            json.Append(",\"image\":\"").Append(JsonEscape(entry.Image)).Append('"');
+            json.Append(",\"packaged\":").Append(entry.Packaged ? "true" : "false");
+            json.Append(",\"inJob\":").Append(entry.InJob ? "true" : "false");
+            if (entry.Reason != null) json.Append(",\"reason\":\"").Append(JsonEscape(entry.Reason)).Append('"');
+            json.Append('}');
+        }
+        json.Append(']');
+    }
+
+    private static string JsonEscape(string text)
+    {
+        var builder = new StringBuilder(text.Length);
+        foreach (char c in text)
+        {
+            if (c == '"' || c == '\\') builder.Append('\\').Append(c);
+            else if (c < 0x20) builder.Append("\\u").Append(((int)c).ToString("x4"));
+            else builder.Append(c);
+        }
+        return builder.ToString();
+    }
+}
 '@
 
 # PX-2a: load the Job-host helper from a precompiled, digest-pinned assembly
@@ -1657,6 +1999,30 @@ function Initialize-JobHostType {
                 [Text.UTF8Encoding]::new($false))
         }
     } catch {
+    }
+}
+
+if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-escape-sweep") {
+    # The stop-time escape sweep (ManagedProcessEscapeSweep). One config line on stdin; "ready" once the helper is
+    # loaded, then one JSON line: the report, or {"error": ...} with exit 1. It creates no process.
+    try {
+        $sweep = [Console]::In.ReadLine() | ConvertFrom-Json
+        if ($null -eq $sweep -or [string]::IsNullOrWhiteSpace([string]$sweep.markName) -or [string]::IsNullOrWhiteSpace([string]$sweep.markValue)) {
+            throw "Escape sweep config is incomplete."
+        }
+        Initialize-JobHostType -HelperAssemblyPath $sweep.helperAssemblyPath -HelperAssemblySha256 $sweep.helperAssemblySha256 -EventPath $null
+        [Console]::Out.WriteLine("ready")
+        [Console]::Out.Flush()
+        $report = [ManagedProcessEscapeSweep]::Sweep([string]$sweep.markName, [string]$sweep.markValue, [long][string]$sweep.since,
+            [int]$sweep.exitWaitMs, [int]$sweep.maxRounds, [string]$sweep.injectedFault)
+        [Console]::Out.WriteLine($report)
+        [Console]::Out.Flush()
+        exit 0
+    } catch {
+        $message = ([string]$_.Exception.Message).Replace("\", "\\").Replace('"', '\"').Replace("`r", " ").Replace("`n", " ")
+        [Console]::Out.WriteLine('{"error":"' + $message + '"}')
+        [Console]::Out.Flush()
+        exit 1
     }
 }
 
