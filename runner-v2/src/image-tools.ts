@@ -5,7 +5,7 @@ import type { NativeTool, ToolContentBlock, ToolExecutionContext, ToolExecutionO
 import type { ArtifactStore } from "./artifact-store.js";
 import { isHiddenWorkspacePath } from "./filesystem-tools.js";
 import { RemotePathDeniedError, type RemotePathGuard } from "./remote-path-guard.js";
-import { detectImageType, IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type InspectableImageType, type PreparedImage } from "./image-inspection.js";
+import { detectImageType, probeImage, IMAGE_LIMITS, ImageInspectionError, prepareImageForModel, type ImageCrop, type InspectableImageType, type PreparedImage } from "./image-inspection.js";
 
 /**
  * Runner tools whose artifact blocks may carry model-visible image metadata. The evidence tools
@@ -26,6 +26,11 @@ export interface McpImageContent {
   readonly data: string;
   readonly mimeType: InspectableImageType;
 }
+
+import { z } from "zod/v4";
+import { screenshotSchema } from "./screenshot-capture.js";
+
+export const showImagePathSchema = z.object({ path: z.string().min(1).max(4096) }).strict();
 
 type Input = Record<string, unknown>;
 
@@ -96,6 +101,61 @@ export function createImageTools(options: ImageToolsOptions): NativeTool<unknown
     },
   };
   return [tool as NativeTool<unknown>];
+}
+
+/** Keep the exact source for transfer and bound the preview independently. */
+export async function originalImageOutput(artifacts: ArtifactStore, bytes: Uint8Array, label: string, maxPreviewBytes: number): Promise<ToolExecutionOutput> {
+  const image = probeImage(bytes);
+  const stored = await artifacts.put(bytes, image.mediaType, label);
+  const content: ToolContentBlock[] = [
+    { type: "json", value: { artifactId: stored.hash, sha256: stored.hash, width: image.width, height: image.height,
+      mimeType: image.mediaType, byteLength: bytes.byteLength } },
+    { type: "artifact", hash: stored.hash, mediaType: image.mediaType, label },
+  ];
+  try {
+    const view = prepareImageForModel(bytes, { maxBytes: maxPreviewBytes, complete: true });
+    const preview = await artifacts.put(view.bytes, view.mediaType, label + " (preview)");
+    content.push({ type: "artifact", hash: preview.hash, mediaType: view.mediaType, label: label + " (preview)",
+      visual: { width: view.width, height: view.height, sourceDigest: stored.hash } });
+  } catch { /* Unpreviewable images still have their complete original. */ }
+  return { content, isError: false };
+}
+
+export function createMcpImageTools(options: ImageToolsOptions & {
+  readonly capture?: (input: z.infer<typeof screenshotSchema>, signal?: AbortSignal, control?: ToolExecutionContext["screenshot"]) => Promise<Uint8Array>;
+}): NativeTool<unknown>[] {
+  const previewBytes = options.inlineDelivery?.maxBytes ?? REMOTE_IMAGE_LIMITS.maxBytes;
+  const capture = options.capture;
+  const captureTool: NativeTool<z.infer<typeof screenshotSchema>> = {
+    definition: {
+      name: "image.capture_screenshot", description: "Capture Windows desktop pixels as a native-resolution PNG. A window target captures the visible rectangle of the foreground window.",
+      inputSchema: { ...z.toJSONSchema(screenshotSchema), type: "object" }, readOnly: true, effect: "none",
+    },
+    validate: (input) => validateImageInput(screenshotSchema, input),
+    assessAccess: () => ({ capability: "image.capture_screenshot" }),
+    execute: async (input, context) => {
+      if (!capture) throw new Error("Screenshot capture is unavailable on this device.");
+      return await originalImageOutput(options.artifacts, await capture(input, context.signal, context.screenshot), "Desktop screenshot", previewBytes);
+    },
+  };
+  const showTool: NativeTool<z.infer<typeof showImagePathSchema>> = {
+    definition: {
+      name: "image.show", description: "Return an original PNG, JPEG, or WebP file from the project with a model preview when available.",
+      inputSchema: z.toJSONSchema(showImagePathSchema), readOnly: true, effect: "none",
+    },
+    validate: (input) => validateImageInput(showImagePathSchema, input),
+    assessAccess: (input) => ({ capability: "image.show", paths: [{ path: input.path, access: "read" }] }),
+    execute: async (input, context) => {
+      const loaded = await readWorkspaceImage(context, input.path, options.hiddenPaths, options.pathGuard);
+      return await originalImageOutput(options.artifacts, loaded.bytes, loaded.label, previewBytes);
+    },
+  };
+  return [captureTool as NativeTool<unknown>, showTool as NativeTool<unknown>];
+}
+
+function validateImageInput<T>(schema: z.ZodType<T>, input: unknown): ValidationResult<T> {
+  const parsed = schema.safeParse(input);
+  return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map((issue) => issue.message) };
 }
 
 /** Shared by browser.screenshot: store the bounded derivative and return a visual artifact block. */

@@ -399,6 +399,39 @@ test("a cancelled command keeps what it printed, and its stop and effect stay un
   assert.match(JSON.stringify(storedResult(read.data).content), /printed before the stop/u);
 });
 
+test("downstream jobs retain progress for their conversation and never share their output", async (t) => {
+  const started = deferred();
+  const finish = deferred();
+  const plugin: RemotePluginToolProvider = {
+    list: async () => [],
+    invoke: async () => { throw new Error("Expected admitted dispatch."); },
+    invokeAdmitted: async (_identity, name, _args, _signal, authorize, report) => {
+      assert.ok(authorize?.());
+      report?.({ progress: 1, total: 3 });
+      started.resolve();
+      await finish.promise;
+      report?.({ progress: 3, total: 3 });
+      return { brokerInvoked: true, result: { callId: "call", toolName: name, isError: false,
+        content: [{ type: "text", text: "private downstream result" }] } };
+    },
+  };
+  const h = await harness(t, { plugin });
+  await h.connect();
+  const request = h.request({ toolId: "mcp_tool_call", operationClass: "write", payload: { serverId: "fixture", toolName: "work" } });
+  const jobId = (await h.response(request)).response.jobId!;
+  try {
+    await started.promise;
+    const status = await h.response(h.request({ toolId: "jobs_status", payload: { jobId } }));
+    assert.deepEqual((status.data as { mcpProgress: unknown }).mcpProgress, { progress: 1, total: 3 });
+    assert.equal((await h.response(h.request({ clientId: "peer", toolId: "jobs_status", payload: { jobId } }))).response.errorCode, "not_found");
+  } finally { finish.resolve(); }
+  await h.waitState(request, jobId, "completed");
+  const ownerResult = await h.response(h.request({ toolId: "jobs_result", payload: { jobId } }));
+  assert.match(JSON.stringify(storedResult(ownerResult.data)), /private downstream result/);
+  const peerResult = await h.response(h.request({ clientId: "peer", toolId: "jobs_result", payload: { jobId } }));
+  assert.equal(peerResult.response.errorCode, "not_found");
+});
+
 test("plugin failures preserve uncertainty after cancellation and an unknown remote outcome", async (t) => {
   const started = deferred();
   let calls = 0;

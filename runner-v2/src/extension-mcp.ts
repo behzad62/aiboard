@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { access, constants, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { NativeTool, ToolResult } from "./agent-contracts.js";
+import type { NativeTool, ToolExecutionContext, ToolResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ExtensionCredentialStore } from "./extension-credentials.js";
 import {
@@ -52,6 +52,7 @@ import { createRunnerCapabilityContractSnapshot } from "./runner-capability-cont
 import type { McpConfigurationAttestation, RunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
 import { runnerRunStateSegment } from "./run-state-identity.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
+import { MCP_GATEWAY_TOOLS, type GatewayInput } from "./mcp-gateway-tools.js";
 
 /** Governed command execution for installers (the Runner's internal process kernel). */
 export type McpInstallerCommand = (command: string, args: readonly string[], cwd: string) => Promise<Readonly<{ exitCode: number; stdout: string; stderr: string }>>;
@@ -102,7 +103,16 @@ export interface ChatMcpTools {
   readonly binding?: ExecutionHostRunBinding;
   readonly unavailable: Array<{ serverName: string; reason: string }>;
   readonly status?: () => McpServerStatus[];
+  readonly gatewayTools?: readonly GatewayTool[];
+  readonly gatewayServers?: readonly { serverId: string; transport: McpServerComponent["transport"] }[];
+  readonly closeClient?: (clientId: string) => Promise<void>;
   close(): Promise<void>;
+}
+
+interface GatewayTool {
+  readonly serverId: string;
+  readonly toolName: string;
+  readonly relayToolId: string;
 }
 
 interface LaunchPlan {
@@ -586,13 +596,19 @@ export class ManagedMcpRuntime {
     }
   }
 
-  /** The only extension tool surface offered to a future remote connector. */
+  /** The admitted extension tool surface for remote and top-level local MCP. */
   async remoteAdmittedTools(generation: number, sessionId: string, artifacts: ArtifactStore): Promise<ChatMcpTools> {
+    const gatewayServers = (await this.requireService().managedMcpServers(generation))
+      .filter((entry) => entry.toolPolicy?.remoteExposure && entry.component.route === "runner")
+      .map(({ component }) => ({ serverId: component.serverName, transport: component.transport }));
     const remote = await this.remoteChatTools(generation, artifacts, true);
     try {
       const local = await this.stdioChatTools(generation, sessionId, artifacts, undefined, true);
       return { tools: [...local.tools, ...remote.tools], ...(local.binding ? { binding: local.binding } : {}),
         unavailable: [...local.unavailable, ...remote.unavailable],
+        gatewayServers,
+        gatewayTools: [...(local.gatewayTools ?? []), ...(remote.gatewayTools ?? [])],
+        closeClient: async (clientId) => { await Promise.all([local.closeClient?.(clientId), remote.closeClient?.(clientId)]); },
         ...(local.status ? { status: local.status } : {}),
         close: async () => { try { await local.close(); } finally { await remote.close(); } } };
     } catch (error) { await remote.close(); throw error; }
@@ -613,7 +629,16 @@ export class ManagedMcpRuntime {
   private async remoteChatTools(generation: number, artifacts: ArtifactStore, remotelyExposed = false): Promise<ChatMcpTools> {
     const tools: NativeTool<unknown>[] = [];
     const unavailable: Array<{ serverName: string; reason: string }> = [];
-    const clients: RemoteMcpClient[] = [];
+    const clients = new Set<RemoteMcpClient>();
+    const retiring = new Set<Promise<void>>();
+    const closeClientHooks: Array<(id: string) => Promise<void>> = [];
+    const retire = (client: RemoteMcpClient): Promise<void> => {
+      clients.delete(client);
+      const pending = client.close().catch(() => undefined).finally(() => retiring.delete(pending));
+      retiring.add(pending);
+      return pending;
+    };
+    const gatewayTools: GatewayTool[] = [];
     const reserved = new Set(this.options.reservedServerNames ?? []);
     for (const entry of await this.requireService().managedMcpServers(generation)) {
       const component = entry.component;
@@ -631,50 +656,98 @@ export class ManagedMcpRuntime {
         const snapshot = { schemaDigest: canonicalMcpDigest(listed), names: listed.map((tool) => tool.name) };
         const decisions = await Promise.all(listed.map((tool) => this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)));
         const admitted = new Set(listed.filter((_tool, index) => decisions[index]).map((tool) => tool.name));
-        clients.push(client);
+        clients.add(client);
+        const sessions = new Map<string, { client: RemoteMcpClient; active: number }>();
+        const clientFor = (context: ToolExecutionContext) => sessions.get(context.actor.id)?.client ?? client;
+        closeClientHooks.push(async (id) => {
+          const session = sessions.get(id);
+          if (!session) return;
+          sessions.delete(id);
+          await retire(session.client);
+        });
         const created = createRemoteMcpTools(component.serverName, listed, async (name, args, context) => {
           try {
-            return await client.callTool(name, args, context.signal) as McpCallResult;
+            return await clientFor(context).callTool(name, args, context.signal, context.mcpGateway?.progress, context.mcpGateway?.authorize) as McpCallResult;
           } catch (error) {
             const unknown = error instanceof RemoteMcpError && error.code === "outcome_unknown";
             return { isError: true, content: [{ type: "text", text: (unknown ? "OUTCOME UNKNOWN (not retried): " : "") + describe(error) }] };
           }
         }, artifacts, {
+          visualResults: remotelyExposed,
           admit: (_server, tool) => admitted.has(tool.name),
           ...(remotelyExposed ? { name: (_server: string, tool: { name: string }) => remoteToolName(entry, tool.name, snapshot.schemaDigest) } : {}),
-          guard: (tool, _server, discovered) => this.guard(tool, entry, discovered.name, snapshot, remotelyExposed, async () => {
-            const current = await client.listTools();
-            return { schemaDigest: canonicalMcpDigest(current), names: current.map((item) => item.name) };
-          }),
+          guard: (tool, _server, discovered) => {
+            const guarded = this.guard(tool, entry, discovered.name, snapshot, remotelyExposed, async (context) => {
+              const current = await clientFor(context).listTools();
+              return { schemaDigest: canonicalMcpDigest(current), names: current.map((item) => item.name) };
+            });
+            if (!remotelyExposed) return guarded;
+            return { ...guarded, execute: async (input, context) => {
+              const id = context.actor.id;
+              let session = sessions.get(id);
+              if (!session) {
+                if (sessions.size >= 32) {
+                  const idle = [...sessions].find(([, value]) => value.active === 0);
+                  if (!idle) throw new Error("The downstream MCP server has no free session slots.");
+                  sessions.delete(idle[0]);
+                  void retire(idle[1].client);
+                }
+                session = { client: this.remoteClient(entry.extensionId, component), active: 0 };
+                clients.add(session.client);
+              }
+              sessions.delete(id);
+              sessions.set(id, session);
+              session.active += 1;
+              try { return await guarded.execute(input, context); }
+              finally { session.active -= 1; }
+            } };
+          },
         }) as NativeTool<unknown>[];
         tools.push(...created);
+        if (remotelyExposed) for (const toolName of admitted) {
+          gatewayTools.push({ serverId: component.serverName, toolName,
+            relayToolId: remoteToolName(entry, toolName, snapshot.schemaDigest) });
+        }
       } catch (error) {
-        await client.close();
+        await retire(client);
         unavailable.push({ serverName: component.serverName, reason: error instanceof RemoteMcpError && error.code === "needs_auth" ? "Needs sign-in in Settings → Extensions." : describe(error) });
       }
     }
-    return { tools, unavailable, close: async () => { await Promise.allSettled(clients.map((client) => client.close())); } };
+    return { tools, unavailable, gatewayTools,
+      closeClient: async (id) => { await Promise.all(closeClientHooks.map((close) => close(id))); },
+      close: async () => { await Promise.all([...retiring, ...[...clients].map(retire)]); },
+    };
   }
 
   private guard<T>(tool: NativeTool<T>, entry: ManagedMcpServerEntry, toolName: string,
     snapshot: { schemaDigest: string; names: readonly string[] }, remotelyExposed: boolean,
-    refresh?: () => Promise<{ schemaDigest: string; names: readonly string[] }>): NativeTool<T> {
+    refresh?: (context: ToolExecutionContext) => Promise<{ schemaDigest: string; names: readonly string[] }>): NativeTool<T> {
     return {
       ...tool,
       execute: async (input, context) => {
         let admitted = false;
+        let current = snapshot;
+        const destructive = tool.assessAccess?.(input, context)?.destructive !== false;
         try {
-          const current = refresh ? await refresh() : snapshot;
+          current = refresh ? await refresh(context) : snapshot;
           admitted = await this.requireService().managedMcpToolAdmitted(entry, current.schemaDigest, current.names, toolName, remotelyExposed);
         } catch { /* An unavailable policy or changed server fails closed. */ }
-        const refusal = await this.refusal(entry, tool.assessAccess?.(input, context)?.destructive !== false).catch(() => undefined);
+        const refusal = await this.refusal(entry, destructive).catch(() => undefined);
         if (!admitted) {
           // Local callers keep the actionable disabled/removed reason; remote callers see only unavailable.
           if (!remotelyExposed && refusal) return { isError: true, content: [{ type: "text", text: refusal }], error: { code: "permission_denied", message: refusal } };
           return { isError: true, content: [{ type: "text", text: "Tool is unavailable." }], error: { code: "tool_unavailable", message: "Tool is unavailable." } };
         }
         if (refusal) return { isError: true, content: [{ type: "text", text: refusal }], error: { code: "permission_denied", message: refusal } };
-        return await tool.execute(input, context);
+        if (!remotelyExposed) return await tool.execute(input, context);
+        const authorize = async () => {
+          try {
+            if (context.signal?.aborted || !await this.requireService().managedMcpToolAdmitted(entry, current.schemaDigest, current.names, toolName, true) ||
+                await this.refusal(entry, destructive)) return false;
+            return !context.signal?.aborted && (context.mcpGateway?.authorize ? await context.mcpGateway.authorize() : true);
+          } catch { return false; }
+        };
+        return await tool.execute(input, { ...context, mcpGateway: { ...context.mcpGateway, authorize } });
       },
     };
   }
@@ -731,14 +804,18 @@ export class ManagedMcpRuntime {
     const owned = manager;
     const entries = new Map(plans.map((plan) => [plan.spec.name, plan.entry]));
     const admitted = new Set<string>();
+    const gatewayTools: GatewayTool[] = [];
     for (const { client, tool } of owned.toolEntries()) {
       const entry = entries.get(client.spec.name);
       const snapshot = snapshots.get(client.spec.name);
       if (entry && snapshot && await this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)) {
         admitted.add(JSON.stringify([client.spec.name, tool.name]));
+        if (remotelyExposed) gatewayTools.push({ serverId: client.spec.name, toolName: tool.name,
+          relayToolId: remoteToolName(entry, tool.name, snapshot.schemaDigest) });
       }
     }
     const tools = createMcpTools(owned, artifacts, {
+      visualResults: remotelyExposed,
       admit: (server, tool) => admitted.has(JSON.stringify([server, tool.name])),
       ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name, snapshots.get(server)!.schemaDigest) } : {}),
       guard: (tool, server, discovered) => this.guard(tool, entries.get(server)!, discovered.name, snapshots.get(server)!, remotelyExposed),
@@ -747,7 +824,11 @@ export class ManagedMcpRuntime {
       tools,
       binding,
       unavailable,
+      gatewayTools,
       status: () => owned.status(),
+      ...(remotelyExposed ? { closeClient: async (clientId: string) => {
+        await owned.closeAgent({ runId, sessionId, actor: { role: "remote", id: clientId } });
+      } } : {}),
       close: async () => {
         try { await owned.close(); } finally { if (!build) await binding.close(); }
       },
@@ -880,56 +961,120 @@ export interface RemotePluginToolProviderOptions {
  */
 export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, options: RemotePluginToolProviderOptions): RemotePluginToolProvider {
   const sessionId = options.sessionId ?? "remote-plugins";
-  let current: { generation: number; admitted: ChatMcpTools; broker: ToolBroker } | undefined;
+  let current: { generation: number; admitted: ChatMcpTools; legacyBroker: ToolBroker; gatewayBroker: ToolBroker } | undefined;
+  let pending: Promise<NonNullable<typeof current>> | undefined;
+  let closing = false;
+  let failedLoad: ChatMcpTools | undefined;
+  let discoveryRetryAfter = 0;
   let sequence = 0;
   const activeCalls = new Set<string>();
   const notSentCalls = new Set<string>();
-  const load = async () => {
+  const loadCurrent = async (retryDiscovery: boolean) => {
+    if (failedLoad) {
+      await failedLoad.close();
+      failedLoad = undefined;
+    }
     const generation = await options.generation();
-    if (current && current.generation === generation) return current;
+    if (current && current.generation === generation) {
+      const exposed = new Set(current.admitted.gatewayServers?.map(({ serverId }) => serverId));
+      const unavailable = current.admitted.unavailable.some(({ serverName }) => exposed.has(serverName));
+      if (!retryDiscovery || activeCalls.size || !unavailable || Date.now() < discoveryRetryAfter) return current;
+    }
     const previous = current;
-    current = undefined;
-    if (previous) await previous.admitted.close().catch(() => undefined);
+    if (previous) {
+      await previous.admitted.close();
+      current = undefined;
+    }
     const admitted = await runtime.remoteAdmittedTools(generation, sessionId, options.artifacts);
-    const broker = new ToolBroker({
-      // A crashed MCP server must settle as outcome_unknown promptly, not at
-      // the generic two-minute broker ceiling; recovery is a fresh request.
-      toolTimeoutMs: 30_000,
+    discoveryRetryAfter = Date.now() + 5_000;
+    const createBroker = (toolTimeoutMs: number) => new ToolBroker({
+      toolTimeoutMs,
       permissionProfile: "full", workspacePath: options.workspacePath, artifacts: options.artifacts,
       ...(admitted.binding ? { executionGrants: admitted.binding.executionGrants } : {}),
     });
-    for (const tool of admitted.tools) broker.register({
-      ...tool,
-      execute: async (input, context) => {
-        try { return await tool.execute(input, context); }
-        catch (error) {
-          if (error instanceof McpProtocolError && error.outcome === "not_sent" && context.callId && activeCalls.has(context.callId)) {
-            notSentCalls.add(context.callId);
+    const legacyBroker = createBroker(30_000);
+    const gatewayBroker = createBroker(120_000);
+    try {
+      for (const broker of [legacyBroker, gatewayBroker]) for (const tool of admitted.tools) broker.register({
+        ...tool,
+        execute: async (input, context) => {
+          try { return await tool.execute(input, context); }
+          catch (error) {
+            if (error instanceof McpProtocolError && error.outcome === "not_sent" && context.callId && activeCalls.has(context.callId)) {
+              notSentCalls.add(context.callId);
+            }
+            throw error;
           }
-          throw error;
-        }
-      },
-    });
-    current = { generation, admitted, broker };
+        },
+      });
+    } catch (error) {
+      failedLoad = admitted;
+      try { await admitted.close(); failedLoad = undefined; }
+      catch (cleanup) { throw new AggregateError([error, cleanup], "MCP gateway cleanup remains unverified."); }
+      throw error;
+    }
+    current = { generation, admitted, legacyBroker, gatewayBroker };
     return current;
   };
+  const load = async (retryDiscovery = false) => {
+    if (closing) throw new Error("MCP gateway is closing.");
+    pending ??= loadCurrent(retryDiscovery).finally(() => { pending = undefined; });
+    return await pending;
+  };
   const invoke = async (identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
-    beforeBroker?: () => boolean): Promise<RemoteInvocationResult> => {
-    const loaded = await load();
-    const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
-    if (!tool) throw new Error("Plugin tool is not admitted for remote use.");
+    beforeBroker?: () => boolean, progress?: import("./mcp-gateway-tools.js").McpProgressReporter): Promise<RemoteInvocationResult> => {
+    const loaded = await load(MCP_GATEWAY_TOOLS.some((tool) => tool.name === relayToolId));
     if (signal?.aborted || (beforeBroker && !beforeBroker())) {
       throw new McpProtocolError("mcp_request_cancelled", "Remote plugin was refused before dispatch.", "not_sent");
     }
     const callId = `remote-plugin-${++sequence}`;
+    const gateway = MCP_GATEWAY_TOOLS.find((entry) => entry.name === relayToolId);
+    if (gateway) {
+      const parsed = gateway.schema.safeParse(args);
+      const reply = (content: ToolResult["content"], error?: ToolResult["error"]): RemoteInvocationResult => ({
+        brokerInvoked: true, stopEvidence: { effect: "no_effect" }, result: {
+          callId, toolName: relayToolId, content, isError: Boolean(error), ...(error ? { error } : {}),
+        },
+      });
+      if (!parsed.success) return reply([{ type: "text", text: "Invalid MCP gateway arguments." }], {
+        code: "invalid_arguments", message: "Invalid MCP gateway arguments.",
+      });
+      const entries = loaded.admitted.gatewayTools ?? [];
+      const statuses = new Map(loaded.admitted.status?.().map(({ name, status }) => [name, status]));
+      if (relayToolId === "mcp_servers_list") {
+        const servers = (loaded.admitted.gatewayServers ?? []).map(({ serverId, transport }) => ({
+          serverId, transport, status: statuses.get(serverId) ?? (entries.some((tool) => tool.serverId === serverId) ? "ready" : "unavailable"),
+        }));
+        return reply([{ type: "json", value: { servers } }]);
+      }
+      const input = parsed.data as GatewayInput;
+      const tools = entries.filter((entry) => entry.serverId === input.serverId);
+      if (relayToolId === "mcp_tools_list") {
+        return reply([{ type: "json", value: { serverId: input.serverId, tools: tools.map(({ relayToolId, toolName }) => {
+          const definition = loaded.admitted.tools.find((tool) => tool.definition.name === relayToolId)!.definition;
+          return { name: toolName, description: definition.description, inputSchema: definition.inputSchema, readOnly: definition.readOnly };
+        }) } }]);
+      }
+      const matches = tools.filter((entry) => entry.toolName === input.toolName);
+      if (matches.length !== 1) return reply([{ type: "text", text: "The MCP tool is unavailable or has not been approved." }], {
+        code: "tool_unavailable", message: "The MCP tool is unavailable or has not been approved.",
+      });
+      relayToolId = matches[0]!.relayToolId;
+      args = input.arguments ?? {};
+      const timeout = AbortSignal.timeout(input.timeoutMs ?? 30_000);
+      signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    }
+    const tool = loaded.admitted.tools.find((entry) => entry.definition.name === relayToolId);
+    if (!tool) throw new McpProtocolError("mcp_transport_unavailable", "Plugin tool is not admitted for remote use.", "not_sent");
     activeCalls.add(callId);
     try {
-      const result = await loaded.broker.invoke(
+      const broker = gateway ? loaded.gatewayBroker : loaded.legacyBroker;
+      const result = await broker.invoke(
         { type: "tool_call", callId, name: relayToolId, arguments: args },
         {
           runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
           sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
-          ...(signal ? { signal } : {}),
+          ...(signal ? { signal } : {}), mcpGateway: { authorize: beforeBroker, progress },
         },
       );
       return { result, brokerInvoked: true, ...(notSentCalls.has(callId) ? { stopEvidence: { effect: "no_effect" as const } } : {}) };
@@ -959,10 +1104,19 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
       return (await invoke(identity, relayToolId, args, signal, beforeBroker)).result;
     },
     invokeAdmitted: invoke,
+    async closeClient(clientId) {
+      await pending?.catch(() => undefined);
+      await current?.admitted.closeClient?.(clientId);
+    },
     async close(): Promise<void> {
-      const previous = current;
+      closing = true;
+      await pending?.catch(() => undefined);
+      if (failedLoad) {
+        await failedLoad.close();
+        failedLoad = undefined;
+      }
+      if (current) await current.admitted.close();
       current = undefined;
-      if (previous) await previous.admitted.close();
     },
   };
 }
@@ -971,8 +1125,12 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
 
 /** Plan P2 relay naming: plugin_<server>_<tool>_<digest8>, digest8 from the R1c schema digest. */
 export function remotePluginToolId(serverName: string, toolName: string, schemaDigest: string): string {
-  const clean = (value: string) => value.replace(/[^A-Za-z0-9_-]+/g, "_");
-  return `plugin_${clean(serverName)}_${clean(toolName)}_${schemaDigest.slice(0, 8)}`;
+  const classic = `plugin_${serverName}_${toolName}_${schemaDigest.slice(0, 8)}`;
+  if (/^[a-z0-9-]+$/.test(serverName) && /^[a-z0-9_-]+$/.test(toolName) && classic.length <= 64) return classic;
+  const clean = (value: string) => value.toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+  const suffix = createHash("sha256").update(JSON.stringify([serverName, toolName, schemaDigest])).digest("hex").slice(0, 20);
+  const prefix = `plugin_${clean(serverName)}_${clean(toolName)}`.slice(0, 43);
+  return `${prefix}-${suffix}`;
 }
 
 function remoteToolName(entry: ManagedMcpServerEntry, toolName: string, schemaDigest: string): string {

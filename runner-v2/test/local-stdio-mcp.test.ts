@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -42,8 +42,8 @@ async function localRoute(sessions: LocalMcpSessions, token: string, body: unkno
   Object.assign(request, { method: "POST", url: "/v1/local-mcp", headers, rawHeaders: Object.entries(headers).flat() });
   const responseHeaders = new Map<string, string>();
   let responseBody = "";
-  const response = { statusCode: 0, setHeader: (name: string, value: string) => responseHeaders.set(name.toLowerCase(), value),
-    end: (value: string) => { responseBody = value; } } as unknown as ServerResponse;
+  const response = Object.assign(new EventEmitter(), { statusCode: 0, setHeader: (name: string, value: string) => responseHeaders.set(name.toLowerCase(), value),
+    end: (value: string) => { responseBody = value; } }) as unknown as ServerResponse;
   await internal.handle(request, response);
   return { status: response.statusCode, headers: responseHeaders, body: responseBody };
 }
@@ -79,6 +79,7 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.ok(names.includes("files_read"));
     assert.ok(names.includes("process_start"));
     assert.ok(names.includes("image_inspect"));
+    assert.ok(names.includes("show_image"));
     for (const name of ["jobs_status", "jobs_events", "jobs_result", "jobs_cancel", "artifact_read", "git_commit", "browser", "devices_list", "complete_run"]) assert.ok(!names.includes(name), name);
     const instructions = client.getInstructions() ?? "";
     assert.equal(instructions, LOCAL_MCP_INSTRUCTIONS);
@@ -128,6 +129,14 @@ test("SDK clients use Runner broker grants and exact local managed-process owner
     assert.equal(routed.status, 200);
     assert.match(routed.body, /local fixture/);
     assert.equal((await localRoute(sessions, "invalid", { operation: "list" })).status, 403);
+    const shown = await client.callTool({ name: "show_image", arguments: { path: "fixture.png" } });
+    const original = (shown as CallResult).content.find((item) => item.type === "resource") as { resource?: { uri: string; blob: string } } | undefined;
+    assert.ok(original?.resource);
+    assert.deepEqual(Buffer.from(original.resource.blob, "base64"), await readFile(join(project, "fixture.png")));
+    const artifactId = original.resource.uri.split(":").at(-1)!;
+    assert.equal((await client.callTool({ name: "show_image", arguments: { artifactId } }) as CallResult).isError, undefined);
+    const privateImage = await sessions.perform(second.token, { operation: "call", name: "show_image", arguments: { artifactId } });
+    assert.equal((privateImage as CallResult).isError, true);
     const visual = await client.callTool({ name: "image_inspect", arguments: { path: "fixture.png" } });
     assert.equal(visual.isError, undefined, JSON.stringify(visual));
     assert.ok((visual.content as Array<{ type: string }>).some((part) => part.type === "image"));

@@ -2,15 +2,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
+import { acceptMcpProgress, type McpDispatchAuthorization, type McpProgressReporter } from "./mcp-gateway-tools.js";
 import type { McpDiscoveryTool } from "./runner-internal-execution-context.js";
 
 /** Streamable HTTP protocol versions this client negotiates, newest first. Legacy HTTP+SSE is not supported. */
-export const REMOTE_MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-06-18", "2025-03-26"]);
+export const REMOTE_MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-11-25", "2025-06-18", "2025-03-26"]);
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_TOOL_PAGES = 20;
 
 export class RemoteMcpError extends Error {
-  constructor(readonly code: "needs_auth" | "insufficient_scope" | "destination_refused" | "protocol_error" | "http_error" | "outcome_unknown" | "unsupported", message: string, readonly scope?: string) {
+  constructor(readonly code: "needs_auth" | "insufficient_scope" | "destination_refused" | "protocol_error" | "http_error" | "outcome_unknown" | "session_expired" | "unsupported", message: string, readonly scope?: string) {
     super(message);
     this.name = "RemoteMcpError";
   }
@@ -33,6 +34,8 @@ export class RemoteMcpClient {
   private sessionId: string | undefined;
   private protocolVersion: string | undefined;
   private nextId = 1;
+  private reconnect?: Promise<unknown>;
+  private readonly lifetime = new AbortController();
 
   constructor(private readonly options: RemoteMcpClientOptions) {}
 
@@ -56,13 +59,34 @@ export class RemoteMcpClient {
   }
 
   async listTools(): Promise<McpDiscoveryTool[]> {
+    try {
+      if (!this.protocolVersion) await this.reinitialize();
+      return await this.readTools();
+    } catch (error) {
+      if (!(error instanceof RemoteMcpError) || error.code !== "session_expired") throw error;
+      if (!this.protocolVersion) await this.reinitialize();
+      return await this.readTools();
+    }
+  }
+
+  private async reinitialize(): Promise<void> {
+    this.reconnect ??= this.initialize().finally(() => { this.reconnect = undefined; });
+    await this.reconnect;
+  }
+
+  private async readTools(): Promise<McpDiscoveryTool[]> {
+    if (this.reconnect) await this.reconnect;
     const tools: McpDiscoveryTool[] = [];
+    const names = new Set<string>();
+    const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
       const result = record(await this.request("tools/list", cursor ? { cursor } : {}));
       for (const raw of Array.isArray(result.tools) ? result.tools : []) {
         const tool = record(raw);
         if (typeof tool.name !== "string" || !/^[A-Za-z0-9_.-]{1,128}$/.test(tool.name)) continue;
+        if (names.has(tool.name) || tools.length >= 1024) throw new RemoteMcpError("protocol_error", "MCP tools are duplicated or exceed the inventory bound.");
+        names.add(tool.name);
         const annotations = tool.annotations && typeof tool.annotations === "object" ? tool.annotations as Record<string, unknown> : undefined;
         tools.push({
           name: tool.name,
@@ -74,35 +98,44 @@ export class RemoteMcpClient {
           } } : {}),
         });
       }
-      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
-      if (!cursor) break;
+      if (result.nextCursor === undefined) return tools;
+      if (typeof result.nextCursor !== "string" || !result.nextCursor || result.nextCursor.length > 4096 || cursors.has(result.nextCursor)) {
+        throw new RemoteMcpError("protocol_error", "MCP tool discovery returned an invalid cursor.");
+      }
+      cursor = result.nextCursor;
+      cursors.add(cursor);
     }
-    return tools;
+    throw new RemoteMcpError("protocol_error", "MCP tool discovery exceeded its page bound.");
   }
 
   /**
    * One tool call, sent once. If the request may have reached the server but no response arrived, the
    * result is outcome_unknown and is never retried automatically.
    */
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ content: unknown[]; isError: boolean }> {
-    const result = record(await this.request("tools/call", { name, arguments: args }, signal, true));
-    return { content: Array.isArray(result.content) ? result.content : [], isError: result.isError === true };
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal,
+    progress?: McpProgressReporter, authorize?: McpDispatchAuthorization): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }> {
+    const result = record(await this.request("tools/call", { name, arguments: args }, signal, true, progress, authorize));
+    return { content: Array.isArray(result.content) ? result.content : [], isError: result.isError === true,
+      ...(Object.hasOwn(result, "structuredContent") ? { structuredContent: result.structuredContent } : {}) };
   }
 
   async close(): Promise<void> {
+    this.lifetime.abort();
     if (!this.sessionId) return;
     const headers = await this.headers();
-    await (this.options.fetch ?? fetch)(this.options.url, { method: "DELETE", headers, redirect: "manual", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
     this.sessionId = undefined;
+    await (this.options.fetch ?? fetch)(this.options.url, { method: "DELETE", headers, redirect: "manual", signal: AbortSignal.timeout(5_000) }).catch(() => undefined);
   }
 
   private async notify(method: string): Promise<void> {
     await this.post({ jsonrpc: "2.0", method }, undefined, false);
   }
 
-  private async request(method: string, params: unknown, signal?: AbortSignal, mutating = false): Promise<unknown> {
+  private async request(method: string, params: Record<string, unknown>, signal?: AbortSignal, mutating = false,
+    progress?: McpProgressReporter, authorize?: McpDispatchAuthorization): Promise<unknown> {
     const id = this.nextId++;
-    const message = await this.post({ jsonrpc: "2.0", id, method, params }, id, mutating, signal);
+    const message = await this.post({ jsonrpc: "2.0", id, method,
+      params: progress ? { ...params, _meta: { progressToken: id } } : params }, id, mutating, signal, progress, authorize);
     if (!message) throw new RemoteMcpError("protocol_error", `The server sent no response to ${method}.`);
     if (message.error) {
       const error = record(message.error);
@@ -122,16 +155,32 @@ export class RemoteMcpClient {
     };
   }
 
-  private async post(body: Record<string, unknown>, id: number | undefined, mutating: boolean, signal?: AbortSignal): Promise<Record<string, unknown> | undefined> {
-    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 60_000);
-    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  private async post(body: Record<string, unknown>, id: number | undefined, mutating: boolean, signal?: AbortSignal,
+    progress?: McpProgressReporter, authorize?: McpDispatchAuthorization): Promise<Record<string, unknown> | undefined> {
+    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? (mutating ? 120_000 : 60_000));
+    const combined = AbortSignal.any([this.lifetime.signal, timeout, ...(signal ? [signal] : [])]);
     let response: Response;
     let sent = false;
+    let sentHeaders: Record<string, string> | undefined;
+    let requestSession: string | undefined;
+    const notifyCancellation = () => {
+      if (!mutating || id === undefined || !sentHeaders || !combined.aborted) return;
+      // The older HTTP protocol cancels a specific request with a separate notification.
+      void (this.options.fetch ?? fetch)(this.options.url, { method: "POST", headers: sentHeaders, redirect: "manual",
+        signal: AbortSignal.timeout(1_000), body: JSON.stringify({
+          jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id },
+        }) }).then((reply) => reply.body?.cancel()).catch(() => undefined);
+    };
     try {
       const headers = await this.headers();
+      if (authorize && !await authorize()) throw new RemoteMcpError("unsupported", "MCP authorization changed before dispatch.");
+      combined.throwIfAborted();
+      sentHeaders = headers;
+      requestSession = headers["mcp-session-id"];
       sent = true;
       response = await (this.options.fetch ?? fetch)(this.options.url, { method: "POST", headers, body: JSON.stringify(body), redirect: "manual", signal: combined });
     } catch (error) {
+      notifyCancellation();
       if (error instanceof RemoteMcpError) throw error;
       if (mutating && sent) throw new RemoteMcpError("outcome_unknown", "The connection failed after the call was sent; it may or may not have run. It was not retried.");
       throw new RemoteMcpError("http_error", `Could not reach the server: ${error instanceof Error ? error.message : String(error)}`);
@@ -141,32 +190,40 @@ export class RemoteMcpClient {
     if (response.status === 403 && /insufficient_scope/i.test(response.headers.get("www-authenticate") ?? "")) {
       throw new RemoteMcpError("insufficient_scope", "The server needs additional permissions; sign in again.", challengeScope(response.headers.get("www-authenticate")));
     }
-    if (response.status === 404 && this.sessionId) {
-      this.sessionId = undefined;
-      throw new RemoteMcpError("protocol_error", "The server ended this MCP session.");
+    if (response.status === 404 && requestSession) {
+      if (this.sessionId === requestSession) {
+        this.sessionId = undefined;
+        this.protocolVersion = undefined;
+      }
+      throw new RemoteMcpError(mutating ? "outcome_unknown" : "session_expired", "The server ended this MCP session.");
     }
     if (!response.ok && response.status !== 202) {
       if (mutating) throw new RemoteMcpError("outcome_unknown", `The server answered ${response.status} to a tool call; it was not retried.`);
       throw new RemoteMcpError("http_error", `The server answered ${response.status}.`);
     }
     const session = response.headers.get("mcp-session-id");
-    if (session && /^[\x21-\x7e]{1,256}$/.test(session)) this.sessionId = session;
+    if (!this.lifetime.signal.aborted && session && /^[\x21-\x7e]{1,256}$/.test(session)) this.sessionId = session;
     if (id === undefined || response.status === 202) {
       await response.body?.cancel().catch(() => undefined);
+      if (mutating) throw new RemoteMcpError("outcome_unknown", "The server accepted the tool call without returning its result.");
       return undefined;
     }
     const type = response.headers.get("content-type") ?? "";
     try {
-      if (type.includes("text/event-stream")) return await this.readStream(response, id);
-      return record(JSON.parse(await boundedText(response)));
+      const message = type.includes("text/event-stream") ? await this.readStream(response, id, progress) : record(JSON.parse(await boundedText(response)));
+      if (mutating && (!message || message.jsonrpc !== "2.0" || message.id !== id || ("result" in message) === ("error" in message))) {
+        throw new RemoteMcpError("outcome_unknown", "The server did not return a matching tool response.");
+      }
+      return message;
     } catch (error) {
-      if (error instanceof RemoteMcpError) throw error;
-      if (mutating) throw new RemoteMcpError("outcome_unknown", "The response to the tool call was cut off; it may or may not have run. It was not retried.");
+      notifyCancellation();
+      if (error instanceof RemoteMcpError && error.code === "outcome_unknown") throw error;
+      if (mutating) throw new RemoteMcpError("outcome_unknown", "The tool response was unreadable or cut off; the call may or may not have run.");
       throw new RemoteMcpError("protocol_error", "The server sent an unreadable response.");
     }
   }
 
-  private async readStream(response: Response, id: number): Promise<Record<string, unknown> | undefined> {
+  private async readStream(response: Response, id: number, progress?: McpProgressReporter): Promise<Record<string, unknown> | undefined> {
     const reader = response.body?.getReader();
     if (!reader) return undefined;
     const decoder = new TextDecoder();
@@ -186,6 +243,9 @@ export class RemoteMcpClient {
           const data = event.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
           if (!data) continue;
           const message = record(JSON.parse(data));
+          if (progress && message.jsonrpc === "2.0") {
+            try { acceptMcpProgress(message, id, progress); } catch { /* Reporting never interrupts the request. */ }
+          }
           if (message.id === id && ("result" in message || "error" in message)) return message;
           if (typeof message.method === "string" && message.id !== undefined) await this.refuseServerRequest(message);
         }

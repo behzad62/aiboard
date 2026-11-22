@@ -2,6 +2,16 @@
 
 Revised 2026-10-27 for owner decisions D15–D17. Updated 2026-11-07 after the Ledgerline benchmark: `git_commit` and `browser` left the surface, results got smaller, and command output became searchable.
 
+## MCP gateway and full-resolution images
+
+In **Settings â†’ Extensions**, add the downstream server as a local executable or a Streamable HTTP URL. Review its tools, allow the ones you intend to use, and enable remote exposure. The Runner uses the installed server configuration and credentials. Changes to a reviewed tool inventory require a new review.
+
+- `mcp_servers_list` lists exposed servers and their status. `mcp_tools_list` returns exact tool names, descriptions, and input schemas for a server. `mcp_tool_call` sends arguments to an allowed tool. Remote calls need a conversation session and an idempotency key. The device's shell, project-only, read-only, and command approval settings apply.
+- A remote call that outlives the relay's wait returns a job ID. Use `jobs_status` for the latest reported progress, `jobs_result` for the result, and `jobs_cancel` to request cancellation. Keep the conversation session across reconnects. The job can be queried after reconnect, and an uncertain call is never replayed automatically.
+- `capture_screenshot` preserves the native pixel dimensions and PNG bytes from an unlocked Windows desktop. Choose a monitor, a region in screen coordinates, or a foreground window by title. A window capture uses its visible desktop rectangle, including any overlay within that area. A remote capture waits for device-owner approval. Once complete, `jobs_result` returns the artifact ID, dimensions, MIME type, SHA-256 and signed URL.
+- `show_image` accepts a project path or an image artifact ID with its owning job ID. The remote MCP Apps viewer supports zoom, fullscreen where supported by the host, and original download. Links expire within five minutes and require the originating device to be online when opened. Each download rechecks the original job's artifact access. PNG, JPEG and WebP originals are capped at 20 MiB. Native MCP previews can be smaller.
+- The top-level local stdio endpoint uses the same reviewed server list and returns original image bytes as an MCP embedded resource from `show_image`. Its artifact IDs belong to the local MCP session.
+
 ## Status
 
 Proposed. This is an R0 contract, not an implemented or approved remote surface. The 24 fixed names below cover P2 and the image requirement in T01; remote-enabled plugin names are additional and dynamic (`docs/plans/2026-10-27-aiboard-remote.md:223`, `docs/plans/2026-10-27-aiboard-remote.md:318`).

@@ -568,7 +568,11 @@ export async function startRunner(argv: readonly string[] = process.argv.slice(2
     const localMcp = launcher ? new LocalMcpSessions({ host: executionHost, workspacePath: options.projectPath, statePath: join(options.stateDirectory, "local-mcp-owners.sqlite"),
       permissionProfile: "full", capabilitiesConfig, stateDirectory: options.stateDirectory,
       deviceDirectory,
-      extensionDirectories: [options.extensionsHome], protectedLocations }) : undefined;
+      extensionDirectories: [options.extensionsHome], protectedLocations,
+      gateway: createRemotePluginToolProvider(managedMcp, {
+        generation: async () => (await extensions.generation()).generation,
+        artifacts, workspacePath: options.projectPath, sessionId: "local-mcp-gateway",
+      }) }) : undefined;
     const modelProxy = homeReader && seams.controlListener !== "none"
       ? new ModelProxy({ home: homeReader, allowedOrigins: options.allowOrigins })
       : undefined;

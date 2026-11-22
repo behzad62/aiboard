@@ -1,3 +1,4 @@
+import { acceptMcpProgress, type McpDispatchAuthorization, type McpProgressReporter } from "./mcp-gateway-tools.js";
 import type { McpDiscoveryTool } from "./runner-internal-execution-context.js";
 
 export type McpRequestOutcome = "not_sent" | "outcome_unknown" | "response_received";
@@ -14,6 +15,7 @@ interface Pending {
   readonly id: number;
   started: boolean;
   responded: boolean;
+  progress?: McpProgressReporter;
   resolve(value: Readonly<{ result?: unknown; error?: Readonly<{ code: number; message: string }> }>): void;
   reject(error: Error): void;
 }
@@ -56,7 +58,7 @@ export class McpRpcPeer {
     this.append(bytes.subarray(offset));
   }
 
-  async request(writer: McpRpcWriter, method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
+  async request(writer: McpRpcWriter, method: string, params: unknown, timeoutMs: number, signal?: AbortSignal, progress?: McpProgressReporter, authorize?: McpDispatchAuthorization): Promise<unknown> {
     if (this.failure) throw this.failure;
     if (signal?.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP request was cancelled before write.", "not_sent");
     if (this.pending) throw new McpProtocolError("mcp_request_busy", "An MCP request is already in progress.", "not_sent");
@@ -65,13 +67,14 @@ export class McpRpcPeer {
       throw new McpProtocolError("mcp_protocol_invalid", "MCP request bounds are invalid.", "not_sent");
     let payload: Buffer;
     const id = this.nextId;
+    if (progress && object(params)) params = { ...params, _meta: { progressToken: id } };
     try { payload = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); }
     catch (cause) { throw new McpProtocolError("mcp_protocol_invalid", "MCP request cannot be encoded.", "not_sent", { cause }); }
     if (payload.length > this.maximumLineBytes) throw new McpProtocolError("mcp_output_limit", "MCP request exceeds its frame bound.", "not_sent");
     this.nextId++;
     let current!: Pending;
     const response = new Promise<Readonly<{ result?: unknown; error?: Readonly<{ code: number; message: string }> }>>((resolve, reject) => {
-      current = { id, started: false, responded: false, resolve, reject };
+      current = { id, started: false, responded: false, progress, resolve, reject };
     });
     void response.catch(() => undefined);
     this.pending = current;
@@ -98,7 +101,12 @@ export class McpRpcPeer {
     signal?.addEventListener("abort", cancel, { once: true });
     try {
       // Promise.resolve().then also owns a writer that throws synchronously.
-      written = Promise.resolve().then(() => {
+      written = Promise.resolve().then(async () => {
+        if (this.failure) throw this.failure;
+        if (authorize && !await authorize()) {
+          this.fail("mcp_request_cancelled", "MCP authorization changed before write.");
+          throw this.failure!;
+        }
         if (this.failure) throw this.failure;
         current.started = true;
         return writer.write(payload, Math.min(timeoutMs, 30_000));
@@ -168,6 +176,9 @@ export class McpRpcPeer {
     if (!object(message) || message.jsonrpc !== "2.0") { this.fail("mcp_protocol_invalid", "MCP JSON-RPC version/object is invalid."); return; }
     if (typeof message.method === "string") {
       if (Object.hasOwn(message, "id")) { this.fail("mcp_protocol_invalid", "MCP server-originated requests have no execution authority."); return; }
+      if (this.pending?.started && !this.pending.responded && this.pending.progress) {
+        try { acceptMcpProgress(message, this.pending.id, this.pending.progress); } catch { /* Reporting never interrupts the request. */ }
+      }
       if (message.method === "notifications/tools/list_changed") this.fail("mcp_schema_changed", "MCP tool schema changed after discovery.");
       return;
     }
@@ -183,6 +194,30 @@ export class McpRpcPeer {
     if (error) current.resolve({ error: message.error as { code: number; message: string } });
     else current.resolve({ result: message.result });
   }
+}
+
+export async function listMcpStdioTools(peer: McpRpcPeer, writer: McpRpcWriter, timeoutMs: number, signal?: AbortSignal): Promise<readonly McpDiscoveryTool[]> {
+  const deadline = performance.now() + timeoutMs;
+  const tools: unknown[] = [];
+  const visited = new Set<string>();
+  let cursor: string | undefined;
+  let bytes = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) throw new McpProtocolError("mcp_request_timeout", "MCP discovery exceeded its deadline.", "not_sent");
+    const value = await peer.request(writer, "tools/list", cursor ? { cursor } : {}, remaining, signal);
+    if (!object(value) || !Array.isArray(value.tools)) throw new Error("Invalid MCP tools/list page.");
+    bytes += Buffer.byteLength(JSON.stringify(value.tools));
+    if (bytes > 8 * 1024 * 1024 || tools.length + value.tools.length > 1024) throw new Error("MCP tool discovery exceeds its inventory bound.");
+    tools.push(...value.tools);
+    if (value.nextCursor === undefined) return parseMcpToolList({ tools });
+    if (typeof value.nextCursor !== "string" || !value.nextCursor || value.nextCursor.length > 4096 || visited.has(value.nextCursor)) {
+      throw new Error("Invalid MCP discovery cursor.");
+    }
+    cursor = value.nextCursor;
+    visited.add(cursor);
+  }
+  throw new Error("MCP tool discovery exceeded 20 pages.");
 }
 
 export function parseMcpToolList(value: unknown): readonly McpDiscoveryTool[] {

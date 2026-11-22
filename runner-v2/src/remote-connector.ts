@@ -9,6 +9,7 @@ import { mcpImageContent, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import { remoteSessionCode, type VerifiedRemoteIdentity } from "./remote-principal.js";
 import type { RemoteInvocationResult } from "./remote-tool-runtime.js";
 import { COMMAND_APPROVAL_WINDOW_MS, type CommandApprovalNotice, type CommandApprovalRequest, type CommandApprovalSummary } from "./remote-approval.js";
+import { isMcpGatewayTool } from "./mcp-gateway-tools.js";
 import { ArtifactTransferError, ArtifactTransferManager, type ArtifactTransferFrame } from "./remote-artifact-transfer.js";
 import { DEFAULT_REMOTE_FRAME_LIMITS, frameByteLength, negotiateFrameLimits, type RemoteFrameLimits } from "./remote-frame-codec.js";
 import { WINDOWS_PATH_TOO_LONG } from "./windows-path-limits.mjs";
@@ -133,7 +134,9 @@ export interface RemotePluginToolInfo {
 export interface RemotePluginToolProvider {
   list(): Promise<readonly RemotePluginToolInfo[]>;
   invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal, beforeBroker?: () => boolean): Promise<ToolResult>;
-  invokeAdmitted?(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal: AbortSignal, beforeBroker?: () => boolean): Promise<RemoteInvocationResult>;
+  invokeAdmitted?(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal: AbortSignal, beforeBroker?: () => boolean,
+    progress?: import("./mcp-gateway-tools.js").McpProgressReporter): Promise<RemoteInvocationResult>;
+  closeClient?(clientId: string): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -157,8 +160,11 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
   git_diff: "git.diff",
   git_log: "git.log",
   image_inspect: "image.inspect",
+  capture_screenshot: "image.capture_screenshot",
+  show_image: "image.show",
 });
 
+const IMAGE_RESULT_TOOL_IDS = new Set(["image_inspect", "capture_screenshot", "show_image", "mcp_tool_call"]);
 const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
 /** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
 export const INLINE_RESULT_MAX_BYTES = 256 * 1024;
@@ -727,7 +733,8 @@ export class RemoteConnector {
         await this.artifactRead(identity, request, respond);
         return;
       }
-      const isPlugin = request.toolId.startsWith("plugin_");
+      const gateway = isMcpGatewayTool(request.toolId);
+      const isPlugin = gateway || request.toolId.startsWith("plugin_");
       const runnerName = isPlugin ? request.toolId : REMOTE_TOOL_ID_TO_RUNNER[request.toolId];
       if (!runnerName || (isPlugin && !this.options.pluginTools)) {
         await respond(rejected(request, "unsupported_tool"));
@@ -737,7 +744,7 @@ export class RemoteConnector {
         await respond(rejected(request, "internal_error"));
         return;
       }
-      if (isPlugin) {
+      if (isPlugin && !gateway) {
         const tools = await this.options.pluginTools!.list();
         if (!tools.some((tool) => tool.relayToolId === request.toolId)) {
           await respond(rejected(request, "unsupported_tool"));
@@ -758,7 +765,7 @@ export class RemoteConnector {
       }
       // The store checks an existing key before rejecting a new admission at capacity.
       const rawRequest = JSON.stringify(request);
-      const needsApproval = !isPlugin && this.options.runtime.requiresCommandApproval?.(identity, runnerName) === true;
+      const needsApproval = (!isPlugin || gateway) && this.options.runtime.requiresCommandApproval?.(identity, runnerName) === true;
       const full = this.queue.length >= this.queueLimit() && (needsApproval || this.runningCount() >= this.concurrentLimit());
       const decision = this.options.admission.admit(identity, rawRequest, { rejectNew: full,
         policyNarrowing: this.options.runtime.latestPolicyNarrowing(identity) ?? null });
@@ -884,7 +891,7 @@ export class RemoteConnector {
   /**
    * Whose job a job tool reads. Each conversation is its own caller (the relay's client id carries its session code),
    * so a job another conversation of this account on this device started is read as its owner: status, events and
-   * result only. A cancel always acts as the caller, so only the owner can cancel.
+   * result only for shared process jobs. Private tool results and cancellation stay with the caller.
    */
   private jobReader(identity: VerifiedRemoteIdentity, request: RemoteRequest): VerifiedRemoteIdentity {
     if (request.toolId === "jobs_cancel") return identity;
@@ -892,7 +899,11 @@ export class RemoteConnector {
     try { jobId = jobArguments(request).jobId; } catch { return identity; }
     if (this.options.admission.getJob(identity, jobId)) return identity;
     const owner = this.options.admission.jobOwner(identity, jobId);
-    return owner && !this.options.runtime.authorizeJob?.(owner) ? owner : identity;
+    if (!owner || this.options.runtime.authorizeJob?.(owner)) return identity;
+    const job = this.options.admission.getJob(owner, jobId);
+    // These jobs can contain private screen pixels or downstream tool data.
+    if (job && ["capture_screenshot", "show_image", "mcp_tool_call"].includes(job.toolId)) return identity;
+    return owner;
   }
 
   private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
@@ -905,7 +916,10 @@ export class RemoteConnector {
         const job = { ...view.job };
         delete job.outputRef;
         data = { ...view, job };
-      } else data = view;
+      } else {
+        const progress = view.job.toolId === "mcp_tool_call" ? admission.mcpProgress(identity, args.jobId) : undefined;
+        data = progress ? { ...view, mcpProgress: progress } : view;
+      }
     } else if (request.toolId === "jobs_events") {
       data = admission.events(identity, args.jobId, args.cursor, args.limit);
     } else if (request.toolId === "jobs_result") {
@@ -922,7 +936,7 @@ export class RemoteConnector {
       });
       // The relay decodes only a result that comes in one page into MCP content, so an image_inspect result, which
       // carries its image, comes back whole when a frame holds it.
-      const pageBytes = view.job.toolId === "image_inspect" ? INLINE_RESULT_MAX_BYTES : RESULT_PAGE_BYTES;
+      const pageBytes = IMAGE_RESULT_TOOL_IDS.has(view.job.toolId) ? INLINE_RESULT_MAX_BYTES : RESULT_PAGE_BYTES;
       let low = 0;
       let high = Math.min((bytes?.byteLength ?? 0) - offset, args.maxBytes ?? pageBytes, pageBytes);
       while (low < high) {
@@ -1078,7 +1092,7 @@ export class RemoteConnector {
     if (this.closing || this.closed || this.current.state === "revoked" || this.current.state === "suspended") return;
     for (const entry of [...this.queue]) {
       if (!entry.settled && !entry.approval && !entry.approvalGranted &&
-        !entry.isPlugin && this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName)) this.prepareApproval(entry);
+        (!entry.isPlugin || isMcpGatewayTool(entry.runnerName)) && this.options.runtime.requiresCommandApproval?.(entry.identity, entry.runnerName)) this.prepareApproval(entry);
       if (entry.approvalGranted && entry.approvalDeadline !== undefined && this.now().getTime() >= entry.approvalDeadline) {
         this.expireApproval(entry);
       }
@@ -1105,7 +1119,7 @@ export class RemoteConnector {
     const { identity, jobId } = entry;
     const admission = this.options.admission;
     try {
-      if (entry.isPlugin) {
+      if (entry.isPlugin && !isMcpGatewayTool(entry.runnerName)) {
         const tools = await this.options.pluginTools!.list();
         if (!tools.some((tool) => tool.relayToolId === entry.request.toolId)) {
           if (!entry.settled) this.finish(entry, admission.blockPolicy(identity, jobId, "tool_unavailable"));
@@ -1140,7 +1154,19 @@ export class RemoteConnector {
         if (entry.isPlugin) {
           const provider = this.options.pluginTools!;
           if (provider.invokeAdmitted) {
-            const outcome = await provider.invokeAdmitted(identity, request.toolId, request.payload, entry.controller.signal, () => this.canDispatch(entry));
+            let nextProgressWrite = 0;
+            let latestProgress: import("./mcp-gateway-tools.js").McpProgress | undefined;
+            const report = request.toolId === "mcp_tool_call" ? (value: import("./mcp-gateway-tools.js").McpProgress) => {
+              if (latestProgress && value.progress <= latestProgress.progress) return;
+              latestProgress = value;
+              const now = Date.now();
+              if (now < nextProgressWrite || !this.canDispatch(entry)) return;
+              nextProgressWrite = now + 100;
+              admission.recordMcpProgress(identity, jobId, value);
+            } : undefined;
+            const outcome = await provider.invokeAdmitted(identity, request.toolId, request.payload, entry.controller.signal,
+              () => this.canDispatch(entry), report);
+            if (latestProgress && this.canDispatch(entry)) admission.recordMcpProgress(identity, jobId, latestProgress);
             result = outcome.result;
             brokerInvoked = outcome.brokerInvoked;
             stopEvidence = outcome.stopEvidence;
@@ -1227,7 +1253,8 @@ export class RemoteConnector {
    * outputRef with a small stub naming its artifacts — never silently truncated.
    */
   private async storedResult(result: ToolResult, entry: Pick<InFlight, "isPlugin" | "runnerName">): Promise<{ inline: Uint8Array; outputRef?: string }> {
-    const withImage = !entry.isPlugin && entry.runnerName === "image.inspect" ? await this.withImageContent(result) : undefined;
+    const withImage = ["image.inspect", "image.capture_screenshot", "image.show", "mcp_tool_call"].includes(entry.runnerName)
+      ? await this.withImageContent(result) : undefined;
     if (withImage) return { inline: withImage };
     const bytes = Buffer.from(JSON.stringify(result), "utf8");
     if (bytes.byteLength <= INLINE_RESULT_MAX_BYTES) return { inline: bytes };

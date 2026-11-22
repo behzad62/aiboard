@@ -10,7 +10,7 @@ One thing to keep doing: the Copilot package has its own license with conditions
 
 ## Runner bundle
 
-The bundle's root packages are `@github/copilot-sdk`, `@modelcontextprotocol/server`, `playwright` and `typescript`.
+The bundle's root packages are `@github/copilot-sdk`, `@modelcontextprotocol/server`, `playwright`, `typescript`, and `zod`.
 
 | License | Packages in the walk |
 |---|---|

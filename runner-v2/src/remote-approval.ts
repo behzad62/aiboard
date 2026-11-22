@@ -1,10 +1,12 @@
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
+import { screenshotSchema } from "./screenshot-capture.js";
+import { gatewayCallSchema } from "./mcp-gateway-tools.js";
 import { SHELL_NAMES } from "./shell-inventory.js";
 
 export const APPROVAL_TOOLS: ReadonlySet<string> = new Set([
-  "process.start", "process.run", "process.write_stdin", "process.interact", "process.signal",
+  "process.start", "process.run", "process.write_stdin", "process.interact", "process.signal", "mcp_tool_call", "image.capture_screenshot",
 ]);
 
 export interface CommandApprovalSummary {
@@ -52,6 +54,18 @@ type TtyInput = Readable & {
 export function commandApprovalSummary(jobId: string, code: string, toolName: string, payload: unknown,
   workspace: string, forceWorkspace = false): CommandApprovalSummary {
   if (!APPROVAL_TOOLS.has(toolName) || !isRecord(payload)) throw new Error("Invalid approval payload.");
+  if (toolName === "image.capture_screenshot") {
+    const input = screenshotSchema.parse(payload);
+    const target = input.target === "window" ? input.windowTitle : input.target === "monitor" ? String(input.monitor ?? "primary") :
+      `${input.x},${input.y} ${input.width}Ã—${input.height}`;
+    return Object.freeze({ jobId, code, toolName, executable: "Desktop screenshot", argumentCount: 1,
+      commandLine: escapeControls(input.target === "window" ? `Desktop pixels within foreground window: ${target}` : `${input.target} ${target}`, 200), cwdCategory: "not applicable" });
+  }
+  if (toolName === "mcp_tool_call") {
+    const input = gatewayCallSchema.parse(payload);
+    return Object.freeze({ jobId, code, toolName, executable: input.serverId, argumentCount: Object.keys(input.arguments ?? {}).length,
+      commandLine: escapeControls(input.toolName, 200), cwdCategory: "not applicable" });
+  }
   const launch = toolName === "process.start" || toolName === "process.run";
   const allowed = toolName === "process.start" ? ["command", "args", "cwd", "env", "interactive", "until", "waitMs", "render"] :
     toolName === "process.run" ? ["command", "args", "shell", "script", "cwd", "env", "timeoutMs", "render", "search", "shellSession"] :

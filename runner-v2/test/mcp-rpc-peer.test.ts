@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { McpRpcPeer, McpProtocolError, parseMcpToolList } from "../src/mcp-rpc-peer.js";
+import { McpRpcPeer, McpProtocolError, listMcpStdioTools, parseMcpToolList } from "../src/mcp-rpc-peer.js";
 import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "../src/session-authority.js";
 import { createStreamingRequestOperation, type StreamingRequestChannel } from "../src/streaming-request-operation.js";
 
@@ -47,6 +47,40 @@ test("MCP RPC enforces incoming and outgoing byte bounds before growing buffers 
   await assert.rejects(outbound.request({ write: async () => { writes++; } }, "tools/call", { text: "x".repeat(200) }, 1000),
     (error: unknown) => error instanceof McpProtocolError && error.outcome === "not_sent");
   assert.equal(writes, 0); outbound.close();
+});
+
+test("stdio discovery follows a downstream cursor and preserves exact tool names", async () => {
+  const peer = new McpRpcPeer();
+  const cursors: unknown[] = [];
+  const writer = { write: async (bytes: Uint8Array) => {
+    const request = JSON.parse(Buffer.from(bytes).toString());
+    cursors.push(request.params.cursor);
+    const page = request.params.cursor === undefined
+      ? { tools: [{ name: "readNote" }], nextCursor: "page-two" }
+      : { tools: [{ name: "render.frame" }] };
+    peer.feed("stdout", frame(request.id, page));
+  } };
+  assert.deepEqual((await listMcpStdioTools(peer, writer, 1000)).map(({ name }) => name), ["readNote", "render.frame"]);
+  assert.deepEqual(cursors, [undefined, "page-two"]);
+  peer.close();
+});
+
+test("MCP authorization revoked before a queued write never sends the request", async () => {
+  const peer = new McpRpcPeer();
+  const verifying = deferred(), finish = deferred();
+  let writes = 0;
+  let allowed = true;
+  const invocation = peer.request({ write: async () => { writes += 1; } }, "tools/call", {}, 1000, undefined, undefined, async () => {
+    verifying.resolve();
+    await finish.promise;
+    return allowed;
+  });
+  await verifying.promise;
+  allowed = false;
+  finish.resolve();
+  await assert.rejects(invocation, (error: unknown) => error instanceof McpProtocolError && error.outcome === "not_sent");
+  assert.equal(writes, 0);
+  peer.close();
 });
 
 test("MCP RPC waits for actual write acknowledgement even if response arrives first", async () => {

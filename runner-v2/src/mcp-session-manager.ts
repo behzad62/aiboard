@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ToolExecutionContext, ToolAccessRequest } from "./agent-contracts.js";
 import { canonicalMcpDigest, fixedMcpEnvelope, mcpConfigurationDigest, snapshotMcpServerSpec, type McpServerSpec } from "./mcp-configuration.js";
-import { McpRpcPeer, McpProtocolError, parseMcpToolList } from "./mcp-rpc-peer.js";
+import { McpRpcPeer, McpProtocolError, listMcpStdioTools, parseMcpToolList } from "./mcp-rpc-peer.js";
 import type { McpDiscoveryResult, McpDiscoveryTool } from "./runner-internal-execution-context.js";
 import type { McpCallResult, McpManagerOptions, McpOwnedTransport, McpRequestOwner, McpServerStatus } from "./mcp-tools.js";
 
@@ -211,8 +211,7 @@ export class McpSessionManager {
             const initialized = await peer.request(writer, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "aiboard-runner-v2", version: "2" } }, timeoutMs, owner.context.signal);
             if (!initialized || typeof initialized !== "object") throw new McpSessionError("mcp_schema_changed", "MCP initialize response is invalid.");
             await peer.notify(writer, "notifications/initialized", {}, timeoutMs);
-            const listed = await peer.request(writer, "tools/list", {}, timeoutMs, owner.context.signal);
-            const tools = parseMcpToolList(listed);
+            const tools = await listMcpStdioTools(peer, writer, timeoutMs, owner.context.signal);
             if (canonicalMcpDigest(tools) !== server.discovered!.schemaDigest) throw new McpSessionError("mcp_schema_changed", "MCP schema changed between discovery and live handshake.");
             return canonicalMcpDigest({ initialized, tools });
           },
@@ -227,7 +226,8 @@ export class McpSessionManager {
       }
       if (!slot.transport.request) throw new McpSessionError("mcp_authority_required", "MCP transport lacks exact session-request authorization.");
       const result = await slot.transport.request(owner,
-        (writer) => slot.peer!.request(writer, "tools/call", { name, arguments: args }, timeoutMs, owner.context.signal), timeoutMs);
+        (writer) => slot.peer!.request(writer, "tools/call", { name, arguments: args }, timeoutMs, owner.context.signal,
+          owner.context.mcpGateway?.progress, owner.context.mcpGateway?.authorize), timeoutMs);
       if (!result || typeof result !== "object" || Array.isArray(result)) throw new McpProtocolError("mcp_protocol_invalid", "MCP tools/call result is invalid.", "outcome_unknown");
       if (!server.degradedSlots.size) { server.status = "ready"; server.error = undefined; server.recoveryAttempts = 0; }
       return result as McpCallResult;
