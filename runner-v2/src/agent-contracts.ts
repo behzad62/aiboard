@@ -237,6 +237,10 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   callId?: string;
   toolName?: string;
+  /** Trusted downstream MCP dispatch controls and progress sink. */
+  mcpGateway?: { authorize?: import("./mcp-gateway-tools.js").McpDispatchAuthorization; progress?: import("./mcp-gateway-tools.js").McpProgressReporter };
+  /** Runner-owned checks and evidence for the desktop capture helper. */
+  screenshot?: { authorize: () => boolean; stopped?: (effect: "no_effect" | "effect_outcome_unknown") => void };
   /** Runner-created after authorization. Model input can never populate this field. */
   executionGrant?: OpaqueExecutionGrant;
   /** Single-use last-mile ticket, backed by that same original Broker grant. */

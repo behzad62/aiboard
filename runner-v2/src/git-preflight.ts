@@ -46,6 +46,7 @@ export interface GitPreflightOptions {
 
 export type GitCommandExecutionErrorCode =
   | "git_command_timeout"
+  | "git_command_cancelled"
   | "git_output_limit_exceeded"
   | "git_command_cleanup_unverified";
 
@@ -66,6 +67,9 @@ export interface BoundedGitCommandExecutorOptions {
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly cwd?: string;
   readonly maxOutputBytes?: number;
+  readonly signal?: AbortSignal;
+  /** Trusted input supplied only after process ownership and cancellation are checked. */
+  readonly stdin?: () => Uint8Array | undefined;
   readonly platform?: NodeJS.Platform;
   /** Production supplies the one CLI-owned portable internal process kernel. */
   readonly processKernel?: RunnerInternalProcessKernel;
@@ -91,10 +95,10 @@ export function createBoundedGitCommandExecutor(
     options.terminationDeadlineMs,
     "terminationDeadlineMs",
   );
-  const maxOutputBytes = positiveDeadline(
-    options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-    "maxOutputBytes",
-  );
+  const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1 || maxOutputBytes > 32 * 1024 * 1024) {
+    throw new Error("Git maxOutputBytes is invalid.");
+  }
   const environment = Object.freeze(Object.fromEntries(
     Object.entries(options.environment)
       .filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -116,7 +120,10 @@ export function createBoundedGitCommandExecutor(
     const stopRequested = new Promise<void>((resolveStop) => { wakeStop = resolveStop; });
     let owned: Awaited<ReturnType<RunnerInternalProcessKernel["launch"]>> | undefined;
     let cleanupVerified = false;
+    const cancel = () => { stopping ??= "git_command_cancelled"; wakeStop?.(); };
+    options.signal?.addEventListener("abort", cancel, { once: true });
     try {
+      if (options.signal?.aborted) throw new GitCommandExecutionError("git_command_cancelled", "The command was cancelled before launch.", true);
       try {
         owned = await processKernel.launch({
           principalId: `git-preflight-${randomUUID()}`,
@@ -148,6 +155,11 @@ export function createBoundedGitCommandExecutor(
         }
         (metadata.stream === "stdout" ? stdout : stderr).push(Buffer.from(chunk));
       });
+      if (options.stdin && !stopping) {
+        const input = options.stdin();
+        if (!input) cancel();
+        else await owned.write(input, 1_000);
+      }
       let deadline: NodeJS.Timeout | undefined;
       const deadlineReached = new Promise<void>((resolveDeadline) => {
         deadline = setTimeout(() => {
@@ -170,7 +182,7 @@ export function createBoundedGitCommandExecutor(
           stopping,
           stopping === "git_command_timeout"
             ? "Git preflight exceeded its configured execution deadline."
-            : "Git preflight output exceeded its configured byte limit.",
+            : stopping === "git_command_cancelled" ? "The command was cancelled." : "Git preflight output exceeded its configured byte limit.",
           true,
         );
       }
@@ -196,6 +208,7 @@ export function createBoundedGitCommandExecutor(
         cleanupVerified,
       );
     } finally {
+      options.signal?.removeEventListener("abort", cancel);
       if (ephemeralRoot) {
         try {
           await processKernel.close();

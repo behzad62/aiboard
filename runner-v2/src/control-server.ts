@@ -449,12 +449,30 @@ export class ControlServer {
       sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
       return;
     }
+    const cancellation = new AbortController();
+    const disconnect = () => cancellation.abort();
+    response.once("close", disconnect);
     try {
       const body = await readJson<unknown>(request, 1_048_576);
-      const result = await this.localMcp.perform(token, body);
-      sendJson(response, 200, result);
+      const stream = request.headers.accept === "application/x-ndjson";
+      let lastUpdate = 0;
+      const progress: import("./mcp-gateway-tools.js").McpProgressReporter | undefined = stream ? (value) => {
+        if (response.destroyed || response.writableNeedDrain || Date.now() - lastUpdate < 100) return;
+        lastUpdate = Date.now();
+        if (!response.headersSent) response.setHeader("Content-Type", "application/x-ndjson");
+        response.write(JSON.stringify({ progress: value }) + "\n");
+      } : undefined;
+      const result = await this.localMcp.perform(token, body, cancellation.signal, progress);
+      if (response.destroyed) return;
+      if (response.headersSent) response.end(JSON.stringify({ result }) + "\n");
+      else sendJson(response, 200, result);
     } catch {
-      sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
+      if (!response.destroyed) {
+        if (response.headersSent) response.end();
+        else sendJson(response, 403, { code: "local_mcp_refused", error: "Local MCP request refused." });
+      }
+    } finally {
+      response.off("close", disconnect);
     }
   }
 

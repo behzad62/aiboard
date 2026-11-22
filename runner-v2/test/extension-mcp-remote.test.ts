@@ -17,7 +17,7 @@ import type { RunnerCapabilityContract } from "../src/runner-capability-contract
 import { ChatAgentSessions } from "../src/chat-agent-session.js";
 import { ExtensionCredentialStore } from "../src/extension-credentials.js";
 import { ExtensionManagementService, type ManagementCaller } from "../src/extension-management-service.js";
-import { ManagedMcpRuntime } from "../src/extension-mcp.js";
+import { createRemotePluginToolProvider, ManagedMcpRuntime, remotePluginToolId } from "../src/extension-mcp.js";
 import { assertRemoteDestination, RemoteMcpClient } from "../src/mcp-remote.js";
 import type { ProviderConfigStore, RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { RunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
@@ -39,6 +39,8 @@ interface MockState {
   issuedTokens: string[];
   redirectMcp: boolean;
   expiresIn: number;
+  expireSession?: boolean;
+  initializeCount?: number;
 }
 
 /** Mock remote MCP server + OAuth authorization server on 127.0.0.1. */
@@ -78,9 +80,14 @@ async function handle(state: MockState, request: IncomingMessage, response: Serv
         return;
       }
     }
-    const message = JSON.parse(await readBody(request)) as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+    const message = JSON.parse(await readBody(request)) as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; _meta?: { progressToken?: number } } };
     if (message.id === undefined) { response.statusCode = 202; response.end(); return; }
-    if (message.method === "initialize") return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "mock-remote" } } }, { "mcp-session-id": "session-1" });
+    if (message.method === "initialize") {
+      state.initializeCount = (state.initializeCount ?? 0) + 1;
+      state.expireSession = false;
+      return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "mock-remote" } } }, { "mcp-session-id": "session-1" });
+    }
+    if (state.expireSession) return sendJson(response, 404, {});
     if (request.headers["mcp-session-id"] !== "session-1" || request.headers["mcp-protocol-version"] !== "2025-06-18") return sendJson(response, 400, { error: "missing session headers" });
     if (message.method === "tools/list") {
       // An SSE response carrying a refused server request before the real result.
@@ -97,6 +104,15 @@ async function handle(state: MockState, request: IncomingMessage, response: Serv
       const name = message.params?.name ?? "";
       state.callCount[name] = (state.callCount[name] ?? 0) + 1;
       if (name === "flaky_write") { request.socket.destroy(); return; }
+      if (message.params?._meta?.progressToken !== undefined) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const event = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+        const token = message.params._meta.progressToken;
+        response.write(event({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token + 1, progress: 99 } }));
+        response.write(event({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: token, progress: 1, total: 2 } }));
+        response.end(event({ jsonrpc: "2.0", id: message.id, result: { content: [], structuredContent: message.params.arguments, isError: false } }));
+        return;
+      }
       return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: `${name}:${JSON.stringify(message.params?.arguments ?? {})}:HERON-3` }], isError: false } });
     }
     return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown" } });
@@ -213,6 +229,51 @@ async function filesContaining(root: string, needle: string): Promise<string[]> 
   await walk(root);
   return hits;
 }
+
+test("MCP routing IDs preserve exact downstream names without normalization collisions", () => {
+  const names = ["readNote", "readnote", "read.note", "read_note", "a".repeat(128)];
+  const ids = names.map((name) => remotePluginToolId("fixture", name, "2".repeat(64)));
+  assert.equal(new Set(ids).size, names.length);
+  for (const id of ids) assert.match(id, /^[a-z0-9_-]{1,64}$/);
+});
+
+test("generic gateway respects versioned exposure and preserves HTTP progress, arguments, and structured output", async (t) => {
+  const env = await fixture(t);
+  const server = await mockRemote(t, "none");
+  const { operation } = await install(env, server.base + "/mcp", "none");
+  const extensionId = operation.result!.extensionId!;
+  const gateway = createRemotePluginToolProvider(env.runtime, {
+    generation: async () => (await env.extensions.generation()).generation,
+    artifacts: new ArtifactStore(join(env.root, "gateway-artifacts")), workspacePath: join(env.root, "project"),
+  });
+  t.after(async () => { await gateway.close?.(); });
+  const identity = { accountId: "account", clientId: "client", deviceId: "device" };
+  const discovery = () => gateway.invoke(identity, "mcp_tools_list", { serverId: "notes" });
+  assert.doesNotMatch(JSON.stringify(await discovery()), /read_note/);
+  const tools = await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId, { ...tools.policy, remoteExposure: true, reviewed: tools.discovered,
+    toolFilter: { default: "deny", allow: tools.discovered.map(({ componentId }) => ({ componentId, toolName: "read_note" })), deny: [] } }, UI);
+  assert.match(JSON.stringify(await gateway.invoke(identity, "mcp_servers_list", {})), /streamable_http/);
+  const listed = JSON.stringify(await discovery());
+  assert.match(listed, /read_note.*inputSchema/);
+  assert.doesNotMatch(listed, /send_email/);
+  assert.equal((await gateway.invoke(identity, "mcp_tool_call", { serverId: "notes", toolName: "send_email" })).isError, true);
+  const first = { serverId: "notes", toolName: "read_note", arguments: { id: "first" } };
+  assert.equal((await gateway.invoke(identity, "mcp_tool_call", first)).isError, false);
+  const starts = server.initializeCount!;
+  server.expireSession = true;
+  const updates: unknown[] = [];
+  const result = await gateway.invokeAdmitted!(identity, "mcp_tool_call",
+    { serverId: "notes", toolName: "read_note", arguments: { id: null }, timeoutMs: 5000 },
+    new AbortController().signal, () => true, (value) => updates.push(value));
+  assert.equal(server.initializeCount, starts + 1);
+  assert.equal(server.callCount.read_note, 2);
+  assert.equal((await gateway.invoke({ ...identity, clientId: "other" }, "mcp_tool_call", first)).isError, false);
+  assert.equal(server.initializeCount, starts + 2, "a separate conversation initializes its own downstream session");
+  assert.deepEqual(updates, [{ progress: 1, total: 2 }]);
+  assert.deepEqual(result.result.content, [{ type: "json", value: { id: null } }]);
+  assert.equal(result.result.isError, false);
+});
 
 test("remote destinations: https by default, http only for loopback, private networks refused", async () => {
   await assert.rejects(assertRemoteDestination("http://example.com/mcp"), /must use https/);

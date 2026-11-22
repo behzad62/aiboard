@@ -1,5 +1,5 @@
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
-import { McpRpcPeer, parseMcpToolList } from "./mcp-rpc-peer.js";
+import { McpRpcPeer, listMcpStdioTools } from "./mcp-rpc-peer.js";
 import { McpConfigurationError, parseMcpCommand, snapshotMcpServerSpec, mcpConfigurationDigest, fixedMcpEnvelope, type McpFixedEnvelope } from "./mcp-configuration.js";
 import { lifecycleRequirementsDigest } from "./execution-lifecycle-policy.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -506,8 +506,7 @@ class DiscoveryClient {
       clientInfo: { name: "aiboard-runner-v2-discovery", version: "2" },
     }, this.options.requestTimeoutMs);
     await this.peer.notify(owned, "notifications/initialized", {}, this.options.requestTimeoutMs);
-    const result = await this.peer.request(owned, "tools/list", {}, this.options.requestTimeoutMs);
-    return parseMcpToolList(result);
+    return await listMcpStdioTools(this.peer, owned, this.options.requestTimeoutMs);
   }
 
   async closeVerified(): Promise<void> {

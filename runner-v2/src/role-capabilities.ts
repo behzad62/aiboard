@@ -95,7 +95,7 @@ const ARCHITECT_PLAN_ONLY_BROWSER_TOOLS = [
 const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
   "local_mcp:local_mcp": surface("local_mcp", "local_mcp", "none", [], [
     "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
-    "git.diff", "git.log", "git.status", "image.inspect",
+    "git.diff", "git.log", "git.status", "image.inspect", "image.capture_screenshot", "image.show",
     "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
     "process.start", "process.write_stdin", "process.interact",
   ]),
@@ -104,7 +104,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "browser.click", "browser.close", "browser.drag", "browser.events", "browser.fill",
     "browser.navigate", "browser.open", "browser.screenshot", "browser.snapshot", "browser.wheel",
     "fs.delete", "fs.list", "fs.move", "fs.patch", "fs.read", "fs.search", "fs.write",
-    "git.diff", "git.log", "git.status", "image.inspect",
+    "git.diff", "git.log", "git.status", "image.inspect", "image.capture_screenshot", "image.show",
     "process.list", "process.poll", "process.read_output", "process.run", "process.signal",
     "process.start", "process.write_stdin", "process.interact",
   ]),

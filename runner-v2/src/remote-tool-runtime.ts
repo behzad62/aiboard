@@ -1,15 +1,17 @@
+import { captureDesktopScreenshot, screenshotSchema } from "./screenshot-capture.js";
+import { gatewayCallSchema } from "./mcp-gateway-tools.js";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
-import type { ToolResult } from "./agent-contracts.js";
+import type { ToolExecutionContext, ToolResult } from "./agent-contracts.js";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { ExecutionHost, ExecutionHostRunBinding } from "./execution-host.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { IMAGE_LIMITS } from "./image-inspection.js";
-import { createImageTools, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
+import { createImageTools, createMcpImageTools, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { createProcessTools, processRunSupport } from "./process-tools.js";
 import { roleAllowList } from "./role-capabilities.js";
@@ -121,8 +123,10 @@ export class RemoteToolRuntime {
   async invokeAdmitted(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal: AbortSignal,
     rawRequest: string, jobId: string, beforeBroker?: () => boolean, approvalGranted = false): Promise<RemoteInvocationResult> {
     let brokerInvoked = false;
-    const result = await this.beginInvocation(identity, name, args, signal, rawRequest, jobId, () => { brokerInvoked = true; }, beforeBroker, undefined, approvalGranted);
-    return { result, brokerInvoked };
+    let stopEvidence: RemoteInvocationResult["stopEvidence"];
+    const result = await this.beginInvocation(identity, name, args, signal, rawRequest, jobId, () => { brokerInvoked = true; }, beforeBroker, undefined, approvalGranted,
+      (effect) => { stopEvidence = { effect }; });
+    return { result, brokerInvoked, ...(stopEvidence ? { stopEvidence } : {}) };
   }
 
   /** Local principal and device policy are rechecked independently of relay claims. */
@@ -131,6 +135,11 @@ export class RemoteToolRuntime {
     if (principal.revoked || this.closing) return "unauthorized";
     const policy = this.options.principals.policy(identity);
     if (name?.startsWith("plugin_") && policy.readOnly) return "permission_denied";
+    if (name === "mcp_tool_call") {
+      if (policy.readOnly || !policy.shell || policy.onlyHere) return "permission_denied";
+      if (args !== undefined && !gatewayCallSchema.safeParse(args).success) return "invalid_arguments";
+    }
+    if (name === "image.capture_screenshot" && args !== undefined && !screenshotSchema.safeParse(args).success) return "invalid_arguments";
     if (name) return policyRefusal(policy, name, args, true)?.code;
     return undefined;
   }
@@ -140,7 +149,7 @@ export class RemoteToolRuntime {
   }
 
   requiresCommandApproval(identity: VerifiedRemoteIdentity, name: string): boolean {
-    return this.options.principals.policy(identity).approvals && APPROVAL_TOOLS.has(name);
+    return name === "image.capture_screenshot" || (this.options.principals.policy(identity).approvals && APPROVAL_TOOLS.has(name));
   }
 
   summarizeCommandApproval(identity: VerifiedRemoteIdentity, jobId: string, code: string, name: string, args: unknown): CommandApprovalSummary {
@@ -162,7 +171,7 @@ export class RemoteToolRuntime {
   }
   private beginInvocation(identity: VerifiedRemoteIdentity, name: string, args: unknown, signal?: AbortSignal,
     rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean, auditJobId?: string,
-    approvalGranted = false): Promise<ToolResult> {
+    approvalGranted = false, screenshotStopped?: NonNullable<ToolExecutionContext["screenshot"]>["stopped"]): Promise<ToolResult> {
     const callId = `remote-call-${randomUUID()}`;
     const jobId = admittedJobId ?? auditJobId;
     const work = this.pathGuard.withWorkspaceScope(this.workspacePath, () => this.options.principals.policy(identity).onlyHere, async (scope) => {
@@ -177,7 +186,7 @@ export class RemoteToolRuntime {
           result = snapshot === undefined && args !== undefined
             ? failure(callId, name, "invalid_arguments", "Tool arguments cannot be copied safely.")
             : await this.invokeChecked(identity, name, snapshot, callId, signal, rawRequest, admittedJobId, onBrokerInvoke, beforeBroker,
-              (value) => { dispatched = value; }, approvalGranted && admittedJobId !== undefined);
+              (value) => { dispatched = value; }, approvalGranted && admittedJobId !== undefined, screenshotStopped);
         }
       } catch (error) {
         this.options.principals.auditStore.recordTool({ role: "remote", ...identity, toolName: safeToolName(name, ALLOWED_TOOLS),
@@ -198,7 +207,7 @@ export class RemoteToolRuntime {
 
   private async invokeChecked(identity: VerifiedRemoteIdentity, name: string, args: unknown, callId: string,
     signal?: AbortSignal, rawRequest?: string, admittedJobId?: string, onBrokerInvoke?: () => void, beforeBroker?: () => boolean,
-    onDispatch?: (result: ToolResult) => void, approvalGranted = false): Promise<ToolResult> {
+    onDispatch?: (result: ToolResult) => void, approvalGranted = false, screenshotStopped?: NonNullable<ToolExecutionContext["screenshot"]>["stopped"]): Promise<ToolResult> {
     let principal = this.options.principals.getOrCreate(identity);
     identity = principal.identity;
     if (principal.revoked) return failure(callId, name, "principal_revoked", "Remote principal is revoked.");
@@ -256,6 +265,7 @@ export class RemoteToolRuntime {
         runId: principal.runId, sessionId: principal.sessionId,
         actor: { role: "remote", id: principal.principalId }, workspacePath: this.workspacePath,
         ...(signal ? { signal } : {}), ...(name === "image.inspect" ? { imageInput: true } : {}),
+        ...(name === "image.capture_screenshot" ? { screenshot: { authorize: () => !authorize(), stopped: screenshotStopped } } : {}),
       });
       if (!result.isError && (name === "fs.write" || name === "fs.move") && args && typeof args === "object" && !Array.isArray(args)) {
         const dest = (args as Record<string, unknown>)[name === "fs.write" ? "path" : "destination"];
@@ -397,6 +407,9 @@ async function createGovernedBinding(
         support: processRunSupport(binding.managedProcesses, options.host.artifacts) }),
       ...createManagedProcessTools(binding.managedProcesses, { names: "mcp" }),
       // Both surfaces return the image in the result itself; Remote's has to fit the connector's inline result.
+      ...createMcpImageTools({ artifacts: options.host.artifacts, pathGuard,
+        capture: (input, signal, control) => captureDesktopScreenshot(options.host, input, signal, control),
+        inlineDelivery: { maxBytes: localMcpDepth === undefined ? REMOTE_IMAGE_LIMITS.maxBytes : IMAGE_LIMITS.maxDeliveredBytes } }),
       ...createImageTools({ artifacts: options.host.artifacts, pathGuard,
         inlineDelivery: { maxBytes: localMcpDepth === undefined ? REMOTE_IMAGE_LIMITS.maxBytes : IMAGE_LIMITS.maxDeliveredBytes } }),
     ];
@@ -418,6 +431,7 @@ const LOCAL_TOOLS: Readonly<Record<string, string>> = Object.freeze({
   process_start: "process.start", process_run: "process.run", process_read_output: "process.read_output",
   process_write_stdin: "process.write_stdin", process_interact: "process.interact", process_signal: "process.signal", process_list: "process.list",
   git_status: "git.status", git_diff: "git.diff", git_log: "git.log", image_inspect: "image.inspect",
+  capture_screenshot: "image.capture_screenshot", show_image: "image.show",
 });
 const LOCAL_ALLOWED = new Set(roleAllowList("local_mcp", "local_mcp"));
 /**
@@ -525,12 +539,12 @@ export class LocalMcpToolSession {
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } }];
   }
 
-  invoke(name: string, input: unknown): Promise<ToolResult> {
+  invoke(name: string, input: unknown, requestSignal?: AbortSignal): Promise<ToolResult> {
     if (Object.hasOwn(LOCAL_BATCH_TOOLS, name)) return this.invokeBatch(name, input);
     const work = this.pathGuard.withWorkspaceScope(resolve(this.options.workspacePath), () => true, async (scope) => {
       const identity = this.options.policyIdentity?.();
       let result: ToolResult;
-      try { result = await this.invokeChecked(name, input); }
+      try { result = await this.invokeChecked(name, input, requestSignal); }
       catch (error) {
         this.options.auditStore?.recordTool({ role: "local_mcp", ...(identity ?? {}), clientId: this.owner.identity.localClientId,
           toolName: safeToolName(LOCAL_TOOLS[name] ?? "unknown", LOCAL_ALLOWED), decision: "failed", outcomeCode: "exception",
@@ -591,7 +605,7 @@ export class LocalMcpToolSession {
       ...(isError ? { error: { code: "batch_failed", message: `${failed.length} of ${results.length} files failed.` } } : {}) };
   }
 
-  private async invokeChecked(name: string, input: unknown): Promise<ToolResult> {
+  private async invokeChecked(name: string, input: unknown, requestSignal?: AbortSignal): Promise<ToolResult> {
     let callId = `local-call-${randomUUID()}`;
     const internal = Object.hasOwn(LOCAL_TOOLS, name) ? LOCAL_TOOLS[name] : undefined;
     if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
@@ -602,7 +616,7 @@ export class LocalMcpToolSession {
     if (Object.keys(args).some((key) => AUTHORITY_ARGUMENTS.has(key) || ["root", "repoPath", "deviceId"].includes(key))) return failure(callId, name, "invalid_arguments", "Tool arguments cannot supply Runner authority.");
     if (internal === "image.inspect" && Object.hasOwn(args, "artifactHash")) return failure(callId, name, "tool_unavailable", "Artifact-hash inspection is unavailable.");
     if (args.env && typeof args.env === "object" && Object.keys(args.env).some((key) => key.toUpperCase() === "AIBOARD_MCP_DEPTH")) return failure(callId, name, "invalid_arguments", "MCP ancestry is Runner-owned.");
-    let refusal = policyRefusal(this.currentPolicy(), internal, args);
+    let refusal = policyRefusal(this.currentPolicy(), internal, args, false, true);
     if (refusal) return failure(callId, name, refusal.code, refusal.message);
     if (MUTATING_TOOLS.has(internal)) {
       if (typeof args.idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(args.idempotencyKey)) return failure(callId, name, "invalid_arguments", "A valid idempotencyKey is required.");
@@ -623,18 +637,22 @@ export class LocalMcpToolSession {
       freezeArguments(args);
       const bound = await this.binding();
       if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
-      refusal = policyRefusal(this.currentPolicy(), internal, args);
+      refusal = policyRefusal(this.currentPolicy(), internal, args, false, true);
       if (refusal) return failure(callId, name, refusal.code, refusal.message);
       args = await constrainArguments(this.pathGuard, this.options.workspacePath, this.currentPolicy(), internal, args, `local_mcp:${this.owner.identity.localClientId}`, true) as Record<string, unknown>;
       if (this.closed || this.controller.signal.aborted) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
       const definition = bound.broker.definitions().find((item) => item.name === target);
       const properties = definition?.inputSchema.properties;
-      if (!properties || typeof properties !== "object" || Object.keys(args).some((key) => !Object.hasOwn(properties, key))) {
+      if (target !== "image.capture_screenshot" && (!properties || typeof properties !== "object" || Object.keys(args).some((key) => !Object.hasOwn(properties, key)))) {
         return failure(callId, name, "invalid_arguments", "Unknown tool argument.");
       }
       return await bound.broker.invoke({ type: "tool_call", callId, name: target, arguments: args }, {
         runId: this.owner.runId, sessionId: this.owner.sessionId, actor: { role: "local_mcp", id: this.owner.identity.localClientId },
-        workspacePath: resolve(this.options.workspacePath), signal: this.controller.signal, ...(target === "image.inspect" ? { imageInput: true } : {}),
+        workspacePath: resolve(this.options.workspacePath),
+        signal: requestSignal ? AbortSignal.any([requestSignal, this.controller.signal]) : this.controller.signal,
+        ...(target === "image.inspect" ? { imageInput: true } : {}),
+        ...(target === "image.capture_screenshot" ? { screenshot: { authorize: () =>
+          !this.closed && !policyRefusal(this.currentPolicy(), internal, args, false, true) } } : {}),
       });
     } catch (error) {
       if (this.closed) return failure(callId, name, "principal_revoked", "Local MCP session is revoked.");
@@ -674,12 +692,15 @@ export class LocalMcpToolSession {
   }
 }
 
-function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args: unknown, approvalGranted = false): { code: string; message: string } | undefined {
+function policyRefusal(policy: Readonly<RemoteDevicePolicy>, name: string, args: unknown, approvalGranted = false, local = false): { code: string; message: string } | undefined {
+  if (name === "image.capture_screenshot" && (policy.onlyHere || policy.readOnly || !policy.shell || process.platform !== "win32")) {
+    return { code: "permission_denied", message: "Desktop capture requires Windows and device access outside the project." };
+  }
   if (policy.readOnly && isMutating(name, args)) {
     return { code: "permission_denied", message: "Device policy is read-only." };
   }
   if (!policy.shell && SHELL_TOOLS.has(name)) return { code: "permission_denied", message: "Device policy disables process launch and input." };
-  if (policy.approvals && APPROVAL_TOOLS.has(name) && !approvalGranted) return { code: "approval_required", message: "A local command approval is required." };
+  if (!approvalGranted && ((name === "image.capture_screenshot" && !local) || (policy.approvals && APPROVAL_TOOLS.has(name)))) return { code: "approval_required", message: "A local command approval is required." };
   return undefined;
 }
 
@@ -690,7 +711,7 @@ async function constrainArguments(
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const args = value as Record<string, unknown>;
   const context = { toolName: name, principal };
-  if ((policy.onlyHere || localProject) && (name.startsWith("fs.") || name === "image.inspect")) {
+  if ((policy.onlyHere || localProject) && (name.startsWith("fs.") || (name === "image.inspect" || name === "image.show"))) {
     const mode = name === "fs.delete" ? "delete" : name === "fs.write" || name === "fs.patch" || name === "fs.move" ? "write" : "read";
     for (const key of ["path", "source", "destination"]) {
       if (typeof args[key] === "string") await guard.assertAllowed(resolve(workspace, args[key] as string), mode, context);

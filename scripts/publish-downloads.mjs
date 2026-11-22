@@ -115,6 +115,7 @@ function nativeRunnerPackageJson() {
       playwright: playwrightVersion,
       tsx: tsxVersion,
       typescript: typescriptVersion,
+      zod: pinnedVersion(rootPackage.dependencies?.zod, "zod"),
     },
   };
 }

@@ -10,6 +10,7 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import { originalImageOutput, REMOTE_IMAGE_LIMITS } from "./image-tools.js";
 import type { ArtifactStore } from "./artifact-store.js";
 
 import type { McpServerSpec } from "./mcp-configuration.js";
@@ -156,6 +157,7 @@ export function formatMcpToolDescription(serverName: string, description: string
 
 export interface McpMaterializationPolicy {
   /** Applied before a tool enters any model-visible list. */
+  readonly visualResults?: boolean;
   readonly admit?: (server: string, tool: McpDiscoveryTool) => boolean;
   readonly name?: (server: string, tool: McpDiscoveryTool) => string;
   readonly guard?: (tool: NativeTool<Record<string, unknown>>, server: string, discovered: McpDiscoveryTool) => NativeTool<Record<string, unknown>>;
@@ -184,7 +186,7 @@ export function createMcpTools(
       execute: async (input, context) => await mcpOutput(
         await client.call(tool.name, input, context),
         artifacts,
-        `${client.spec.name}.${tool.name}`
+        `${client.spec.name}.${tool.name}`, policy.visualResults
       ),
     };
     return policy.guard?.(created, client.spec.name, tool) ?? created;
@@ -216,7 +218,7 @@ export function createRemoteMcpTools(
       },
       validate: objectInput,
       assessAccess: () => ({ capability: `mcp.${server}.${tool.name}`, external: true, destructive: tool.annotations?.destructiveHint !== false, network: true }),
-      execute: async (input, context) => await mcpOutput(await call(tool.name, input, context), artifacts, `${server}.${tool.name}`),
+      execute: async (input, context) => await mcpOutput(await call(tool.name, input, context), artifacts, `${server}.${tool.name}`, policy.visualResults),
     };
     return policy.guard?.(created, server, tool) ?? created;
   });
@@ -225,7 +227,8 @@ export function createRemoteMcpTools(
 async function mcpOutput(
   result: McpCallResult,
   artifacts: ArtifactStore,
-  label: string
+  label: string,
+  visualResults = false,
 ): Promise<ToolExecutionOutput> {
   const content: ToolContentBlock[] = [];
   for (const item of result.content ?? []) {
@@ -238,8 +241,15 @@ async function mcpOutput(
       const mediaType = typeof item.mimeType === "string"
         ? item.mimeType
         : item.type === "image" ? "image/png" : "audio/mpeg";
+      const bytes = Buffer.from(item.data, "base64");
+      if (visualResults && item.type === "image") {
+        try {
+          content.push(...(await originalImageOutput(artifacts, bytes, `MCP ${label}`, REMOTE_IMAGE_LIMITS.maxBytes)).content);
+          continue;
+        } catch { /* Keep the returned bytes as an ordinary artifact if they cannot be previewed. */ }
+      }
       const artifact = await artifacts.put(
-        Buffer.from(item.data, "base64"),
+        bytes,
         mediaType,
         `MCP ${label}`
       );
@@ -253,13 +263,23 @@ async function mcpOutput(
         );
         content.push({ type: "artifact", hash: artifact.hash, mediaType: artifact.mediaType, label });
       } else if (typeof item.resource.blob === "string") {
+        const bytes = Buffer.from(item.resource.blob, "base64");
+        if (visualResults && typeof item.resource.mimeType === "string" && item.resource.mimeType.startsWith("image/")) {
+          try {
+            content.push(...(await originalImageOutput(artifacts, bytes, `MCP resource ${label}`, REMOTE_IMAGE_LIMITS.maxBytes)).content);
+            continue;
+          } catch { /* Keep the returned bytes as an ordinary artifact if they cannot be previewed. */ }
+        }
         const artifact = await artifacts.put(
-          Buffer.from(item.resource.blob, "base64"),
+          bytes,
           typeof item.resource.mimeType === "string" ? item.resource.mimeType : "application/octet-stream",
           `MCP resource ${label}`
         );
         content.push({ type: "artifact", hash: artifact.hash, mediaType: artifact.mediaType, label });
       }
+    } else if (item.type === "resource_link" && typeof item.uri === "string" && typeof item.name === "string") {
+      content.push({ type: "json", value: { type: "resource_link", uri: item.uri, name: item.name,
+        ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}) } });
     }
   }
   if (result.structuredContent !== undefined) {

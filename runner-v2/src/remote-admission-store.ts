@@ -7,6 +7,7 @@ import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import type { ToolResult } from "./agent-contracts.js";
 import { initializeRemoteAdmissionSchema } from "./remote-admission-schema.js";
 import type { VerifiedRemoteIdentity } from "./remote-principal.js";
+import type { McpProgress } from "./mcp-gateway-tools.js";
 import type { RemoteEffectRequest, RemoteToolRuntimeOptions } from "./remote-tool-runtime.js";
 
 export type RemoteJobState = "queued" | "awaiting_approval" | "running" | "completed" | "failed" |
@@ -538,6 +539,21 @@ export class RemoteAdmissionStore {
       if (cancellation) this.updateCancellation(cancellation, cancellation.stop, "known");
       return this.transition(row, resolution, "reconciled", undefined, evidence);
     });
+  }
+
+  recordMcpProgress(identity: VerifiedRemoteIdentity, jobId: string, value: McpProgress): void {
+    const job = this.ownedRow(checkedPrincipal(identity), jobId);
+    if (job.state !== "running" || job.tool_id !== "mcp_tool_call") return;
+    this.database.prepare(`INSERT INTO remote_job_mcp_progress (job_id, progress, total) VALUES (?, ?, ?)
+      ON CONFLICT(job_id) DO UPDATE SET progress = excluded.progress, total = excluded.total
+      WHERE excluded.progress > remote_job_mcp_progress.progress`).run(jobId, value.progress, value.total ?? null);
+  }
+
+  mcpProgress(identity: VerifiedRemoteIdentity, jobId: string): McpProgress | undefined {
+    this.ownedRow(checkedPrincipal(identity), jobId);
+    const row = this.database.prepare("SELECT progress, total FROM remote_job_mcp_progress WHERE job_id = ?").get(jobId) as
+      { progress: number; total: number | null } | undefined;
+    return row ? { progress: row.progress, ...(row.total !== null ? { total: row.total } : {}) } : undefined;
   }
 
   events(identity: VerifiedRemoteIdentity, jobId: string, cursor?: string, limit = 100): RemoteEventPage {
