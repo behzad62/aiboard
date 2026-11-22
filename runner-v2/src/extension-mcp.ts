@@ -1036,18 +1036,31 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
           callId, toolName: relayToolId, content, isError: Boolean(error), ...(error ? { error } : {}),
         },
       });
+      const reject = (code: string, message: string) => reply([{ type: "text", text: message }], { code, message });
       if (!parsed.success) return reply([{ type: "text", text: "Invalid MCP gateway arguments." }], {
         code: "invalid_arguments", message: "Invalid MCP gateway arguments.",
       });
       const entries = loaded.admitted.gatewayTools ?? [];
       const statuses = new Map(loaded.admitted.status?.().map(({ name, status }) => [name, status]));
+      const servers = (loaded.admitted.gatewayServers ?? []).map(({ serverId, transport }) => {
+        const unavailable = loaded.admitted.unavailable.some(({ serverName }) => serverName === serverId);
+        const toolCount = entries.filter((tool) => tool.serverId === serverId).length;
+        return { serverId, transport, status: unavailable ? "error" : statuses.get(serverId) ?? (toolCount ? "ready" : "unavailable"), toolCount };
+      });
       if (relayToolId === "mcp_servers_list") {
-        const servers = (loaded.admitted.gatewayServers ?? []).map(({ serverId, transport }) => ({
-          serverId, transport, status: statuses.get(serverId) ?? (entries.some((tool) => tool.serverId === serverId) ? "ready" : "unavailable"),
-        }));
-        return reply([{ type: "json", value: { servers } }]);
+        return reply([{ type: "json", value: { servers, ...(!servers.length ? {
+          message: "No MCP servers are exposed on this Runner. In AI Board Settings â†’ Extensions, add the server, review its tools, and enable remote exposure.",
+        } : {}) } }]);
       }
       const input = parsed.data as GatewayInput;
+      const server = servers.find((item) => item.serverId === input.serverId);
+      if (!server) return reject("mcp_server_not_exposed", "This server is not exposed on this Runner. Use mcp_servers_list or review Settings â†’ Extensions on the device.");
+      if (!server.toolCount && server.status === "error") {
+        return reject("mcp_server_unavailable", "The Runner could not connect to this MCP server. Check its status in AI Board Settings â†’ Extensions.");
+      }
+      if (!server.toolCount) {
+        return reject("mcp_no_approved_tools", "No tools are approved for this server's current inventory. Review its tools in AI Board Settings â†’ Extensions.");
+      }
       const tools = entries.filter((entry) => entry.serverId === input.serverId);
       if (relayToolId === "mcp_tools_list") {
         return reply([{ type: "json", value: { serverId: input.serverId, tools: tools.map(({ relayToolId, toolName }) => {
@@ -1056,9 +1069,7 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
         }) } }]);
       }
       const matches = tools.filter((entry) => entry.toolName === input.toolName);
-      if (matches.length !== 1) return reply([{ type: "text", text: "The MCP tool is unavailable or has not been approved." }], {
-        code: "tool_unavailable", message: "The MCP tool is unavailable or has not been approved.",
-      });
+      if (matches.length !== 1) return reject("tool_unavailable", "This MCP tool is unavailable or has not been approved. Use mcp_tools_list to see the approved tools.");
       relayToolId = matches[0]!.relayToolId;
       args = input.arguments ?? {};
       const timeout = AbortSignal.timeout(input.timeoutMs ?? 30_000);

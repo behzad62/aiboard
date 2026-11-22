@@ -242,18 +242,24 @@ test("generic gateway respects versioned exposure and preserves HTTP progress, a
   const server = await mockRemote(t, "none");
   const { operation } = await install(env, server.base + "/mcp", "none");
   const extensionId = operation.result!.extensionId!;
-  const gateway = createRemotePluginToolProvider(env.runtime, {
+  const openGateway = () => createRemotePluginToolProvider(env.runtime, {
     generation: async () => (await env.extensions.generation()).generation,
     artifacts: new ArtifactStore(join(env.root, "gateway-artifacts")), workspacePath: join(env.root, "project"),
   });
+  const gateway = openGateway();
   t.after(async () => { await gateway.close?.(); });
   const identity = { accountId: "account", clientId: "client", deviceId: "device" };
   const discovery = () => gateway.invoke(identity, "mcp_tools_list", { serverId: "notes" });
-  assert.doesNotMatch(JSON.stringify(await discovery()), /read_note/);
+  const hidden = await discovery();
+  assert.equal(hidden.error?.code, "mcp_server_not_exposed");
+  assert.doesNotMatch(JSON.stringify(hidden), /read_note/);
+  assert.match(JSON.stringify(await gateway.invoke(identity, "mcp_servers_list", {})), /Settings.*Extensions/);
   const tools = await env.extensions.extensionToolPolicy(extensionId);
   await env.extensions.setExtensionToolPolicy(extensionId, { ...tools.policy, remoteExposure: true, reviewed: tools.discovered,
     toolFilter: { default: "deny", allow: tools.discovered.map(({ componentId }) => ({ componentId, toolName: "read_note" })), deny: [] } }, UI);
-  assert.match(JSON.stringify(await gateway.invoke(identity, "mcp_servers_list", {})), /streamable_http/);
+  assert.deepEqual((await gateway.invoke(identity, "mcp_servers_list", {})).content, [{
+    type: "json", value: { servers: [{ serverId: "notes", transport: "streamable_http", status: "ready", toolCount: 1 }] },
+  }]);
   const listed = JSON.stringify(await discovery());
   assert.match(listed, /read_note.*inputSchema/);
   assert.doesNotMatch(listed, /send_email/);
@@ -273,6 +279,14 @@ test("generic gateway respects versioned exposure and preserves HTTP progress, a
   assert.deepEqual(updates, [{ progress: 1, total: 2 }]);
   assert.deepEqual(result.result.content, [{ type: "json", value: { id: null } }]);
   assert.equal(result.result.isError, false);
+
+  server.redirectMcp = true;
+  const offlineGateway = openGateway();
+  t.after(async () => { await offlineGateway.close?.(); });
+  assert.deepEqual((await offlineGateway.invoke(identity, "mcp_servers_list", {})).content, [{
+    type: "json", value: { servers: [{ serverId: "notes", transport: "streamable_http", status: "error", toolCount: 0 }] },
+  }]);
+  assert.equal((await offlineGateway.invoke(identity, "mcp_tools_list", { serverId: "notes" })).error?.code, "mcp_server_unavailable");
 });
 
 test("remote destinations: https by default, http only for loopback, private networks refused", async () => {
