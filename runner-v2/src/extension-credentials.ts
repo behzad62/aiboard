@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 import { openEncryptedJson, writeEncryptedJson, type CredentialStoreOptions } from "./encrypted-provider-config-store.js";
@@ -15,7 +15,10 @@ export interface CredentialMetadata {
   readonly expiresAt?: string;
 }
 
+export interface OAuthCredentialClient { readonly tokenEndpoint: string; readonly clientId: string; readonly resource: string }
 interface StoredCredential extends CredentialMetadata {
+  readonly recoveryLineage?: string;
+  readonly oauthClient?: OAuthCredentialClient;
   readonly value: string;
   readonly refreshToken?: string;
   readonly scope?: string;
@@ -48,7 +51,7 @@ export class ExtensionCredentialStore {
   }
 
   /** Stores or replaces the secret for (extensionId, name); returns the stable reference. */
-  put(input: { extensionId: string; name: string; kind: CredentialMetadata["kind"]; value: string; refreshToken?: string; expiresAt?: string; scope?: string; resource?: string }): CredentialMetadata {
+  put(input: { extensionId: string; name: string; kind: CredentialMetadata["kind"]; value: string; refreshToken?: string; expiresAt?: string; scope?: string; resource?: string; oauthClient?: OAuthCredentialClient }): CredentialMetadata {
     if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(input.name)) throw new ExtensionManagementError("credential_name_invalid", "Credential names are environment-variable style identifiers.");
     if (typeof input.value !== "string" || input.value.length === 0 || Buffer.byteLength(input.value) > MAX_SECRET_BYTES)
       throw new ExtensionManagementError("credential_value_invalid", "A credential value is required and must be at most 16 KiB.");
@@ -62,6 +65,8 @@ export class ExtensionCredentialStore {
       name: input.name,
       kind: input.kind,
       value: input.value,
+      recoveryLineage: randomBytes(32).toString("hex"),
+      ...(input.oauthClient ? {oauthClient: {...input.oauthClient}} : {}),
       createdAt: prior?.createdAt ?? now,
       updatedAt: now,
       ...(input.refreshToken ? { refreshToken: input.refreshToken } : {}),
@@ -80,6 +85,46 @@ export class ExtensionCredentialStore {
     return Object.freeze({ value: entry.value, name: entry.name,
       ...(entry.refreshToken ? { refreshToken: entry.refreshToken } : {}), ...(entry.expiresAt ? { expiresAt: entry.expiresAt } : {}),
       ...(entry.scope ? { scope: entry.scope } : {}), ...(entry.resource ? { resource: entry.resource } : {}) });
+  }
+
+  /** Internal only. The lineage is replaced on every credential put, even
+   * when the stable public reference and secret value do not change. */
+  taskCredential(ref: string) {
+    const entry=this.load().find(candidate=>candidate.ref===ref);
+    if (!entry) throw new ExtensionManagementError("credential_missing","Credential is unavailable.",409);
+    return this.taskSnapshot(entry);
+  }
+
+  private taskSnapshot(entry: StoredCredential) {
+    const revision=createHmac("sha256",this.key).update("mcp-credential-revision-v1").update(JSON.stringify(entry)).digest("hex");
+    const lineage=entry.recoveryLineage ?? createHmac("sha256",this.key).update("mcp-legacy-credential-v1").update(revision).digest("hex");
+    return Object.freeze({...entry,revision,lineage});
+  }
+
+  /** Only an exchange of the exact still-current OAuth credential may rotate
+   * its tokens. A sign-in/revoke racing the network exchange wins. */
+  rotateOAuth(ref: string, expectedRevision: string, input: {value:string;refreshToken?:string;expiresAt?:string;scope?:string},
+    client: OAuthCredentialClient) {
+    const entries=this.load();
+    const prior=entries.find(candidate=>candidate.ref===ref);
+    if (!prior || prior.kind!=="oauth" || this.taskSnapshot(prior).revision!==expectedRevision ||
+      prior.resource!==client.resource) throw new ExtensionManagementError("credential_changed","OAuth credential changed during refresh.",409);
+    if (!input.value || Buffer.byteLength(input.value)>MAX_SECRET_BYTES ||
+      (input.refreshToken && Buffer.byteLength(input.refreshToken)>MAX_SECRET_BYTES))
+      throw new ExtensionManagementError("credential_value_invalid","Invalid refreshed credential.",409);
+    const scope=input.scope ?? prior.scope;
+    const normalized=(value:string|undefined)=>value?.split(/\s+/).filter(Boolean).sort().join(" ");
+    const sameClient=prior.oauthClient?.tokenEndpoint===client.tokenEndpoint &&
+      prior.oauthClient?.clientId===client.clientId && prior.oauthClient?.resource===client.resource;
+    const lineage=sameClient && normalized(scope)===normalized(prior.scope)
+      ? this.taskSnapshot(prior).lineage : randomBytes(32).toString("hex");
+    const next:StoredCredential={ref:prior.ref,extensionId:prior.extensionId,name:prior.name,kind:prior.kind,
+      createdAt:prior.createdAt,updatedAt:new Date().toISOString(),value:input.value,
+      recoveryLineage:lineage,oauthClient:{...client},resource:client.resource,
+      ...(input.refreshToken ?? prior.refreshToken ? {refreshToken:input.refreshToken ?? prior.refreshToken}:{}),
+      ...(input.expiresAt?{expiresAt:input.expiresAt}:{}),...(scope!==undefined?{scope}:{})};
+    this.save(entries.map(entry=>entry.ref===ref?next:entry));
+    return this.taskSnapshot(next);
   }
 
   /** Revokes stored values. Remote token revocation at the issuer is the caller's responsibility. */

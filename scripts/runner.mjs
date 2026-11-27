@@ -1867,6 +1867,9 @@ function createPr({ repo, title, body, base, head, draft }) {
 // ── MCP bridge: stdio MCP servers exposed over this runner's HTTP ────────────
 const MCP_CALL_TIMEOUT_MS = 120 * 1000;
 const MCP_INIT_TIMEOUT_MS = 60 * 1000;
+const MCP_MODERN_PROTOCOL = "2026-07-28";
+// Old servers may silently ignore discovery. Keep this compatibility probe bounded.
+const MCP_DISCOVER_TIMEOUT_MS = 2_000;
 
 class McpServer {
   constructor(name, command) {
@@ -1881,10 +1884,12 @@ class McpServer {
     this.buffer = "";
     this.child = null;
     this.intentionalStop = false;
+    this.modernMcp = false;
   }
 
   spawnChild() {
     this.status = "starting";
+    this.modernMcp = false;
     this.error = null;
     this.tools = [];
     this.buffer = "";
@@ -1969,7 +1974,7 @@ class McpServer {
       if (msg.id != null && this.pending.has(msg.id)) {
         const p = this.pending.get(msg.id);
         this.pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(msg.error.message ?? "MCP error"));
+        if (msg.error) p.reject(Object.assign(new Error(msg.error.message ?? "MCP error"), { rpcCode: msg.error.code }));
         else p.resolve(msg.result);
       }
       // Server-initiated requests/notifications are ignored by this bridge.
@@ -1980,8 +1985,17 @@ class McpServer {
     this.child.stdin.write(`${JSON.stringify(msg)}\n`);
   }
 
+  modernMcpParams(params = {}) {
+    return { ...params, _meta: { ...params._meta,
+      "io.modelcontextprotocol/protocolVersion": MCP_MODERN_PROTOCOL,
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": { name: "ai-discussion-board-runner", version: String(VERSION) },
+    } };
+  }
+
   request(method, params, timeoutMs) {
     const id = this.nextId++;
+    if (this.modernMcp) params = this.modernMcpParams(params);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -2003,16 +2017,26 @@ class McpServer {
 
   async init() {
     try {
-      await this.request(
-        "initialize",
-        {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "ai-discussion-board-runner", version: String(VERSION) },
-        },
-        MCP_INIT_TIMEOUT_MS
-      );
-      this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      try {
+        const discovered = await this.request("server/discover", this.modernMcpParams(), MCP_DISCOVER_TIMEOUT_MS);
+        this.modernMcp = Array.isArray(discovered?.supportedVersions) && discovered.supportedVersions.includes(MCP_MODERN_PROTOCOL);
+      } catch (err) {
+        if (!this.enabled) return;
+        if (!Number.isInteger(err?.rpcCode)) await this.restartAfterMcpProbe();
+      }
+      if (!this.enabled) return;
+      if (!this.modernMcp) {
+        await this.request(
+          "initialize",
+          {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "ai-discussion-board-runner", version: String(VERSION) },
+          },
+          MCP_INIT_TIMEOUT_MS
+        );
+        this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      }
       const listed = await this.request("tools/list", {}, MCP_INIT_TIMEOUT_MS);
       this.tools = Array.isArray(listed?.tools) ? listed.tools : [];
       this.status = "ready";
@@ -2024,12 +2048,32 @@ class McpServer {
     }
   }
 
+  async restartAfterMcpProbe() {
+    const child = this.child;
+    if (child) {
+      // No application calls are sent during discovery. Wait for the old
+      // child to close before opening a replacement, or fail closed.
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.off("close", closed);
+          reject(new Error("MCP discovery child did not close"));
+        }, 5000);
+        const closed = () => { clearTimeout(timer); resolve(); };
+        child.once("close", closed);
+        child.stdin.end();
+        child.kill();
+      });
+    }
+    if (this.enabled) this.spawnChild();
+  }
+
   async callTool(toolName, toolArgs) {
     const result = await this.request(
       "tools/call",
       { name: toolName, arguments: toolArgs ?? {} },
       MCP_CALL_TIMEOUT_MS
     );
+    if (this.modernMcp && !Array.isArray(result?.content)) throw new Error("MCP tool call did not return a completed result; interactive continuations are not supported.");
     const content = Array.isArray(result?.content) ? result.content : [];
     const text = content
       .map((c) => (c?.type === "text" ? c.text : `[${c?.type ?? "unknown"} content]`))

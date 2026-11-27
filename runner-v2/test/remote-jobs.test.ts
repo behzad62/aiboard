@@ -713,3 +713,108 @@ test("restart after dispatch preserves unknown and cannot replay the effect", as
     await tick();
   }
 });
+
+test("remote task input is job-bound, schema-validated and single-use, without redispatch", async t => {
+  const started = deferred();
+  let calls = 0;
+  let answer: unknown;
+  const plugin: RemotePluginToolProvider = {
+    list: async () => [],
+    invoke: async () => { throw new Error("Expected admitted dispatch."); },
+    invokeAdmitted: async (_identity, name, _args, signal, authorize, _progress, resolveInput) => {
+      calls++;
+      assert.ok(authorize?.()); assert.ok(resolveInput);
+      const pending = resolveInput({ method:"elicitation/create", params:{mode:"form", message:"Choose label", requestedSchema:{type:"object", properties:{label:{type:"string",minLength:2}}, required:["label"]}}},signal,"fixture");
+      started.resolve();
+      answer=await pending;
+      return {brokerInvoked:true,result:success(name)};
+    },
+  };
+  const h=await harness(t,{plugin});
+  await h.connect();
+  const request=h.request({toolId:"mcp_tool_call",operationClass:"write",payload:{serverId:"fixture",toolName:"work",forwardMcpInput:true}});
+  const jobId=(await h.response(request)).response.jobId!;
+  await started.promise;
+  const ordinary=await h.response(h.request({toolId:"jobs_status",payload:{jobId}}));
+  assert.equal((ordinary.data as {mcpInput?:unknown}).mcpInput,undefined);
+  const status=await h.response(h.request({toolId:"jobs_status",payload:{jobId,mcpInput:true}}));
+  const prompts=(status.data as {mcpInput:Record<string,unknown>}).mcpInput;
+  assert.ok(prompts);
+  const id=Object.keys(prompts)[0];
+  assert.match(JSON.stringify(prompts),/Choose label/);
+  assert.equal((await h.response(h.request({clientId:"peer",toolId:"jobs_status",payload:{jobId,mcpInput:true}}))).response.errorCode,"not_found");
+  const submit=(inputResponses:unknown,clientId=CLIENT,operationClass="write" as const)=>h.response(h.request({clientId,toolId:"jobs_mcp_input",operationClass,payload:{jobId,inputResponses}}));
+  assert.ok((await submit({[id]:{action:"accept",content:{label:"yes"}}},"peer")).response.errorCode);
+  assert.ok((await submit({wrong:{action:"accept",content:{label:"yes"}}})).response.errorCode);
+  assert.ok((await submit({[id]:{action:"accept",content:{label:"x"}}})).response.errorCode);
+  assert.equal(answer,undefined);
+  const accepted=await submit({[id]:{action:"accept",content:{label:"yes"}}});
+  assert.equal((accepted.data as {accepted:boolean}).accepted,true);
+  await h.waitState(request,jobId,"completed");
+  assert.deepEqual(JSON.parse(JSON.stringify(answer)),{action:"accept",content:{label:"yes"}});
+  assert.ok((await submit({[id]:{action:"accept",content:{label:"yes"}}})).response.errorCode);
+  assert.equal(calls,1);
+});
+
+const recoveryReceipt=(expiresAt:number)=>({
+  taskId:"SECRET-OPAQUE-TASK",createdAt:"2026-10-27T12:00:00Z",expiresAt,extensionId:"extension",versionId:"version",generation:1,
+  componentId:"component",serverName:"fixture",toolName:"work",componentDigest:"a".repeat(64),schemaDigest:"b".repeat(64)
+});
+test("MCP task receipt survives admission database reopen and reconciles without replay",async t=>{
+  const h=await harness(t);
+  await h.connect();
+  const request=h.request({toolId:"mcp_tool_call",operationClass:"write",payload:{serverId:"fixture",toolName:"work"}});
+  const owner={accountId:ACCOUNT,clientId:CLIENT,deviceId:h.device.deviceId};
+  const job=h.admission.admit(owner,JSON.stringify(request)).job;
+  h.admission.markDispatching(owner,job.jobId,request.deviceEpoch);
+  const receipt=recoveryReceipt(Date.parse("2026-10-27T12:30:00Z"));
+  h.admission.recordMcpTask(owner,job.jobId,receipt);
+  assert.equal(h.admission.mcpTask(owner,job.jobId),undefined);
+  await h.connector.close();
+  h.closeAdmission();
+  const reopened=new RemoteAdmissionStore(h.databasePath,KEY,()=>new Date("2026-10-27T12:00:01Z"));
+  try {
+    reopened.reconcileStartup();
+    assert.equal(reopened.getJob(owner,job.jobId)?.state,"outcome_unknown");
+    assert.deepEqual(reopened.mcpTask(owner,job.jobId),receipt);
+    assert.throws(()=>reopened.mcpTask({...owner,clientId:"other"},job.jobId));
+    reopened.reconcileMcpTask(owner,job.jobId,{...receipt,taskId:"wrong"},"completed",{inline:Buffer.from("wrong")});
+    assert.equal(reopened.getJob(owner,job.jobId)?.state,"outcome_unknown");
+    reopened.reconcileMcpTask(owner,job.jobId,receipt,"completed",{inline:Buffer.from("verified result")});
+    assert.equal(reopened.getJob(owner,job.jobId)?.state,"completed");
+    assert.equal(Buffer.from(reopened.result(owner,job.jobId).inline!).toString(),"verified result");
+    assert.equal(reopened.mcpTask(owner,job.jobId),undefined);
+    assert.equal(reopened.admit(owner,JSON.stringify(request)).created,false);
+  }finally{reopened.close();}
+});
+test("signed jobs_status recovers only the original unknown MCP job and does not redispatch",async t=>{
+  let recovered=0, dispatched=0;
+  const receipt=recoveryReceipt(Date.parse("2026-10-27T12:30:00Z"));
+  const plugin:RemotePluginToolProvider={
+    list:async()=>[],
+    invoke:async()=>{throw Error("unexpected");},
+    invokeAdmitted:async(_identity,_name,_args,_signal,_auth,_progress,_input,recordTask)=>{
+      dispatched++;assert.ok(recordTask);recordTask(receipt);
+      throw Error("lost task response");
+    },
+    recoverTask:async(observed,_signal,allowed)=>{
+      recovered++;assert.deepEqual(observed,receipt);assert.ok(allowed());
+      return success("mcp_tool_call");
+    }
+  };
+  const h=await harness(t,{plugin});await h.connect();
+  const request=h.request({toolId:"mcp_tool_call",operationClass:"write",payload:{serverId:"fixture",toolName:"work"}});
+  const jobId=(await h.response(request)).response.jobId!;
+  await h.waitState(request,jobId,"outcome_unknown");
+  assert.ok((await h.response(h.request({clientId:"peer",toolId:"jobs_status",payload:{jobId}}))).response.errorCode);
+  assert.equal(recovered,0);
+  h.revoked.add(CLIENT);
+  assert.ok((await h.response(h.request({toolId:"jobs_status",payload:{jobId}}))).response.errorCode);
+  h.revoked.delete(CLIENT);
+  assert.equal(recovered,0);
+  const status=await h.response(h.request({toolId:"jobs_status",payload:{jobId}}));
+  assert.equal(status.response.status,"completed",JSON.stringify(status));
+  const result=await h.response(h.request({toolId:"jobs_result",payload:{jobId}}));
+  assert.match(Buffer.from((result.data as {inline:string}).inline,"base64").toString("utf8"),/fixture output/);
+  assert.equal(recovered,1);assert.equal(dispatched,1);
+});

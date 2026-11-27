@@ -1686,3 +1686,31 @@ function syntheticMcpOptions(name: string, command: string, tools: readonly McpD
       callId: "first-real-synthetic-call", toolName: `mcp.${name}.${tools[0]!.name}`, workspacePath: process.cwd(),
       executionGrant: Object.freeze({}) as OpaqueExecutionGrant } };
 }
+
+test("live modern MCP pins discovery protocol and never sends legacy initialize", async () => {
+  const configured = syntheticMcpOptions("modern", "modern-fixture", [{ name: "lookup", inputSchema: { type: "object" } }]);
+  const discovery: McpDiscoveryResult = { ...configured.discovery, servers: configured.discovery.servers.map((entry) => ({ ...entry, protocolVersion: "2026-07-28" as const })) };
+  const methods: string[] = [];
+  const manager = new McpManager({
+    ...configured, discovery, cwd: process.cwd(), servers: [{ name: "modern", command: "modern-fixture" }],
+    transportFactory: { async open(request) {
+      const writer = { async write(payload: Uint8Array) {
+        const message = JSON.parse(Buffer.from(payload).toString());
+        methods.push(message.method);
+        assert.equal(message.params._meta["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
+        const result = message.method === "server/discover" ? { supportedVersions: ["2026-07-28"] }
+          : message.method === "tools/list" ? { tools: [{ name: "lookup", inputSchema: { type: "object" } }] }
+          : { content: [{ type: "text", text: "ok" }] };
+        await request.onOutput("stdout", Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n"));
+      } };
+      await request.handshake(writer);
+      return { ...writer, request: async (_owner, perform) => perform(writer), async closeVerified() {} };
+    } },
+  });
+  try {
+    await manager.start();
+    const result = await manager.toolEntries()[0]!.client.call("lookup", {}, configured.context);
+    assert.deepEqual(result.content, [{ type: "text", text: "ok" }]);
+    assert.deepEqual(methods, ["server/discover", "tools/list", "tools/call"]);
+  } finally { await manager.close(); }
+});

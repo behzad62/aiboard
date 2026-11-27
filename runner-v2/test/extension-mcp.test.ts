@@ -1,3 +1,4 @@
+import { createRemotePluginToolProvider } from "../src/extension-mcp.js";
 import assert from "node:assert/strict";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -384,4 +385,140 @@ test("Build-owned installation publishes MCP on the next model turn, preserves o
   assert.equal(requests.length,6);
   assert.ok(await pins.generation("build-install") > 0);
   assert.equal(await pins.generation("unrelated-build"),0);
+});
+
+test("stdio app calls after chat closes use fresh owned grants and current policy", {timeout:180_000},async t=>{
+  const env=await fixture(t);
+  const log=join(env.project,"app-calls.jsonl");
+  const {operation}=await installFixtureServer(env,[FIXTURE,"app",log]);
+  assert.equal(operation.outcome,"succeeded",operation.diagnostics.join("; "));
+  const extensionId=operation.result!.extensionId!;
+  const policy=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...policy.policy,reviewed:policy.discovered,toolFilter:{default:"allow",allow:[],deny:[]}},UI);
+  env.setSteps([()=>call("mcp.fixture.lookup",{query:"original"}),(_request,result)=>{
+    assert.match(textOf(result),/found:original/);
+    assert.doesNotMatch(JSON.stringify(result),/fixture-ui-data|fixture app/);
+    return say("App ready.");
+  }]);
+  await env.sessions.create({sessionId:"stdio-app-chat",runtimeId:"scripted"});
+  await env.sessions.send("stdio-app-chat",{messageId:"m1",text:"Show fixture app."});
+  const snap=await env.sessions.settled("stdio-app-chat");
+  assert.equal(snap.status,"idle",snap.error??"");
+  assert.equal(snap.mcpApps.length,1);
+  assert.deepEqual(env.host.activeRunIds(),[]);
+  const id=snap.mcpApps[0].id;
+  const app=await env.sessions.getMcpApp("stdio-app-chat",id);
+  assert.deepEqual(app.allowedTools,["lookup","credential_status"]);
+  assert.match(app.html,/fixture app/);
+  assert.deepEqual(app.resourceDomains,["https://cdn.example.com"]);
+  const rows=async()=> (await readFile(log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+  assert.equal((await rows()).length,1);
+  await assert.rejects(env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"delete_note",arguments:{id:"x"}}),/not available/);
+  await assert.rejects(env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"model_only",arguments:{}}),/not available/);
+  const denied=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"lookup",arguments:{query:"deny"}});
+  assert.equal((await env.sessions.answerMcpAppCall("stdio-app-chat",id,denied.id,{approve:false})).isError,true);
+  assert.equal((await rows()).length,1);
+  const ticket=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"lookup",arguments:{query:"approved"}});
+  const result=await env.sessions.answerMcpAppCall("stdio-app-chat",id,ticket.id,{approve:true});
+  assert.equal(result.isError,false,JSON.stringify(result));
+  assert.match(JSON.stringify(result.content),/found:approved/);
+  assert.equal(result._meta?.uiPrivate,"fixture-ui-data");
+  const observed=await rows();
+  assert.equal(observed.length,2);
+  assert.notEqual(observed[0].pid,observed[1].pid);
+  assert.deepEqual(observed[1].args,{query:"approved"});
+  assert.deepEqual(env.host.activeRunIds(),[]);
+  assert.doesNotMatch(JSON.stringify(env.seen),/found:approved|fixture-ui-data/);
+  await assert.rejects(env.sessions.answerMcpAppCall("stdio-app-chat",id,ticket.id,{approve:true}),/unavailable/);
+  const revoked=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"lookup",arguments:{query:"revoked"}});
+  const live=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...live.policy,reviewed:live.discovered,toolFilter:{default:"deny",allow:[],deny:[]}},UI);
+  assert.equal((await env.sessions.answerMcpAppCall("stdio-app-chat",id,revoked.id,{approve:true})).isError,true);
+  assert.equal((await rows()).length,2);
+  assert.deepEqual(env.host.activeRunIds(),[]);
+});
+
+test("durable stdio task recovery uses a new process without replay", {timeout:180_000},async t=>{
+  const env=await fixture(t);
+  const path=join(env.project,"durable-task.json");
+  const {operation}=await installFixtureServer(env,[FIXTURE,"durable",path]);
+  assert.equal(operation.outcome,"succeeded",operation.diagnostics.join("; "));
+  const extensionId=operation.result!.extensionId!;
+  const policy=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...policy.policy,remoteExposure:true,reviewed:policy.discovered,
+    toolFilter:{default:"allow",allow:[],deny:[]}},UI);
+  const makeGateway=()=>createRemotePluginToolProvider(env.runtime,{
+    generation:async()=>(await env.extensions.generation()).generation,
+    artifacts:new ArtifactStore(join(env.project,"recovery-artifacts")),workspacePath:env.project,
+  });
+  const original=makeGateway();
+  let receipt:import("../src/mcp-task-recovery.js").McpTaskRecoveryReceipt|undefined;
+  try{
+    const result=await original.invokeAdmitted!({accountId:"account",clientId:"client",deviceId:"device"},"mcp_tool_call",
+      {serverId:"fixture",toolName:"lookup",arguments:{query:"first"}},AbortSignal.timeout(30000),()=>true,undefined,undefined,r=>{receipt=r;});
+    assert.equal(result.result.isError,true);
+    assert.ok(receipt?.stdioBinding,JSON.stringify(result));
+  }finally{await original.close?.();}
+  const fresh=makeGateway();
+  try{
+    const result=await fresh.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true);
+    assert.match(textOf(result),/durable result/);
+    const rows=(await readFile(path+".log","utf8")).trim().split("\n").map(line=>JSON.parse(line));
+    assert.equal(rows.filter(r=>r.method==="tools/call").length,1);
+    assert.equal(rows.filter(r=>r.method==="tasks/get").length,2);
+    assert.notEqual(rows[0].pid,rows.at(-1).pid);
+    assert.equal(await fresh.recoverTask!({...receipt!,stdioBinding:undefined},AbortSignal.timeout(5000),()=>true),undefined);
+    const live=await env.extensions.extensionToolPolicy(extensionId);
+    await env.extensions.setExtensionToolPolicy(extensionId,{...live.policy,reviewed:live.discovered,toolFilter:{default:"deny",allow:[],deny:[]}},UI);
+    assert.equal(await fresh.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true),undefined);
+    assert.equal((await readFile(path+".log","utf8")).trim().split("\n").length,rows.length);
+  }finally{await fresh.close?.();}
+  assert.deepEqual(env.host.activeRunIds(),[]);
+});
+
+test("stdio App write requires explicit allowance, fresh grant and current policy", {timeout:180_000},async t=>{
+  const env=await fixture(t);
+  const log=join(env.project,"app-calls.jsonl");
+  const {operation}=await installFixtureServer(env,[FIXTURE,"app",log]);
+  assert.equal(operation.outcome,"succeeded",operation.diagnostics.join("; "));
+  const extensionId=operation.result!.extensionId!;
+  const policy=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...policy.policy,reviewed:policy.discovered,toolFilter:{default:"allow",allow:policy.discovered.map(({componentId})=>({componentId,toolName:"delete_note"})),deny:[]}},UI);
+  env.setSteps([()=>call("mcp.fixture.lookup",{query:"original"}),(_request,result)=>{
+    assert.match(textOf(result),/found:original/);
+    assert.doesNotMatch(JSON.stringify(result),/fixture-ui-data|fixture app/);
+    return say("App ready.");
+  }]);
+  await env.sessions.create({sessionId:"stdio-app-chat",runtimeId:"scripted"});
+  await env.sessions.send("stdio-app-chat",{messageId:"m1",text:"Show fixture app."});
+  const snap=await env.sessions.settled("stdio-app-chat");
+  assert.equal(snap.status,"idle",snap.error??"");
+  assert.equal(snap.mcpApps.length,1);
+  assert.deepEqual(env.host.activeRunIds(),[]);
+  const id=snap.mcpApps[0].id;
+  const app=await env.sessions.getMcpApp("stdio-app-chat",id);
+  assert.ok(app.allowedTools?.includes("delete_note"));
+  assert.ok(!app.allowedTools?.includes("model_only"));
+  const rows=async()=> (await readFile(log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+  const denied=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"delete_note",arguments:{id:"denied"}});
+  assert.equal(denied.risk,"destructive");
+  await env.sessions.answerMcpAppCall("stdio-app-chat",id,denied.id,{approve:false});
+  assert.equal((await rows()).length,1);
+  const ticket=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"delete_note",arguments:{id:"approved"}});
+  ticket.arguments.id="tampered";
+  const result=await env.sessions.answerMcpAppCall("stdio-app-chat",id,ticket.id,{approve:true});
+  assert.equal(result.isError,false,JSON.stringify(result));
+  const observed=await rows();
+  assert.equal(observed.length,2);
+  assert.equal(observed[1].name,"delete_note");
+  assert.deepEqual(observed[1].args,{id:"approved"});
+  assert.notEqual(observed[0].pid,observed[1].pid);
+  assert.deepEqual(env.host.activeRunIds(),[]);
+  await assert.rejects(env.sessions.answerMcpAppCall("stdio-app-chat",id,ticket.id,{approve:true}),/unavailable/);
+  const revoked=await env.sessions.stageMcpAppCall("stdio-app-chat",id,{name:"delete_note",arguments:{id:"revoked"}});
+  const live=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...live.policy,reviewed:live.discovered,toolFilter:{default:"allow",allow:[],deny:[]}},UI);
+  assert.equal((await env.sessions.answerMcpAppCall("stdio-app-chat",id,revoked.id,{approve:true})).isError,true);
+  assert.equal((await rows()).length,2);
+  assert.deepEqual(env.host.activeRunIds(),[]);
 });

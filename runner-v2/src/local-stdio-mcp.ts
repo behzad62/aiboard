@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { sqliteDatabaseLocation } from "./windows-path-limits.mjs";
 import type { Readable, Writable } from "node:stream";
 import { Server, type Tool, type Transport } from "@modelcontextprotocol/server";
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 import { LOCAL_MCP_DEPTH_LIMIT } from "./child-environment.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -308,7 +308,7 @@ export const LOCAL_MCP_INSTRUCTIONS = [
 
 /** The proxy implements protocol framing only; all tool operations go to Runner. */
 export function createLocalMcpProxy(dispatch: (body: unknown, signal?: AbortSignal, progress?: McpProgressReporter) => Promise<unknown>): Server {
-  const server = new Server({ name: "aiboard", version: "1.0.0" }, { capabilities: { tools: {} }, instructions: LOCAL_MCP_INSTRUCTIONS });
+  const server = new Server({ name: "aiboard", version: "1.0.0" }, { capabilities: { tools: {} }, instructions: LOCAL_MCP_INSTRUCTIONS, supportedProtocolVersions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] });
   server.setRequestHandler("tools/list", async () => {
     const result = await dispatch({ operation: "list" });
     return result as { tools: Tool[] };
@@ -367,14 +367,13 @@ export async function serveLocalStdioMcp(options: {
       }
     } finally { await reader.cancel().catch(() => undefined); }
   };
-  const server = createLocalMcpProxy(dispatch);
   const input = options.input ?? process.stdin;
   const transport = options.transport ?? new StdioServerTransport(input, options.output ?? process.stdout, { maxBufferSize: 1_048_576 });
   let end!: () => void;
   const ended = new Promise<void>((resolve) => { end = resolve; });
   input.once("end", end);
   input.once("close", end);
-  server.onclose = end;
-  try { await server.connect(transport); await Promise.race([ended, options.closed]); }
-  finally { input.off("end", end); input.off("close", end); await server.close(); }
+  const handle = serveStdio(() => createLocalMcpProxy(dispatch), { transport });
+  try { await Promise.race([ended, options.closed]); }
+  finally { input.off("end", end); input.off("close", end); await handle.close(); }
 }

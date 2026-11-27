@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { McpAppCard } from "@/components/extensions/McpAppCard";
+import { McpInputCard } from "@/components/extensions/McpInputCard";
 import { OperationCard } from "@/components/extensions/OperationCard";
 import type { NativeRunnerConnection } from "@/lib/client/runner-v2";
-import { getRunnerChatSession, type ExtensionOperationDto } from "@/lib/client/runner-extensions";
+import { getRunnerChatSession, type ExtensionOperationDto, type McpChatPromptDto, type McpChatAppDto } from "@/lib/client/runner-extensions";
 import { runnerChatSessionId } from "@/lib/client/runner-chat";
 import { resolveRunnerConnection } from "@/lib/client/local-runner-handoff";
 
@@ -24,6 +26,8 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
     () => resolved ?? { url: runnerUrl, token: runnerToken },
     [resolved, runnerUrl, runnerToken]
   );
+  const [mcpApps, setMcpApps] = useState<McpChatAppDto[]>([]);
+  const [mcpInputs, setMcpInputs] = useState<McpChatPromptDto[]>([]);
   const [operations, setOperations] = useState<ExtensionOperationDto[]>([]);
   const [loadedAt, setLoadedAt] = useState(0);
   const [unreachable, setUnreachable] = useState(false);
@@ -33,6 +37,8 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
     try {
       const snapshot = await getRunnerChatSession(connection, runnerChatSessionId(discussionId));
       setOperations(snapshot.operations);
+      setMcpInputs(snapshot.mcpInputs ?? []);
+      setMcpApps(snapshot.mcpApps ?? []);
       setLoadedAt(Date.now());
       setUnreachable(false);
     } catch (error) {
@@ -42,7 +48,7 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
   }, [connection, discussionId, resolved]);
 
   useEffect(() => { void load(); }, [load, replying]);
-  const active = replying || operations.some((operation) => operation.outcome === "running" || operation.outcome === "awaiting_user");
+  const active = replying || mcpInputs.length > 0 || operations.some((operation) => operation.outcome === "running" || operation.outcome === "awaiting_user");
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => void load(), POLL_MS);
@@ -66,9 +72,11 @@ export function RunnerChatOperations({ discussionId, runnerUrl, runnerToken, rep
       </p>
     );
   }
-  if (visible.length === 0) return null;
+  if (visible.length === 0 && mcpInputs.length === 0 && mcpApps.length === 0) return null;
   return (
-    <section aria-label="Extension changes" className="mb-4 space-y-2">
+    <section aria-label="Extension changes and MCP requests" className="mb-4 space-y-2">
+      {mcpApps.map(app => <McpAppCard key={app.id} app={app} connection={connection} sessionId={runnerChatSessionId(discussionId)} onChanged={load} />)}
+      {mcpInputs.map(prompt => <McpInputCard key={prompt.id} prompt={prompt} connection={connection} sessionId={runnerChatSessionId(discussionId)} onChanged={() => void load()} />)}
       {visible.map((operation) => (
         <OperationCard key={operation.id} connection={connection} operation={operation} onChanged={() => void load()} />
       ))}

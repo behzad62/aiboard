@@ -30,7 +30,7 @@ const CONFIG: RunnerProviderConfig = {
 
 interface MockState {
   readonly base: string;
-  auth: "none" | "oauth";
+  auth: "none" | "oauth" | "bearer";
   readonly tokens: Map<string, number>;
   readonly codes: Map<string, { challenge: string; resource: string; redirectUri: string }>;
   tokenRequests: number;
@@ -41,10 +41,19 @@ interface MockState {
   expiresIn: number;
   expireSession?: boolean;
   initializeCount?: number;
+  modern?: boolean;
+  formAnswer?: unknown;
+  app?: boolean;
+  appReads?: number;
+  onToolCall?: (name:string)=>void;
+  taskRecovery?: "working" | "completed" | "wrong";
+  taskReads?: number;
+  taskCancels?: number;
+  taskCreated?: string;
 }
 
 /** Mock remote MCP server + OAuth authorization server on 127.0.0.1. */
-async function mockRemote(t: test.TestContext, auth: "none" | "oauth"): Promise<MockState> {
+async function mockRemote(t: test.TestContext, auth: "none" | "oauth" | "bearer"): Promise<MockState> {
   const state = { auth, tokens: new Map(), codes: new Map(), tokenRequests: 0, refreshes: 0, callCount: {}, issuedTokens: [], redirectMcp: false, expiresIn: 3600 } as unknown as MockState;
   const server: Server = createServer(async (request, response) => {
     try { await handle(state, request, response); } catch (error) { response.statusCode = 500; response.end(String(error)); }
@@ -71,6 +80,7 @@ async function handle(state: MockState, request: IncomingMessage, response: Serv
   if (url.pathname === "/mcp" && request.method === "DELETE") { response.statusCode = 204; response.end(); return; }
   if (url.pathname === "/mcp" && request.method === "POST") {
     if (state.redirectMcp) { response.writeHead(307, { location: "https://elsewhere.example/mcp" }); response.end(); return; }
+    if (state.auth==="bearer" && request.headers.authorization!=="Bearer fixture-bearer-secret") { response.writeHead(401);response.end();return; }
     if (state.auth === "oauth") {
       const token = /^Bearer (.+)$/.exec(request.headers.authorization ?? "")?.[1];
       const expires = token ? state.tokens.get(token) : undefined;
@@ -80,29 +90,61 @@ async function handle(state: MockState, request: IncomingMessage, response: Serv
         return;
       }
     }
-    const message = JSON.parse(await readBody(request)) as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; _meta?: { progressToken?: number } } };
+    const message = JSON.parse(await readBody(request)) as { id?: number; method?: string; params?: { name?: string; arguments?: Record<string, unknown>; requestState?: string; uri?: string; taskId?: string; inputResponses?: Record<string, unknown>; _meta?: { progressToken?: number } } };
     if (message.id === undefined) { response.statusCode = 202; response.end(); return; }
+    if (state.modern && message.method === "server/discover") return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { supportedVersions: ["2026-07-28"] } });
     if (message.method === "initialize") {
       state.initializeCount = (state.initializeCount ?? 0) + 1;
       state.expireSession = false;
       return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "mock-remote" } } }, { "mcp-session-id": "session-1" });
     }
     if (state.expireSession) return sendJson(response, 404, {});
-    if (request.headers["mcp-session-id"] !== "session-1" || request.headers["mcp-protocol-version"] !== "2025-06-18") return sendJson(response, 400, { error: "missing session headers" });
+    if (state.modern ? request.headers["mcp-protocol-version"] !== "2026-07-28" : request.headers["mcp-session-id"] !== "session-1" || request.headers["mcp-protocol-version"] !== "2025-06-18") return sendJson(response, 400, { error: "missing session headers" });
     if (message.method === "tools/list") {
       // An SSE response carrying a refused server request before the real result.
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(`data: ${JSON.stringify({ jsonrpc: "2.0", id: 99, method: "sampling/createMessage", params: {} })}\n\n`);
       response.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { tools: [
-        { name: "read_note", description: "Read a note", inputSchema: { type: "object", properties: { id: { type: "string" } } }, annotations: { readOnlyHint: true, destructiveHint: false } },
+        { name: "read_note", description: "Read a note", inputSchema: { type: "object", properties: { id: { type: "string" } } }, annotations: { readOnlyHint: true, destructiveHint: false }, ...(state.app ? { _meta: { ui: { resourceUri: "ui://notes/example.html" } } } : {}) },
         { name: "send_email", description: "Send an email", inputSchema: { type: "object" } },
         { name: "flaky_write", description: "Write that loses its response", inputSchema: { type: "object" }, annotations: { destructiveHint: false } },
       ] } })}\n\n`);
       return;
     }
+    if (state.taskRecovery && message.method === "tasks/get") {
+      assert.equal(message.params?.taskId,"persistent-task");
+      assert.equal(request.headers["mcp-name"],"persistent-task");
+      state.taskReads=(state.taskReads??0)+1;
+      if(state.taskRecovery==="working"){request.socket.destroy();return;}
+      return sendJson(response,200,{jsonrpc:"2.0",id:message.id,result:{resultType:"complete",
+        taskId:state.taskRecovery==="wrong"?"other-task":"persistent-task",createdAt:state.taskCreated,lastUpdatedAt:new Date().toISOString(),
+        ttlMs:60000,status:"completed",result:{content:[{type:"text",text:"verified recovered result"}]}}});
+    }
+    if(state.taskRecovery && message.method==="tasks/cancel"){
+      state.taskCancels=(state.taskCancels??0)+1;
+      return sendJson(response,200,{jsonrpc:"2.0",id:message.id,result:{resultType:"complete"}});
+    }
+    if (state.app && message.method === "resources/read") {
+      assert.equal(message.params?.uri, "ui://notes/example.html");
+      state.appReads = (state.appReads ?? 0) + 1;
+      return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { contents: [{ uri: "ui://notes/example.html", mimeType: "text/html;profile=mcp-app", text: "<html>UI-ONLY-HTML</html>", _meta:{ui:{csp:{resourceDomains:["https://cdn.example.com"]}}} }] } });
+    }
     if (message.method === "tools/call") {
       const name = message.params?.name ?? "";
       state.callCount[name] = (state.callCount[name] ?? 0) + 1;
+      state.onToolCall?.(name);
+      if(state.taskRecovery && name==="read_note"){
+        state.taskCreated=new Date().toISOString();
+        return sendJson(response,200,{jsonrpc:"2.0",id:message.id,result:{resultType:"task",taskId:"persistent-task",
+          createdAt:state.taskCreated,lastUpdatedAt:state.taskCreated,ttlMs:60000,pollIntervalMs:100,status:"working",content:[]}});
+      }
+      if (state.app && name === "read_note") return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "note ready" }], _meta: { appOnly: "UI-ONLY-META" } } });
+      if (state.modern && name === "read_note") {
+        if (!message.params?.inputResponses) return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { resultType: "input_required", requestState: "note-state", inputRequests: { answer: { method: "elicitation/create", params: { mode: "form", message: "Choose your note label", requestedSchema: { type: "object", properties: { label: { type: "string", minLength: 2 } }, required: ["label"] } } } } } });
+        assert.equal(message.params.requestState, "note-state");
+        state.formAnswer = message.params.inputResponses.answer;
+        return sendJson(response, 200, { jsonrpc: "2.0", id: message.id, result: { resultType: "complete", content: [{ type: "text", text: "note ready" }] } });
+      }
       if (name === "flaky_write") { request.socket.destroy(); return; }
       if (message.params?._meta?.progressToken !== undefined) {
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -194,7 +236,7 @@ async function fixture(t: test.TestContext) {
     generationTools: async (generation, sessionId, artifacts) => await runtime.chatTools(generation, sessionId, artifacts),
   });
   t.after(async () => { await sessions.close(); credentials.close(); await rm(root, { recursive: true, force: true }); });
-  return { root, extensions, runtime, sessions, seen, setSteps: (next: Step[]) => { steps = next; } };
+  return { root, extensions, runtime, sessions, seen, credentials, setSteps: (next: Step[]) => { steps = next; } };
 }
 
 function call(name: string, args: unknown): ModelTurn {
@@ -205,7 +247,7 @@ function textOf(result: ToolResult | undefined): string {
   return (result?.content ?? []).map((block) => block.type === "text" ? block.text : "").join("");
 }
 
-async function install(env: Awaited<ReturnType<typeof fixture>>, url: string, auth: "none" | "oauth") {
+async function install(env: Awaited<ReturnType<typeof fixture>>, url: string, auth: "none" | "oauth" | "bearer") {
   const view = await env.extensions.inspectSource({ type: "remote_http", url, serverName: "notes", auth }, UI);
   const plan = await env.extensions.planChange({ action: "install", inspectionId: view.inspectionId, scope: env.extensions.projectScope() }, UI);
   return { view, plan, operation: await env.extensions.applyChange({ planId: plan.planId, planDigest: plan.planDigest, key: `ui-${plan.planId}` }, UI) };
@@ -447,4 +489,293 @@ test("remote managed MCP is available in a Build with the Build permission profi
   assert.equal(refused.isError,true);
   assert.equal(remote.callCount.send_email ?? 0,0);
   } finally { await managed.close(); await binding.close(); await host.close(); }
+});
+
+test("managed modern MCP chat waits for a session-bound human answer and continues", async (t) => {
+  const remote = await mockRemote(t, "none"); remote.modern = true;
+  const env = await fixture(t);
+  const { operation } = await install(env, remote.base + "/mcp", "none");
+  assert.equal(operation.outcome, "succeeded");
+  await reviewTools(env, operation.result!.extensionId!);
+  env.setSteps([(request) => {
+    assert.ok(request.tools.some(tool => tool.name === "mcp.notes.read_note"));
+    return call("mcp.notes.read_note", { id: "n1" });
+  }, (_request, result) => {
+    assert.match(textOf(result), /note ready/);
+    return { blocks: [{ type: "text", text: "done" }], stopReason: "end_turn" };
+  }]);
+  await env.sessions.create({ sessionId: "mcp-form-chat", runtimeId: CONFIG.runtimeId });
+  await env.sessions.send("mcp-form-chat", { messageId: "form1", text: "read note" });
+  let prompt;
+  for (let i = 0; i < 100; i++) {
+    prompt = (await env.sessions.get("mcp-form-chat")).mcpInputs[0];
+    if (prompt) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.ok(prompt, "real chat publishes a pending form");
+  assert.equal(prompt.source, "notes");
+  assert.equal(remote.callCount.read_note, 1);
+  await assert.rejects(env.sessions.answerMcpInput("mcp-form-chat", prompt.id, { action: "accept", content: { label: "x" } }), /match/);
+  await env.sessions.answerMcpInput("mcp-form-chat", prompt.id, { action: "accept", content: { label: "user label" } });
+  const done = await env.sessions.settled("mcp-form-chat");
+  assert.equal(done.status, "idle");
+  assert.equal(done.mcpInputs.length, 0);
+  assert.deepEqual(remote.formAnswer, { action: "accept", content: { label: "user label" } });
+  assert.equal(remote.callCount.read_note, 2);
+});
+
+test("managed MCP chat publishes a separate app resource and excludes app-only data from the model transcript", async t => {
+  const remote = await mockRemote(t, "none"); remote.modern = true; remote.app = true;
+  const env = await fixture(t);
+  const { operation } = await install(env, remote.base + "/mcp", "none");
+  assert.equal(operation.outcome, "succeeded");
+  const reviewed=await env.extensions.extensionToolPolicy(operation.result!.extensionId!);
+  await env.extensions.setExtensionToolPolicy(operation.result!.extensionId!,{...reviewed.policy,reviewed:reviewed.discovered,
+    toolFilter:{default:"allow",allow:[],deny:[]}},UI);
+  env.setSteps([() => call("mcp.notes.read_note", {id:"n1"}), (_request, result) => {
+    assert.match(textOf(result), /note ready/);
+    assert.doesNotMatch(JSON.stringify(result), /UI-ONLY/);
+    return { blocks: [{ type: "text", text: "done" }], stopReason: "end_turn" };
+  }]);
+  await env.sessions.create({ sessionId: "app-chat", runtimeId: CONFIG.runtimeId });
+  await env.sessions.send("app-chat", { messageId: "app1", text: "show note" });
+  const done = await env.sessions.settled("app-chat");
+  assert.equal(done.status, "idle");
+  assert.equal(remote.appReads, 1);
+  assert.equal(done.mcpApps.length, 1);
+  assert.doesNotMatch(JSON.stringify(done), /UI-ONLY/);
+  const id = done.mcpApps[0].id;
+  const app = await env.sessions.getMcpApp("app-chat", id);
+  assert.match(app.html, /UI-ONLY-HTML/);
+  assert.deepEqual(app.resourceDomains,["https://cdn.example.com"]);
+  assert.equal(app.result._meta?.appOnly, "UI-ONLY-META");
+  assert.deepEqual(app.arguments, { id: "n1" });
+  assert.doesNotMatch(JSON.stringify(env.seen), /UI-ONLY/);
+  await env.sessions.create({ sessionId: "other-chat", runtimeId: CONFIG.runtimeId });
+  await assert.rejects(env.sessions.getMcpApp("other-chat", id), /expired or belongs/);
+  assert.deepEqual(app.allowedTools, ["read_note"]);
+  const denied = await env.sessions.stageMcpAppCall("app-chat",id,{name:"read_note",arguments:{id:"denied"}});
+  await env.sessions.answerMcpAppCall("app-chat",id,denied.id,{approve:false});
+  assert.equal(remote.callCount.read_note,1);
+  await assert.rejects(env.sessions.stageMcpAppCall("app-chat",id,{name:"send_email",arguments:{}}), /not available/);
+  const ticket = await env.sessions.stageMcpAppCall("app-chat",id,{name:"read_note",arguments:{id:"n2"}});
+  assert.equal(remote.callCount.read_note,1);
+  await assert.rejects(env.sessions.answerMcpAppCall("other-chat",id,ticket.id,{approve:true}), /unavailable/);
+  const reply = await env.sessions.answerMcpAppCall("app-chat",id,ticket.id,{approve:true});
+  assert.equal(reply.isError,false);
+  assert.equal(reply._meta?.appOnly,"UI-ONLY-META");
+  assert.equal(remote.callCount.read_note,2);
+  await assert.rejects(env.sessions.answerMcpAppCall("app-chat",id,ticket.id,{approve:true}), /unavailable/);
+  const revoked = await env.sessions.stageMcpAppCall("app-chat",id,{name:"read_note",arguments:{id:"n3"}});
+  const policy = await env.extensions.extensionToolPolicy(operation.result!.extensionId!);
+  await env.extensions.setExtensionToolPolicy(operation.result!.extensionId!, { ...policy.policy, reviewed: policy.discovered, toolFilter: {default:"deny",allow:[],deny:[]} }, UI);
+  assert.equal((await env.sessions.answerMcpAppCall("app-chat",id,revoked.id,{approve:true})).isError,true);
+  assert.equal(remote.callCount.read_note,2);
+  await env.sessions.dismissMcpApp("app-chat", id);
+  assert.equal((await env.sessions.get("app-chat")).mcpApps.length, 0);
+});
+
+test("remote managed HTTP provider forwards form answers to the original downstream continuation", async t => {
+  const env=await fixture(t);
+  const remote=await mockRemote(t,"none");remote.modern=true;
+  const {operation}=await install(env,remote.base+"/mcp","none");
+  const extensionId=operation.result!.extensionId!;
+  const tools=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...tools.policy,remoteExposure:true,reviewed:tools.discovered,
+    toolFilter:{default:"deny",allow:tools.discovered.map(({componentId})=>({componentId,toolName:"read_note"})),deny:[]}},UI);
+  const gateway=createRemotePluginToolProvider(env.runtime,{
+    generation:async()=>(await env.extensions.generation()).generation,
+    artifacts:new ArtifactStore(join(env.root,"gateway-artifacts")),workspacePath:join(env.root,"project"),
+  });
+  t.after(async()=>{await gateway.close?.();});
+  const identity={accountId:"account",clientId:"client",deviceId:"device"};
+  let prompts=0;
+  const answer=await gateway.invokeAdmitted!(identity,"mcp_tool_call",{serverId:"notes",toolName:"read_note",arguments:{id:"n1"},forwardMcpInput:true},
+    new AbortController().signal,()=>true,undefined,async (request,_signal,source)=>{
+      prompts++;assert.equal(source,"notes");assert.equal(request.method,"elicitation/create");
+      return {action:"accept",content:{label:"external answer"}};
+    });
+  assert.equal(answer.result.isError,false,JSON.stringify(answer.result));
+  assert.match(textOf(answer.result),/note ready/);
+  assert.equal(prompts,1);
+  assert.equal(remote.callCount.read_note,2);
+  assert.deepEqual(remote.formAnswer,{action:"accept",content:{label:"external answer"}});
+});
+
+test("managed HTTP task recovery uses a fresh client and never replays the original tool",async t=>{
+  const env=await fixture(t);
+  const remote=await mockRemote(t,"none");remote.modern=true;remote.taskRecovery="working";
+  const {operation}=await install(env,remote.base+"/mcp","none");
+  assert.equal(operation.outcome,"succeeded");
+  const extensionId=operation.result!.extensionId!;
+  const tools=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...tools.policy,remoteExposure:true,reviewed:tools.discovered,
+    toolFilter:{default:"deny",allow:tools.discovered.map(({componentId})=>({componentId,toolName:"read_note"})),deny:[]}},UI);
+  const makeGateway=()=>createRemotePluginToolProvider(env.runtime,{
+    generation:async()=>(await env.extensions.generation()).generation,
+    artifacts:new ArtifactStore(join(env.root,"gateway-artifacts")),workspacePath:join(env.root,"project"),
+  });
+  const gateway=makeGateway();
+  const identity={accountId:"account",clientId:"client",deviceId:"device"};
+  let receipt:import("../src/mcp-task-recovery.js").McpTaskRecoveryReceipt|undefined;
+  try {
+    const answer=await gateway.invokeAdmitted!(identity,"mcp_tool_call",{serverId:"notes",toolName:"read_note",arguments:{id:"n1"}},
+      new AbortController().signal,()=>true,undefined,undefined,r=>{receipt=r;});
+    assert.equal(answer.result.isError,true);
+    assert.ok(receipt);
+    assert.equal(receipt.taskId,"persistent-task");
+    assert.equal(remote.callCount.read_note,1);
+  }finally{await gateway.close?.();}
+  const restarted=makeGateway();t.after(async()=>{await restarted.close?.();});
+  remote.taskRecovery="wrong";
+  assert.equal(await restarted.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true),undefined);
+  remote.taskRecovery="completed";
+  const before=remote.taskReads;
+  assert.equal(await restarted.recoverTask!({...receipt!,componentDigest:"a".repeat(64)},AbortSignal.timeout(5000),()=>true),undefined);
+  assert.equal(remote.taskReads,before);
+  assert.equal(await restarted.recoverTask!({...receipt!,createdAt:"2000-01-01T00:00:00Z"},AbortSignal.timeout(5000),()=>true),undefined);
+  const recovered=await restarted.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true);
+  assert.equal(recovered?.isError,false,JSON.stringify(recovered));
+  assert.match(textOf(recovered!),/verified recovered result/);
+  assert.equal(remote.callCount.read_note,1);
+  const current=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...current.policy,reviewed:current.discovered,toolFilter:{default:"deny",allow:[],deny:[]}},UI);
+  const reads=remote.taskReads;
+  assert.equal(await restarted.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true),undefined);
+  assert.equal(remote.taskReads,reads);
+});
+
+for(const auth of ["bearer","oauth"] as const)test("authenticated task recovery: "+auth+" preserves exact grant, rejects replacement",async t=>{
+  const env=await fixture(t);
+  const remote=await mockRemote(t,auth);remote.modern=true;remote.taskRecovery="working";
+  if(auth==="oauth") remote.expiresIn=30;
+  const {operation}=await install(env,remote.base+"/mcp",auth);
+  if(auth==="oauth"){
+    const {url}=await env.extensions.beginSignIn(operation.id,UI);
+    const redirected=await fetch(url,{redirect:"manual"});
+    const callback=new URL(redirected.headers.get("location")!);
+    await env.extensions.completeSignIn(callback.searchParams.get("state")!,callback.searchParams.get("code")!);
+  }else{
+    await env.extensions.submitCredential(operation.id,"MCP_BEARER_TOKEN","fixture-bearer-secret",UI);
+  }
+  const installed=await env.extensions.operationStatus(operation.id,UI);
+  assert.equal(installed.outcome,"succeeded",JSON.stringify(installed.diagnostics));
+  const extensionId=installed.result!.extensionId!;
+  const tools=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...tools.policy,remoteExposure:true,reviewed:tools.discovered,
+    toolFilter:{default:"deny",allow:tools.discovered.map(({componentId})=>({componentId,toolName:"read_note"})),deny:[]}},UI);
+  const makeGateway=()=>createRemotePluginToolProvider(env.runtime,{
+    generation:async()=>(await env.extensions.generation()).generation,
+    artifacts:new ArtifactStore(join(env.root,"gateway-artifacts")),workspacePath:join(env.root,"project"),
+  });
+  const gateway=makeGateway();
+  let receipt:import("../src/mcp-task-recovery.js").McpTaskRecoveryReceipt|undefined;
+  try{
+    const answer=await gateway.invokeAdmitted!({accountId:"account",clientId:"client",deviceId:"device"},"mcp_tool_call",
+      {serverId:"notes",toolName:"read_note",arguments:{id:"n1"}},new AbortController().signal,()=>true,undefined,undefined,r=>{receipt=r;});
+    assert.equal(answer.result.isError,true);
+    assert.ok(receipt?.credentialBinding);
+    assert.equal(remote.callCount.read_note,1);
+  }finally{await gateway.close?.();}
+  const fresh=makeGateway();t.after(async()=>fresh.close?.());
+  remote.taskRecovery="completed";
+  const refreshes=remote.refreshes;
+  const recovered=await fresh.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true);
+  assert.match(textOf(recovered),/verified recovered result/);
+  assert.equal(remote.callCount.read_note,1);
+  if(auth==="oauth") assert.ok(remote.refreshes>refreshes);
+  const count=remote.taskReads;
+  assert.equal(await fresh.recoverTask!({...receipt!,credentialBinding:undefined},AbortSignal.timeout(5000),()=>true),undefined);
+  const meta=env.credentials.list(extensionId)[0]!;
+  const snapshot=env.credentials.taskCredential(meta.ref);
+  assert.equal(snapshot.lineage,receipt!.credentialBinding);
+  // Even replacing the same value with the same public reference is a new grant.
+  const replacement=env.credentials.put({extensionId,name:snapshot.name,kind:snapshot.kind,value:snapshot.value,
+    refreshToken:snapshot.refreshToken,expiresAt:snapshot.expiresAt,scope:snapshot.scope,resource:snapshot.resource,oauthClient:snapshot.oauthClient});
+  assert.equal(replacement.ref,meta.ref);
+  assert.notEqual(env.credentials.taskCredential(meta.ref).lineage,receipt!.credentialBinding);
+  assert.equal(await fresh.recoverTask!(receipt!,AbortSignal.timeout(5000),()=>true),undefined);
+  assert.equal(remote.taskReads,count);
+  assert.equal(remote.callCount.read_note,1);
+  assert.doesNotMatch(JSON.stringify(receipt),/fixture-bearer-secret|access-\d|refresh-1/);
+});
+
+test("managed HTTP App write requires explicit allowance, one approval, and current policy", async t => {
+  const remote = await mockRemote(t, "none"); remote.modern = true; remote.app = true;
+  const env = await fixture(t);
+  const { operation } = await install(env, remote.base + "/mcp", "none");
+  assert.equal(operation.outcome, "succeeded");
+  const extensionId=operation.result!.extensionId!;
+  await env.extensions.setToolPolicy(extensionId,"all",UI);
+  const policy=await env.extensions.extensionToolPolicy(extensionId);
+  const keys=policy.discovered.flatMap(({componentId})=>["send_email","flaky_write"].map(toolName=>({componentId,toolName})));
+  await env.extensions.setExtensionToolPolicy(extensionId,{...policy.policy,reviewed:policy.discovered,
+    toolFilter:{default:"allow",allow:keys,deny:[]}},UI);
+  env.setSteps([() => call("mcp.notes.read_note", {id:"n1"}), (_request, result) => {
+    assert.match(textOf(result), /note ready/);
+    assert.doesNotMatch(JSON.stringify(result), /UI-ONLY/);
+    return { blocks: [{ type: "text", text: "done" }], stopReason: "end_turn" };
+  }]);
+  await env.sessions.create({ sessionId: "app-chat", runtimeId: CONFIG.runtimeId });
+  await env.sessions.send("app-chat", { messageId: "app1", text: "show note" });
+  const done = await env.sessions.settled("app-chat");
+  assert.equal(done.status, "idle");
+  assert.equal(remote.appReads, 1);
+  assert.equal(done.mcpApps.length, 1);
+  assert.doesNotMatch(JSON.stringify(done), /UI-ONLY/);
+  const id=done.mcpApps[0].id;
+  const app=await env.sessions.getMcpApp("app-chat",id);
+  assert.ok(app.allowedTools?.includes("send_email"));
+  assert.ok(app.allowedTools?.includes("flaky_write"));
+  assert.equal(remote.callCount.send_email,undefined);
+  const denied=await env.sessions.stageMcpAppCall("app-chat",id,{name:"send_email",arguments:{subject:"denied"}});
+  assert.equal(denied.risk,"destructive");
+  await env.sessions.answerMcpAppCall("app-chat",id,denied.id,{approve:false});
+  assert.equal(remote.callCount.send_email,undefined);
+  const ticket=await env.sessions.stageMcpAppCall("app-chat",id,{name:"send_email",arguments:{subject:"approved"}});
+  ticket.arguments.subject="tampered";
+  const result=await env.sessions.answerMcpAppCall("app-chat",id,ticket.id,{approve:true});
+  assert.equal(result.isError,false,JSON.stringify(result));
+  assert.match(JSON.stringify(result.content),/approved/);
+  assert.doesNotMatch(JSON.stringify(result.content),/tampered/);
+  assert.equal(remote.callCount.send_email,1);
+  await assert.rejects(env.sessions.answerMcpAppCall("app-chat",id,ticket.id,{approve:true}),/unavailable/);
+  const uncertain=await env.sessions.stageMcpAppCall("app-chat",id,{name:"flaky_write",arguments:{}});
+  assert.equal(uncertain.risk,"write");
+  const failed=await env.sessions.answerMcpAppCall("app-chat",id,uncertain.id,{approve:true});
+  assert.equal(failed.isError,true);
+  assert.match(JSON.stringify(failed.content),/not retried/);
+  assert.equal(remote.callCount.flaky_write,1);
+  const revoked=await env.sessions.stageMcpAppCall("app-chat",id,{name:"send_email",arguments:{subject:"revoked"}});
+  const live=await env.extensions.extensionToolPolicy(extensionId);
+  await env.extensions.setExtensionToolPolicy(extensionId,{...live.policy,reviewed:live.discovered,
+    toolFilter:{default:"allow",allow:[],deny:[]}},UI);
+  assert.equal((await env.sessions.answerMcpAppCall("app-chat",id,revoked.id,{approve:true})).isError,true);
+  assert.equal(remote.callCount.send_email,1);
+});
+
+test("an App cannot combine tool output from an old credential with resources from a replacement",async t=>{
+  const env=await fixture(t);
+  const remote=await mockRemote(t,"bearer");remote.modern=true;remote.app=true;
+  const {operation}=await install(env,remote.base+"/mcp","bearer");
+  await env.extensions.submitCredential(operation.id,"MCP_BEARER_TOKEN","fixture-bearer-secret",UI);
+  const installed=await env.extensions.operationStatus(operation.id,UI);
+  assert.equal(installed.outcome,"succeeded");
+  const extensionId=installed.result!.extensionId!;
+  await reviewTools(env,extensionId);
+  const replace=()=>{
+    const saved=env.credentials.list(extensionId)[0]!;
+    env.credentials.put({extensionId,name:saved.name,kind:saved.kind,value:"fixture-bearer-secret"});
+  };
+  remote.onToolCall=name=>{if(name==="read_note")replace();};
+  env.setSteps([()=>call("mcp.notes.read_note",{id:"n1"}),(_request,result)=>{
+    assert.match(textOf(result),/note ready/);return {blocks:[{type:"text",text:"done"}],stopReason:"end_turn"};
+  }]);
+  await env.sessions.create({sessionId:"app-credential-race",runtimeId:CONFIG.runtimeId});
+  await env.sessions.send("app-credential-race",{messageId:"m1",text:"Read note"});
+  const done=await env.sessions.settled("app-credential-race");
+  assert.equal(done.status,"idle");
+  assert.equal(remote.callCount.read_note,1);
+  assert.equal(remote.appReads,undefined);
+  assert.deepEqual(done.mcpApps,[]);
 });

@@ -1,3 +1,4 @@
+import { appUri } from "./mcp-chat-app.js";
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import {
   freezeExecutionLifecycleRequirements,
@@ -186,8 +187,13 @@ function liveTransport(input: Readonly<{ run: ExecutionHostRunBinding; facade: S
             throw new McpSessionError("mcp_authority_required", "The first MCP request must retain its original launching call.");
           authorization = input.facade.authorizeFirstOperation(expected); first = false;
         } else authorization = input.facade.authorizeOperation({ ...expected, binding, grant });
+        const candidate = owner.appResource;
+        const app = owner.context.mcpGateway?.publishApp && candidate && appUri(candidate.uri) &&
+          input.request.expected?.protocolVersion === "2026-07-28" &&
+          input.request.expected.tools.some(tool => tool.name === candidate.toolName && tool.uiResourceUri === candidate.uri)
+          ? Object.freeze({ ...candidate }) : undefined;
         return await input.facade.request(authorization, { ...expected, binding },
-          (io) => performWithOutput(io, perform, input.request, signal, () => { written = true; }), timeoutMs, requestSignal);
+          (io) => performWithOutput(io, perform, input.request, signal, () => { written = true; }), timeoutMs, requestSignal, app);
       })();
       activeRequest = operation;
       try { return await operation; }

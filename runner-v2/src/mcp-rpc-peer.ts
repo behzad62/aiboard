@@ -1,3 +1,4 @@
+import { appToolMeta, appUri } from "./mcp-chat-app.js";
 import { acceptMcpProgress, type McpDispatchAuthorization, type McpProgressReporter } from "./mcp-gateway-tools.js";
 import type { McpDiscoveryTool } from "./runner-internal-execution-context.js";
 
@@ -10,6 +11,7 @@ export class McpProtocolError extends Error {
     super(message, options); this.name = "McpProtocolError";
   }
 }
+export const MODERN_STDIO_MCP_VERSION = "2026-07-28";
 export interface McpRpcWriter { write(payload: Uint8Array, timeoutMs: number): Promise<void> }
 interface Pending {
   readonly id: number;
@@ -27,6 +29,38 @@ interface Pending {
 export class McpRpcPeer {
   private buffer = Buffer.alloc(0);
   private nextId = 1;
+  private modernClientInfo?: { name: string; version: string };
+  get modern(): boolean { return this.modernClientInfo !== undefined; }
+
+  private modernMeta(info: { name: string; version: string }): Record<string, unknown> {
+    return {
+      "io.modelcontextprotocol/protocolVersion": MODERN_STDIO_MCP_VERSION,
+      "io.modelcontextprotocol/clientCapabilities": { extensions: { "io.modelcontextprotocol/tasks": {}, "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } }, elicitation: { form: {} } },
+      "io.modelcontextprotocol/clientInfo": info,
+    };
+  }
+
+  /** Only discovery is probed. Never retry or replay an actual tool invocation. */
+  async probeModern(writer: McpRpcWriter, info: { name: string; version: string }, timeoutMs: number, signal?: AbortSignal): Promise<unknown | undefined> {
+    let result: unknown;
+    try {
+      result = await this.request(writer, "server/discover", { _meta: this.modernMeta(info) }, timeoutMs, signal);
+    } catch (error) {
+      if (error instanceof McpProtocolError && error.code === "mcp_remote_error") return undefined;
+      throw error;
+    }
+    if (!object(result) || !Array.isArray(result.supportedVersions) || !result.supportedVersions.includes(MODERN_STDIO_MCP_VERSION)) return undefined;
+    this.modernClientInfo = info;
+    return result;
+  }
+
+  private paramsWithMeta(params: unknown, progressToken?: number): unknown {
+    if (!this.modernClientInfo && progressToken === undefined) return params;
+    if (!object(params)) return params;
+    return { ...params, _meta: { ...(object(params._meta) ? params._meta : {}),
+      ...(this.modernClientInfo ? this.modernMeta(this.modernClientInfo) : {}),
+      ...(progressToken === undefined ? {} : { progressToken }) } };
+  }
   private pending?: Pending;
   private failure?: McpProtocolError;
   private readonly maximumLineBytes: number;
@@ -67,7 +101,7 @@ export class McpRpcPeer {
       throw new McpProtocolError("mcp_protocol_invalid", "MCP request bounds are invalid.", "not_sent");
     let payload: Buffer;
     const id = this.nextId;
-    if (progress && object(params)) params = { ...params, _meta: { progressToken: id } };
+    params = this.paramsWithMeta(params, progress ? id : undefined);
     try { payload = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n"); }
     catch (cause) { throw new McpProtocolError("mcp_protocol_invalid", "MCP request cannot be encoded.", "not_sent", { cause }); }
     if (payload.length > this.maximumLineBytes) throw new McpProtocolError("mcp_output_limit", "MCP request exceeds its frame bound.", "not_sent");
@@ -88,7 +122,7 @@ export class McpRpcPeer {
       // Keep the owned writer alive long enough to send the protocol notification,
       // but never treat its acknowledgement as proof that the effect stopped.
       const cancellation = Buffer.from(JSON.stringify({
-        jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id, reason: "Cancelled by caller" },
+        jsonrpc: "2.0", method: "notifications/cancelled", params: this.paramsWithMeta({ requestId: id, reason: "Cancelled by caller" }),
       }) + "\n");
       const fail = () => this.fail("mcp_request_cancelled", "MCP request was cancelled; protocol idleness is not established.");
       const deadline = setTimeout(fail, Math.min(timeoutMs, 1_000));
@@ -133,7 +167,7 @@ export class McpRpcPeer {
 
   async notify(writer: McpRpcWriter, method: string, params: unknown, timeoutMs: number): Promise<void> {
     if (this.failure) throw this.failure;
-    const payload = Buffer.from(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+    const payload = Buffer.from(JSON.stringify({ jsonrpc: "2.0", method, params: this.paramsWithMeta(params) }) + "\n");
     if (payload.length > this.maximumLineBytes) throw new McpProtocolError("mcp_output_limit", "MCP notification exceeds its frame bound.", "not_sent");
     let timer: NodeJS.Timeout | undefined;
     try {
@@ -220,7 +254,7 @@ export async function listMcpStdioTools(peer: McpRpcPeer, writer: McpRpcWriter, 
   throw new Error("MCP tool discovery exceeded 20 pages.");
 }
 
-export function parseMcpToolList(value: unknown): readonly McpDiscoveryTool[] {
+export function parseMcpToolList(value: unknown, normalized = false): readonly McpDiscoveryTool[] {
   if (!object(value) || !Array.isArray(value.tools) || value.tools.length > 1024)
     throw new Error("MCP tools/list result is invalid or exceeds its tool bound.");
   const names = new Set<string>();
@@ -229,9 +263,13 @@ export function parseMcpToolList(value: unknown): readonly McpDiscoveryTool[] {
         value.inputSchema !== undefined && !object(value.inputSchema) || value.annotations !== undefined && !object(value.annotations))
       throw new Error("MCP tool name or schema is invalid or duplicated.");
     names.add(value.name);
+    const ui = normalized ? {resourceUri:appUri(value.uiResourceUri),modelOnly:value.modelOnly===true,appOnly:false} : appToolMeta(value._meta);
     const annotations = object(value.annotations) ? value.annotations : undefined;
     const tool = {
       name: value.name,
+      ...(ui.resourceUri ? { uiResourceUri: ui.resourceUri } : {}),
+      ...(ui.modelOnly ? { modelOnly: true as const } : {}),
+      ...(ui.appOnly ? { appOnly: true as const } : {}),
       ...(typeof value.description === "string" ? { description: value.description } : {}),
       ...(object(value.inputSchema) ? { inputSchema: structuredClone(value.inputSchema) } : {}),
       ...(annotations ? { annotations: {
@@ -242,7 +280,7 @@ export function parseMcpToolList(value: unknown): readonly McpDiscoveryTool[] {
     if (Buffer.byteLength(JSON.stringify(tool)) > 1024 * 1024) throw new Error("MCP tool schema exceeds its byte bound.");
     return freeze(tool);
   });
-  return Object.freeze(result);
+  return Object.freeze(result.filter(tool => !("appOnly" in tool)));
 }
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function freeze<T>(value: T): Readonly<T> { if (value && typeof value === "object") { for (const item of Object.values(value)) freeze(item); Object.freeze(value); } return value; }

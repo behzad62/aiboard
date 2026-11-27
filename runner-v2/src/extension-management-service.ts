@@ -774,12 +774,15 @@ export class ExtensionManagementService {
   }
 
   /** A pinned decision intersects the latest live restriction at listing and call time. */
-  async managedMcpToolAdmitted(entry: ManagedMcpServerEntry, schemaDigest: string, observedNames: readonly string[], toolName: string, remote = false): Promise<boolean> {
+  async managedMcpToolAdmitted(entry: ManagedMcpServerEntry, schemaDigest: string, observedNames: readonly string[], toolName: string, remote = false, explicit = false): Promise<boolean> {
     const registry = await this.registry.load();
     const extension = registry.extensions.find((item) => item.id === entry.extensionId);
     if (!extension?.enabled || extension.removedAt || !this.inScope(extension.scope) || extension.currentVersionId !== entry.versionId || extension.readiness.state !== "ready") return false;
     const live = registry.toolPolicies[entry.extensionId];
     if (!entry.toolPolicy || !live || live.versionId !== entry.versionId) return false;
+    const explicitlyAllowed = (policy: ExtensionToolPolicy) => policy.toolFilter.allow.some(key =>
+      key.componentId === entry.component.componentId && key.toolName === toolName);
+    if (explicit && (!explicitlyAllowed(entry.toolPolicy) || !explicitlyAllowed(live))) return false;
     return extensionToolAdmitted(entry.toolPolicy, entry.component, schemaDigest, observedNames, toolName, remote) &&
       extensionToolAdmitted(live, entry.component, schemaDigest, observedNames, toolName, remote);
   }

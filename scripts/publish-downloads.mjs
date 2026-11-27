@@ -112,6 +112,7 @@ function nativeRunnerPackageJson() {
     ...(runnerPackage.optionalDependencies ? { optionalDependencies: runnerPackage.optionalDependencies } : {}),
     dependencies: {
       "@modelcontextprotocol/server": pinnedVersion(rootPackage.dependencies?.["@modelcontextprotocol/server"], "@modelcontextprotocol/server"),
+      "@modelcontextprotocol/ext-tasks": pinnedVersion(rootPackage.dependencies?.["@modelcontextprotocol/ext-tasks"], "@modelcontextprotocol/ext-tasks"),
       playwright: playwrightVersion,
       tsx: tsxVersion,
       typescript: typescriptVersion,

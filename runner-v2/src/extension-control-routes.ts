@@ -32,6 +32,16 @@ export async function routeExtensions(request: IncomingMessage, response: Server
       const input = await body<{ messageId: string; text: string; history?: { role: "user" | "assistant"; text: string }[] }>(request);
       return send(response, 202, await sessions.send(segments[2], { messageId: input.messageId, text: input.text, ...(input.history ? { history: input.history } : {}) }));
     }
+    if (segments.length === 6 && segments[3] === "mcp-app" && segments[5] === "calls" && request.method === "POST")
+      return send(response, 200, await sessions.stageMcpAppCall(segments[2], segments[4], await body(request)));
+    if (segments.length === 7 && segments[3] === "mcp-app" && segments[5] === "calls" && request.method === "POST")
+      return send(response, 200, await sessions.answerMcpAppCall(segments[2], segments[4], segments[6], await body(request)));
+    if (segments.length === 5 && segments[3] === "mcp-app" && request.method === "GET")
+      return send(response, 200, await sessions.getMcpApp(segments[2], segments[4]));
+    if (segments.length === 5 && segments[3] === "mcp-app" && request.method === "DELETE")
+      return send(response, 200, await sessions.dismissMcpApp(segments[2], segments[4]));
+    if (segments.length === 5 && segments[3] === "mcp-input" && request.method === "POST")
+      return send(response, 200, await sessions.answerMcpInput(segments[2], segments[4], await body(request)));
     if (segments.length === 4 && segments[3] === "stop" && request.method === "POST") return send(response, 200, await sessions.stop(segments[2]));
     throw new ExtensionManagementError("not_found", "Unknown chat session endpoint.", 404);
   }

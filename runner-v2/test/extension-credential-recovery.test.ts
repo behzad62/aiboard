@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {mkdtemp,rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {ExtensionCredentialStore} from "../src/extension-credentials.js";
+
+test("credential lineage survives reopen and only exact same grant refresh preserves it",async t=>{
+  const root=await mkdtemp(join(tmpdir(),"mcp-credential-lineage-"));
+  t.after(async()=>rm(root,{recursive:true,force:true}));
+  const path=join(root,"credentials.enc"),key=Buffer.alloc(32,7);
+  let store=new ExtensionCredentialStore(path,key);
+  const client={tokenEndpoint:"https://issuer.example/token",clientId:"client",resource:"https://server.example/mcp"};
+  const input={extensionId:"extension",name:"oauth",kind:"oauth" as const,value:"token-one",refreshToken:"refresh-one",scope:"a b",resource:client.resource,oauthClient:client};
+  const meta=store.put(input), first=store.taskCredential(meta.ref);
+  assert.ok(!JSON.stringify(meta).includes(first.lineage));
+  store.close();store=new ExtensionCredentialStore(path,key);t.after(()=>store.close());
+  assert.equal(store.taskCredential(meta.ref).lineage,first.lineage);
+  const rotated=store.rotateOAuth(meta.ref,first.revision,{value:"token-two",refreshToken:"refresh-two",scope:"b a"},client);
+  assert.equal(rotated.lineage,first.lineage);
+  assert.notEqual(rotated.revision,first.revision);
+  assert.throws(()=>store.rotateOAuth(meta.ref,first.revision,{value:"stale"},client),/changed during refresh/);
+  const narrowed=store.rotateOAuth(meta.ref,rotated.revision,{value:"token-three",scope:"a"},client);
+  assert.notEqual(narrowed.lineage,rotated.lineage);
+  store.put(input);
+  assert.notEqual(store.taskCredential(meta.ref).lineage,narrowed.lineage);
+  assert.throws(()=>store.rotateOAuth(meta.ref,narrowed.revision,{value:"stale"},client),/changed during refresh/);
+  const live=store.taskCredential(meta.ref);
+  store.revoke({ref:meta.ref});
+  assert.throws(()=>store.rotateOAuth(meta.ref,live.revision,{value:"stale"},client),/changed during refresh/);
+});
