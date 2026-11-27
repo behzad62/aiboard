@@ -1,3 +1,5 @@
+import { McpAppCallError, McpChatApps, type McpChatAppSummary, type McpChatAppPayload } from "./mcp-chat-app.js";
+import { McpChatInputs, type McpChatPrompt } from "./mcp-chat-input.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -82,6 +84,8 @@ export interface ChatSessionSnapshot {
   readonly transitions: readonly ChatGenerationTransition[];
   readonly messages: readonly ChatSessionMessage[];
   readonly operations: readonly ExtensionOperation[];
+  readonly mcpInputs: readonly McpChatPrompt[];
+  readonly mcpApps: readonly McpChatAppSummary[];
   readonly usage?: NativeBuildUsageProjection;
   readonly error?: string;
   readonly updatedAt: string;
@@ -119,6 +123,8 @@ export class ChatAgentSessions {
   private readonly live = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly cache = new Map<string, StoredSession>();
   private readonly usage = new Map<string, NativeBuildUsageProjection>();
+  private readonly mcpInputs = new McpChatInputs();
+  private readonly mcpApps = new McpChatApps();
 
   constructor(private readonly options: ChatAgentSessionsOptions) {}
 
@@ -154,6 +160,38 @@ export class ChatAgentSessions {
     await mkdir(this.directory(request.sessionId), { recursive: true });
     await this.save(request.sessionId, session);
     return await this.snapshot(request.sessionId, session);
+  }
+
+  async getMcpApp(sessionId: string, id: string): Promise<McpChatAppPayload> {
+    await this.load(sessionId);
+    const app = this.mcpApps.get(sessionId, id);
+    if (!app) throw new ChatSessionError("mcp_app_missing", "This app has expired or belongs to another chat.", 404);
+    return app;
+  }
+  async stageMcpAppCall(sessionId: string, id: string, raw: unknown) {
+    await this.load(sessionId);
+    try { return this.mcpApps.stage(sessionId, id, raw); }
+    catch (error) { if (error instanceof McpAppCallError) throw new ChatSessionError("mcp_app_call", error.message, error.status); throw error; }
+  }
+  async answerMcpAppCall(sessionId: string, id: string, ticketId: string, raw: unknown) {
+    await this.load(sessionId);
+    if (!raw || typeof raw !== "object" || !("approve" in raw) || typeof raw.approve !== "boolean" || Object.keys(raw).length !== 1)
+      throw new ChatSessionError("mcp_app_call", "Explicit approval or denial is required.", 400);
+    try { return await this.mcpApps.answer(sessionId, id, ticketId, raw.approve); }
+    catch (error) { if (error instanceof McpAppCallError) throw new ChatSessionError("mcp_app_call", error.message, error.status); throw error; }
+  }
+  async dismissMcpApp(sessionId: string, id: string): Promise<{ ok: true }> {
+    await this.load(sessionId);
+    if (!this.mcpApps.dismiss(sessionId, id)) throw new ChatSessionError("mcp_app_missing", "This app has expired or belongs to another chat.", 404);
+    return { ok: true };
+  }
+
+  async answerMcpInput(sessionId: string, id: string, answer: unknown): Promise<{ ok: true }> {
+    await this.load(sessionId);
+    const result = this.mcpInputs.answer(sessionId, id, answer);
+    if (result === "missing") throw new ChatSessionError("mcp_input_missing", "This input request has expired or belongs to another chat.", 404);
+    if (result === "invalid") throw new ChatSessionError("mcp_input_invalid", "Input does not match the requested form.", 400);
+    return { ok: true };
   }
 
   async get(sessionId: string): Promise<ChatSessionSnapshot> {
@@ -205,7 +243,7 @@ export class ChatAgentSessions {
 
   async close(): Promise<void> {
     for (const live of this.live.values()) live.controller.abort(new Error("runner_shutdown"));
-    await Promise.all([...this.live.values()].map((live) => live.promise));
+    await Promise.all([this.mcpApps.close(), ...[...this.live.values()].map((live) => live.promise)]);
   }
 
   /** Generations bound by loaded sessions; their package versions are kept. */
@@ -251,7 +289,8 @@ export class ChatAgentSessions {
       const loop = await runAgentLoop({
         model, registry: budgeted, signal, maxTurns: MAX_TURNS_PER_MESSAGE,
         beforeModelTurn: () => runtime.ready(),
-        context: { runId: sessionId, sessionId, actor: { role: "worker", id: `chat:${config.runtimeId}` }, workspacePath: this.options.projectRoot, signal },
+        context: { runId: sessionId, sessionId, actor: { role: "worker", id: `chat:${config.runtimeId}` }, workspacePath: this.options.projectRoot, signal,
+          mcpGateway: { resolveInput: (request, inputSignal, source) => this.mcpInputs.resolve(sessionId, request, inputSignal, source), publishApp: (app, authority) => this.mcpApps.publish(sessionId, app, authority) } },
         initialMessages: session.transcript,
         // A chat answer is a text-only turn; reading several skills in a row is not a stall.
         readOnlyStall: { warnTurns: 30, suspendTurns: 39 },
@@ -302,7 +341,7 @@ export class ChatAgentSessions {
     const usage = this.usage.get(sessionId);
     return {
       sessionId, runtimeId: session.request.runtimeId, status: this.live.has(sessionId) ? "running" : session.status,
-      generation: session.generation, transitions: session.transitions, messages: session.visible, operations,
+      generation: session.generation, transitions: session.transitions, messages: session.visible, operations, mcpInputs: this.mcpInputs.list(sessionId), mcpApps: this.mcpApps.list(sessionId),
       ...(usage ? { usage } : {}), ...(session.error ? { error: session.error } : {}), updatedAt: session.updatedAt,
     };
   }

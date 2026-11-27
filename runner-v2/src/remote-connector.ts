@@ -1,3 +1,5 @@
+import type { McpTaskRecoveryReceipt, McpTaskReceiptRecorder } from "./mcp-task-recovery.js";
+import { RemoteMcpInputs } from "./mcp-chat-input.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
 
@@ -54,6 +56,7 @@ export interface RemoteStatusReport {
   readonly policy: { readonly shell: boolean; readonly approvals: boolean; readonly readOnly: boolean; readonly onlyHere: boolean; readonly audit: boolean };
   /** The shells a script can run in, such as "powershell 5.1" or "pwsh 7.6" (shell-inventory.ts), so a client can pick one. */
   readonly shells?: readonly string[];
+  readonly mcpTaskInput?: true;
 }
 
 export interface RemoteResponseMessage {
@@ -135,7 +138,8 @@ export interface RemotePluginToolProvider {
   list(): Promise<readonly RemotePluginToolInfo[]>;
   invoke(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal, beforeBroker?: () => boolean): Promise<ToolResult>;
   invokeAdmitted?(identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal: AbortSignal, beforeBroker?: () => boolean,
-    progress?: import("./mcp-gateway-tools.js").McpProgressReporter): Promise<RemoteInvocationResult>;
+    progress?: import("./mcp-gateway-tools.js").McpProgressReporter, resolveInput?: import("./mcp-optional-features.js").McpInputResolver, recordTask?: McpTaskReceiptRecorder): Promise<RemoteInvocationResult>;
+  recoverTask?(receipt: McpTaskRecoveryReceipt, signal: AbortSignal, allowed: () => boolean): Promise<ToolResult | undefined>;
   closeClient?(clientId: string): Promise<void>;
   close?(): Promise<void>;
 }
@@ -165,7 +169,7 @@ export const REMOTE_TOOL_ID_TO_RUNNER: Readonly<Record<string, string>> = Object
 });
 
 const IMAGE_RESULT_TOOL_IDS = new Set(["image_inspect", "capture_screenshot", "show_image", "mcp_tool_call"]);
-const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel"]);
+const JOB_TOOL_IDS: ReadonlySet<string> = new Set(["jobs_status", "jobs_events", "jobs_result", "jobs_cancel", "jobs_mcp_input"]);
 /** Results above this many encoded bytes are stored as an artifact and returned by outputRef. */
 export const INLINE_RESULT_MAX_BYTES = 256 * 1024;
 /** Stored-result bytes in one jobs_result page, except an image_inspect result, which comes back whole when a frame holds it. */
@@ -250,6 +254,7 @@ const PROTOCOL_VERSION = "1.0.0";
  * execution authority. A heartbeat alone never grants readiness.
  */
 export class RemoteConnector {
+  private readonly remoteMcpInputs = new RemoteMcpInputs();
   private readonly now: () => Date;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
@@ -263,6 +268,7 @@ export class RemoteConnector {
   private closed = false;
   private readonly completedSteps = new Set<string>();
   private readonly inFlight = new Set<InFlight>();
+  private readonly taskRecovery = new Map<string,number>();
   private readonly queue: InFlight[] = [];
   private readonly processStops = new Map<string, { identity: VerifiedRemoteIdentity; promise: Promise<void> }>();
   private lastClientId: string | undefined;
@@ -718,13 +724,15 @@ export class RemoteConnector {
       if (refusal) { await respond(rejected(request, "unauthorized")); return; }
       if (JOB_TOOL_IDS.has(request.toolId)) {
         const reader = this.jobReader(identity, request);
+        if (authorization && request.toolId==="jobs_status" && reader.clientId===identity.clientId) await this.recoverMcpTask(identity,request,authorization);
         const answer = this.jobTool(reader, request);
         const jobId = request.toolId === "jobs_result" || (request.toolId === "jobs_status" &&
-          (answer.data as { job?: RemoteJob }).job?.outputRef) ? jobArguments(request).jobId : undefined;
+          ((answer.data as { job?: RemoteJob }).job?.outputRef || (answer.data as { mcpInput?: unknown }).mcpInput)) ? jobArguments(request).jobId : undefined;
         await respond(answer.response, answer.data, jobId ? () => {
           try {
             const job = this.options.admission.getJob(reader, jobId);
-            return !!job && !this.resultWithheld(reader, job);
+            return !!job && !this.resultWithheld(reader, job) &&
+              (!(answer.data as { mcpInput?: unknown }).mcpInput || this.mcpInputEntry(reader, jobId) !== undefined);
           } catch { return false; }
         } : undefined);
         return;
@@ -894,7 +902,7 @@ export class RemoteConnector {
    * result only for shared process jobs. Private tool results and cancellation stay with the caller.
    */
   private jobReader(identity: VerifiedRemoteIdentity, request: RemoteRequest): VerifiedRemoteIdentity {
-    if (request.toolId === "jobs_cancel") return identity;
+    if (request.toolId === "jobs_cancel" || request.toolId === "jobs_mcp_input") return identity;
     let jobId: string;
     try { jobId = jobArguments(request).jobId; } catch { return identity; }
     if (this.options.admission.getJob(identity, jobId)) return identity;
@@ -904,6 +912,49 @@ export class RemoteConnector {
     // These jobs can contain private screen pixels or downstream tool data.
     if (job && ["capture_screenshot", "show_image", "mcp_tool_call"].includes(job.toolId)) return identity;
     return owner;
+  }
+
+  private mcpInputEntry(identity: VerifiedRemoteIdentity, jobId: string): InFlight | undefined {
+    return [...this.inFlight].find(entry => entry.jobId === jobId && entry.request.toolId === "mcp_tool_call" &&
+      entry.identity.accountId === identity.accountId && entry.identity.clientId === identity.clientId &&
+      entry.identity.deviceId === identity.deviceId && isRecord(entry.request.payload) &&
+      entry.request.payload.forwardMcpInput === true && this.canDispatch(entry));
+  }
+
+  private async recoverMcpTask(identity: VerifiedRemoteIdentity, request: RemoteRequest, authorization: RemoteAuthorization): Promise<void> {
+    const recover=this.options.pluginTools?.recoverTask;
+    if (!recover || request.operationClass!=="read") return;
+    const {jobId}=jobArguments(request);
+    const admission=this.options.admission;
+    const view=this.authorizedJobView(identity,request,jobId);
+    if (view.job.state!=="outcome_unknown" || view.job.toolId!=="mcp_tool_call" ||
+      this.resultWithheld(identity,view.job) || [...this.inFlight].some(entry=>entry.jobId===jobId)) return;
+    const now=this.now().getTime();
+    for (const [id,until] of this.taskRecovery) if (until!==Infinity && until<=now) this.taskRecovery.delete(id);
+    if (this.taskRecovery.has(jobId) || this.taskRecovery.size>=64) return;
+    const receipt=(()=>{try{return admission.mcpTask(identity,jobId);}catch{return undefined;}})();
+    if (!receipt) return;
+    this.taskRecovery.set(jobId,Infinity);
+    const signal=AbortSignal.timeout(5000);
+    const transport=this.transport;
+    const allowed=()=>{
+      try {
+        this.options.authenticator.verifyAuthorization(request,authorization,this.session);
+        const latest=this.authorizedJobView(identity,request,jobId);
+        return !this.closing && this.isReady() && this.transport===transport && !this.options.deviceStore.isRevoked() &&
+          (!this.options.isOwnerLockHeld || this.options.isOwnerLockHeld()) &&
+          this.options.deviceStore.load()?.epoch===request.deviceEpoch && !signal.aborted && latest.job.state==="outcome_unknown" && !this.resultWithheld(identity,latest.job) &&
+          receipt.expiresAt>this.now().getTime() && Date.parse(request.expiresAt)>this.now().getTime();
+      } catch {return false;}
+    };
+    try {
+      if (!allowed()) return;
+      const result=await recover(receipt,signal,allowed);
+      if (!result || !allowed()) return;
+      const stored=await this.storedResult(result,{isPlugin:true,runnerName:"mcp_tool_call"});
+      if (allowed()) admission.reconcileMcpTask(identity,jobId,receipt,result.isError?"failed":"completed",stored);
+    } catch { /* The original outcome remains unknown. Never replay it. */ }
+    finally {this.taskRecovery.set(jobId,this.now().getTime()+5000);}
   }
 
   private jobTool(identity: VerifiedRemoteIdentity, request: RemoteRequest): { response: RemoteResponseMessage; data: unknown } {
@@ -918,8 +969,15 @@ export class RemoteConnector {
         data = { ...view, job };
       } else {
         const progress = view.job.toolId === "mcp_tool_call" ? admission.mcpProgress(identity, args.jobId) : undefined;
-        data = progress ? { ...view, mcpProgress: progress } : view;
+        const mcpInput = args.mcpInput && this.mcpInputEntry(identity, args.jobId) ? this.remoteMcpInputs.read(args.jobId) : undefined;
+        data = { ...view, ...(progress ? {mcpProgress:progress}:{}), ...(mcpInput ? {mcpInput}:{}) };
       }
+    } else if (request.toolId === "jobs_mcp_input") {
+      this.requireResultAccess(identity, view.job);
+      if (request.operationClass !== "write" || !this.mcpInputEntry(identity, args.jobId) ||
+          !this.remoteMcpInputs.answer(args.jobId, args.inputResponses))
+        throw new RemoteAdmissionError("invalid_request", "MCP input is invalid, expired or unavailable.");
+      data = { accepted: true };
     } else if (request.toolId === "jobs_events") {
       data = admission.events(identity, args.jobId, args.cursor, args.limit);
     } else if (request.toolId === "jobs_result") {
@@ -1165,7 +1223,14 @@ export class RemoteConnector {
               admission.recordMcpProgress(identity, jobId, value);
             } : undefined;
             const outcome = await provider.invokeAdmitted(identity, request.toolId, request.payload, entry.controller.signal,
-              () => this.canDispatch(entry), report);
+              () => this.canDispatch(entry), report,
+              request.toolId === "mcp_tool_call" && isRecord(request.payload) && request.payload.forwardMcpInput === true
+                ? (input, signal, source) => this.canDispatch(entry)
+                  ? this.remoteMcpInputs.resolve(jobId, input, signal, source)
+                  : Promise.resolve({ action: "decline" }) : undefined,
+              request.toolId==="mcp_tool_call" ? receipt => {
+                if (this.canDispatch(entry)) admission.recordMcpTask(identity,jobId,receipt);
+              } : undefined);
             if (latestProgress && this.canDispatch(entry)) admission.recordMcpProgress(identity, jobId, latestProgress);
             result = outcome.result;
             brokerInvoked = outcome.brokerInvoked;
@@ -1388,20 +1453,22 @@ export class RemoteConnector {
     if (!report) return;
     try {
       void Promise.resolve(transport.send({ type: "status", state, reasonCode, runnerVersion: report.runnerVersion,
-        platform: report.platform, policy: { ...report.policy }, ...(report.shells ? { shells: [...report.shells] } : {}) })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
+        platform: report.platform, policy: { ...report.policy }, ...(this.options.pluginTools?.invokeAdmitted ? { mcpTaskInput: true } : {}), ...(report.shells ? { shells: [...report.shells] } : {}) })).catch(() => { /* readiness is advisory; socket loss is handled elsewhere */ });
     } catch { /* same */ }
   }
 }
 
-interface JobArguments { jobId: string; cursor?: string; limit?: number; maxBytes?: number }
+interface JobArguments { jobId: string; cursor?: string; limit?: number; maxBytes?: number; mcpInput?: true; inputResponses?: unknown }
 
 function jobArguments(request: RemoteRequest): JobArguments {
   if (!isRecord(request.payload)) throw new Error("Invalid job arguments.");
   const payload = request.payload;
   const allowed = request.toolId === "jobs_events" ? ["jobId", "cursor", "limit"] :
-    request.toolId === "jobs_result" ? ["jobId", "cursor", "maxBytes"] : ["jobId"];
+    request.toolId === "jobs_result" ? ["jobId", "cursor", "maxBytes"] : request.toolId === "jobs_status" ? ["jobId", "mcpInput"] : request.toolId === "jobs_mcp_input" ? ["jobId", "inputResponses"] : ["jobId"];
   if (Object.keys(payload).some((key) => !allowed.includes(key)) ||
     typeof payload.jobId !== "string" || !payload.jobId || payload.jobId.length > 256 ||
+    (payload.mcpInput !== undefined && payload.mcpInput !== true) ||
+    (request.toolId === "jobs_mcp_input" && !isRecord(payload.inputResponses)) ||
     (payload.cursor !== undefined && (typeof payload.cursor !== "string" || !payload.cursor || payload.cursor.length > 512)) ||
     (payload.limit !== undefined && (!Number.isInteger(payload.limit) || Number(payload.limit) < 1 || Number(payload.limit) > 256)) ||
     (payload.maxBytes !== undefined && (!Number.isSafeInteger(payload.maxBytes) || Number(payload.maxBytes) < 1))) {
@@ -1409,6 +1476,8 @@ function jobArguments(request: RemoteRequest): JobArguments {
   }
   return {
     jobId: payload.jobId,
+    ...(payload.mcpInput === true ? {mcpInput:true as const}:{}),
+    ...(payload.inputResponses !== undefined ? {inputResponses:payload.inputResponses}:{}),
     ...(typeof payload.cursor === "string" ? { cursor: payload.cursor } : {}),
     ...(typeof payload.limit === "number" ? { limit: payload.limit } : {}),
     ...(typeof payload.maxBytes === "number" ? { maxBytes: payload.maxBytes } : {}),

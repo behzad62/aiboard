@@ -145,6 +145,10 @@ export function initializeRemoteAdmissionSchema(database: DatabaseSync, key: Uin
       job_id TEXT PRIMARY KEY REFERENCES remote_jobs(job_id) ON DELETE CASCADE,
       progress REAL NOT NULL CHECK (progress >= 0), total REAL CHECK (total >= progress)
     )`);
+    database.exec(`CREATE TABLE IF NOT EXISTS remote_job_mcp_tasks (
+      job_id TEXT PRIMARY KEY REFERENCES remote_jobs(job_id) ON DELETE CASCADE,
+      expires_at INTEGER NOT NULL, iv BLOB NOT NULL, tag BLOB NOT NULL, ciphertext BLOB NOT NULL
+    )`);
     database.prepare(`INSERT INTO remote_store_metadata (name, value) VALUES ('schema_version', '2')
       ON CONFLICT(name) DO UPDATE SET value = excluded.value`).run();
     database.exec("COMMIT");

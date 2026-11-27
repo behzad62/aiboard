@@ -1,10 +1,13 @@
-import { createHash, randomBytes } from "node:crypto";
+import type { McpTaskRecoveryReceipt, McpTaskReceiptRecorder } from "./mcp-task-recovery.js";
+import { mcpOutput } from "./mcp-tools.js";
+import { appCallRisk, type McpAppResult, type McpAppCallRisk } from "./mcp-chat-app.js";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { access, constants, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { NativeTool, ToolExecutionContext, ToolResult } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { ExtensionCredentialStore } from "./extension-credentials.js";
+import type { ExtensionCredentialStore, OAuthCredentialClient } from "./extension-credentials.js";
 import {
   ExtensionManagementError,
   type AccessSummary,
@@ -32,6 +35,7 @@ import {
   pkcePair,
   registerOAuthClient,
   RemoteMcpClient,
+  type BoundMcpAuthorization,
   RemoteMcpError,
   type OAuthServerDescription,
   type OAuthTokens,
@@ -115,6 +119,37 @@ interface GatewayTool {
   readonly relayToolId: string;
 }
 
+interface StdioAppInvocation {
+  readonly risk?: McpAppCallRisk;
+  readonly recovery?: McpTaskRecoveryReceipt;
+  readonly signal?: AbortSignal;
+  readonly entry: ManagedMcpServerEntry;
+  readonly snapshot: { schemaDigest: string; names: readonly string[] };
+  readonly target: string;
+  readonly authorize: () => Promise<boolean>;
+  readonly capture: (result: McpCallResult) => void;
+}
+
+/** Stops waiting on abort without cancelling the shared operation itself. */
+async function waitUnlessAborted<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await operation;
+  signal.throwIfAborted();
+  let stop!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(signal.reason ?? new Error("Aborted."));
+    signal.addEventListener("abort", stop, { once: true });
+  });
+  try { return await Promise.race([operation, aborted]); }
+  finally { signal.removeEventListener("abort", stop); }
+}
+
+function sameMcpEntry(a: ManagedMcpServerEntry, b: ManagedMcpServerEntry): boolean {
+  return a.extensionId === b.extensionId && a.versionId === b.versionId &&
+    a.component.componentId === b.component.componentId && a.component.serverName === b.component.serverName &&
+    a.generation === b.generation;
+}
+const appUnavailable = (): McpAppResult => ({content:[{type:"text",text:"App tool is unavailable or no longer approved."}],isError:true});
+
 interface LaunchPlan {
   readonly spec: McpServerSpec;
   readonly secrets?: Readonly<{ directory: string; launcher: string; values: Readonly<Record<string, string>> }>;
@@ -132,6 +167,8 @@ const SERVER_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 export class ManagedMcpRuntime {
   private service: ExtensionManagementService | undefined;
   private readonly signIns = new Map<string, PendingSignIn>();
+  /** One refresh exchange per credential revision, never aborted by one caller. */
+  private readonly refreshes = new Map<string, Promise<ReturnType<ExtensionCredentialStore["taskCredential"]>>>();
 
   constructor(private readonly options: ManagedMcpRuntimeOptions) {}
 
@@ -444,7 +481,7 @@ export class ManagedMcpRuntime {
 
   private async checkRemote(extensionId: string, versionId: string, component: McpServerComponent): Promise<ExtensionReadiness> {
     const now = new Date().toISOString();
-    const client = this.remoteClient(extensionId, component);
+    const client = this.remoteClient(extensionId, component, true);
     try {
       const session = await client.initialize();
       const listed = await client.listTools();
@@ -490,37 +527,89 @@ export class ManagedMcpRuntime {
     this.signIns.delete(state);
     if (!pending || pending.expiresAt <= Date.now()) throw new ExtensionManagementError("sign_in_expired", "That sign-in link is unknown or expired; start sign-in again from AI Board.", 400);
     const tokens = await exchangeToken(pending.description, { grant_type: "authorization_code", code, redirect_uri: pending.redirectUri, client_id: pending.clientId, code_verifier: pending.verifier }, this.options.remoteFetch ?? fetch);
-    this.storeTokens(pending.extensionId, tokens, pending.description.resource);
+    this.storeTokens(pending.extensionId, tokens, pending.description.resource, {tokenEndpoint:pending.description.tokenEndpoint,clientId:pending.clientId,resource:pending.description.resource});
     await this.writeOAuthClient(pending.extensionId, { tokenEndpoint: pending.description.tokenEndpoint, clientId: pending.clientId, resource: pending.description.resource });
     return { extensionId: pending.extensionId };
   }
 
-  private storeTokens(extensionId: string, tokens: OAuthTokens, resource: string): void {
+  private storeTokens(extensionId: string, tokens: OAuthTokens, resource: string, oauthClient: OAuthCredentialClient): void {
     this.options.credentials.put({
-      extensionId, name: "oauth", kind: "oauth", value: tokens.accessToken, resource,
+      extensionId, name: "oauth", kind: "oauth", value: tokens.accessToken, resource, oauthClient,
       ...(tokens.refreshToken ? { refreshToken: tokens.refreshToken } : {}), ...(tokens.expiresAt ? { expiresAt: tokens.expiresAt } : {}), ...(tokens.scope ? { scope: tokens.scope } : {}),
     });
   }
 
   /** A current access token, refreshed inside the Runner when it is about to expire. */
-  private async oauthAuthorization(extensionId: string): Promise<string> {
-    const stored = this.options.credentials.list(extensionId).find((entry) => entry.name === "oauth");
-    if (!stored) throw new RemoteMcpError("needs_auth", "Not signed in.");
-    const token = this.options.credentials.reveal(stored.ref);
-    if (!token.expiresAt || Date.parse(token.expiresAt) - 60_000 > Date.now()) return `Bearer ${token.value}`;
-    const client = (await this.readOAuthClients())[extensionId];
-    if (!token.refreshToken || !client) throw new RemoteMcpError("needs_auth", "The sign-in expired.");
-    const refreshed = await exchangeToken({ tokenEndpoint: client.tokenEndpoint, resource: client.resource }, { grant_type: "refresh_token", refresh_token: token.refreshToken, client_id: client.clientId }, this.options.remoteFetch ?? fetch);
-    this.storeTokens(extensionId, { ...refreshed, ...(refreshed.refreshToken ?? token.refreshToken ? { refreshToken: refreshed.refreshToken ?? token.refreshToken } : {}) }, client.resource);
-    return `Bearer ${refreshed.accessToken}`;
+  private boundCredential(snapshot: ReturnType<ExtensionCredentialStore["taskCredential"]>): BoundMcpAuthorization {
+    return {header:"Bearer "+snapshot.value,binding:snapshot.lineage,current:()=>{
+      try {return this.options.credentials.taskCredential(snapshot.ref).revision===snapshot.revision;}
+      catch {return false;}
+    }};
   }
 
-  private remoteClient(extensionId: string, component: McpServerComponent): RemoteMcpClient {
+  private async oauthAuthorization(extensionId: string, expected?: string, signal?: AbortSignal): Promise<BoundMcpAuthorization> {
+    const stored = this.options.credentials.list(extensionId).find(entry=>entry.name==="oauth" && entry.kind==="oauth");
+    if (!stored) throw new RemoteMcpError("needs_auth","Not signed in.");
+    const token=this.options.credentials.taskCredential(stored.ref);
+    if (expected && token.lineage!==expected) throw new RemoteMcpError("needs_auth","Downstream sign-in changed.");
+    if (!token.expiresAt || Date.parse(token.expiresAt)-60_000>Date.now()) return this.boundCredential(token);
+    const client=token.oauthClient ?? (await this.readOAuthClients())[extensionId];
+    if (!token.refreshToken || !client || token.resource!==client.resource) throw new RemoteMcpError("needs_auth","The sign-in expired.");
+    // Legacy entries do not have a pinned client. They can still refresh
+    // normally, but recovery cannot prove their grant continuity.
+    if(expected && !token.oauthClient) throw new RemoteMcpError("needs_auth","Original OAuth grant cannot be verified after refresh.");
+    signal?.throwIfAborted();
+    if(this.options.credentials.taskCredential(stored.ref).revision!==token.revision)
+      throw new RemoteMcpError("needs_auth","Downstream sign-in changed before refresh.");
+    // A sent refresh request may already have rotated the refresh token at the
+    // issuer. Aborting it with one caller's signal (a cancelled tool call or a
+    // recovery deadline) would lose the rotated token and could trip reuse
+    // detection, so the exchange runs to its own deadline and is stored by
+    // compare-and-swap; callers only stop waiting for it.
+    const key=stored.ref+"|"+token.revision;
+    let exchange=this.refreshes.get(key);
+    if(!exchange){
+      const refreshToken=token.refreshToken;
+      exchange=exchangeToken({tokenEndpoint:client.tokenEndpoint,resource:client.resource},
+        {grant_type:"refresh_token",refresh_token:refreshToken,client_id:client.clientId},this.options.remoteFetch??fetch,Date.now())
+        .then(refreshed=>{
+          try {
+            return this.options.credentials.rotateOAuth(stored.ref,token.revision,
+              {value:refreshed.accessToken,refreshToken:refreshed.refreshToken,expiresAt:refreshed.expiresAt,scope:refreshed.scope},client);
+          } catch { throw new RemoteMcpError("needs_auth","Downstream sign-in changed during refresh."); }
+        })
+        .finally(()=>{this.refreshes.delete(key);});
+      this.refreshes.set(key,exchange);
+      exchange.catch(()=>undefined);
+    }
+    const next=await waitUnlessAborted(exchange,signal);
+    if(expected && next.lineage!==expected) throw new RemoteMcpError("needs_auth","Downstream authorization changed during refresh.");
+    return this.boundCredential(next);
+  }
+
+  private currentCredentialBinding(extensionId: string, component: McpServerComponent): string | undefined {
+    if (!component.auth || component.auth==="none") return undefined;
+    const name=component.auth==="oauth"?"oauth":"MCP_BEARER_TOKEN";
+    const stored=this.options.credentials.list(extensionId).find(entry=>entry.name===name);
+    if(!stored) throw new RemoteMcpError("needs_auth","Downstream credential is unavailable.");
+    return this.options.credentials.taskCredential(stored.ref).lineage;
+  }
+
+  private remoteClient(extensionId: string, component: McpServerComponent, apps = false, recovery?: {binding?:string}): RemoteMcpClient {
     return new RemoteMcpClient({
-      url: component.url!, ...(this.options.remoteFetch ? { fetch: this.options.remoteFetch } : {}),
-      authorization: async () => {
-        if (component.auth === "oauth") return await this.oauthAuthorization(extensionId);
-        if (component.auth === "bearer") return `Bearer ${this.credentialValues(extensionId, ["MCP_BEARER_TOKEN"]).MCP_BEARER_TOKEN}`;
+      url:component.url!, apps, ...(this.options.remoteFetch?{fetch:this.options.remoteFetch}:{}),
+      authorizeBeforeCredentials:!!recovery,
+      authorization:async signal=>{
+        if(recovery && this.currentCredentialBinding(extensionId,component)!==recovery.binding)
+          throw new RemoteMcpError("needs_auth","Downstream credential changed.");
+        if(component.auth==="oauth") return await this.oauthAuthorization(extensionId,recovery?.binding,signal);
+        if(component.auth==="bearer"){
+          const stored=this.options.credentials.list(extensionId).find(entry=>entry.name==="MCP_BEARER_TOKEN");
+          if(!stored) throw new RemoteMcpError("needs_auth","Downstream credential is unavailable.");
+          const token=this.options.credentials.taskCredential(stored.ref);
+          if(recovery && token.lineage!==recovery.binding) throw new RemoteMcpError("needs_auth","Downstream credential changed.");
+          return this.boundCredential(token);
+        }
         return undefined;
       },
     });
@@ -541,12 +630,13 @@ export class ManagedMcpRuntime {
   // ---- Generation binding -----------------------------------------------------------------------------
 
   /** Launch specs for a generation's managed servers that can start now, plus reasons for the rest. */
-  async launchPlans(generation: number): Promise<{ plans: LaunchPlan[]; unavailable: Array<{ serverName: string; reason: string }> }> {
+  async launchPlans(generation: number, only?: ManagedMcpServerEntry): Promise<{ plans: LaunchPlan[]; unavailable: Array<{ serverName: string; reason: string }> }> {
     const service = this.requireService();
     const reserved = new Set(this.options.reservedServerNames ?? []);
     const plans: LaunchPlan[] = [];
     const unavailable: Array<{ serverName: string; reason: string }> = [];
     for (const entry of await service.managedMcpServers(generation)) {
+      if (only && !sameMcpEntry(entry,only)) continue;
       const name = entry.component.serverName;
       if (entry.component.transport !== "stdio" || entry.component.route !== "runner") continue;
       if (reserved.has(name)) { unavailable.push({ serverName: name, reason: "A command-line MCP server already uses this name." }); continue; }
@@ -580,7 +670,7 @@ export class ManagedMcpRuntime {
    * real discovery and the lazy per-agent MCP sessions, closed with the chat turn.
    */
   async chatTools(generation: number, sessionId: string, artifacts: ArtifactStore): Promise<ChatMcpTools> {
-    const remote = await this.remoteChatTools(generation, artifacts);
+    const remote = await this.remoteChatTools(generation, artifacts, false, true);
     try {
       const local = await this.stdioChatTools(generation, sessionId, artifacts);
       return {
@@ -626,7 +716,7 @@ export class ManagedMcpRuntime {
   }
 
   /** Runner-hosted remote servers: one session per agent turn/generation, no local process. */
-  private async remoteChatTools(generation: number, artifacts: ArtifactStore, remotelyExposed = false): Promise<ChatMcpTools> {
+  private async remoteChatTools(generation: number, artifacts: ArtifactStore, remotelyExposed = false, apps = false): Promise<ChatMcpTools> {
     const tools: NativeTool<unknown>[] = [];
     const unavailable: Array<{ serverName: string; reason: string }> = [];
     const clients = new Set<RemoteMcpClient>();
@@ -649,7 +739,7 @@ export class ManagedMcpRuntime {
       if (component.transport !== "streamable_http" || !component.url) continue;
       if (!await this.requireService().managedMcpServerEligible(entry, remotelyExposed)) continue;
       if (reserved.has(component.serverName)) { unavailable.push({ serverName: component.serverName, reason: "A command-line MCP server already uses this name." }); continue; }
-      const client = this.remoteClient(entry.extensionId, component);
+      const client = this.remoteClient(entry.extensionId, component, apps);
       try {
         await client.initialize();
         const listed = await client.listTools();
@@ -667,7 +757,64 @@ export class ManagedMcpRuntime {
         });
         const created = createRemoteMcpTools(component.serverName, listed, async (name, args, context) => {
           try {
-            return await clientFor(context).callTool(name, args, context.signal, context.mcpGateway?.progress, context.mcpGateway?.authorize) as McpCallResult;
+            const downstream = clientFor(context);
+            const hasApp = !remotelyExposed && !!context.mcpGateway?.publishApp && !!listed.find(tool=>tool.name===name)?.uiResourceUri;
+            let binding: string | null | undefined;
+            let credentialObserved=false;
+            const credentialMatches=()=>{
+              try{return credentialObserved && binding!==null && this.currentCredentialBinding(entry.extensionId,component)===binding;}
+              catch{return false;}
+            };
+            const result = await downstream.callTool(name, args, context.signal, context.mcpGateway?.progress, context.mcpGateway?.authorize, context.mcpGateway?.resolveInput ? (request, signal) => context.mcpGateway!.resolveInput!(request, signal, component.serverName) : undefined,
+              remotelyExposed && context.mcpGateway?.recordTask
+                ? task => context.mcpGateway!.recordTask!({...task,extensionId:entry.extensionId,versionId:entry.versionId,
+                  generation:entry.generation,componentId:component.componentId,serverName:component.serverName,toolName:name,
+                  componentDigest:canonicalMcpDigest(component),schemaDigest:snapshot.schemaDigest}) : undefined,
+              hasApp ? observed=>{binding=observed;credentialObserved=true;} : undefined);
+            const uri = listed.find(tool => tool.name === name)?.uiResourceUri;
+            if (uri && !result.isError && context.mcpGateway?.publishApp && !remotelyExposed && credentialMatches()) {
+              try {
+                const resourceAuthorized=async()=>credentialMatches() &&
+                  (!context.mcpGateway?.authorize || await context.mcpGateway.authorize()) && credentialMatches();
+                const document = await downstream.readAppResourceDocument(uri, context.signal, resourceAuthorized);
+                if (document && !context.signal?.aborted && await resourceAuthorized()) {
+                  // Only the reviewed server inventory can determine a tool's risk.
+                  const candidates = listed.filter(tool=>admitted.has(tool.name) && !tool.modelOnly);
+                  const approved = await Promise.all(candidates.map(tool=>this.appTargetAllowed(entry,snapshot,tool.name,appCallRisk(tool))));
+                  const available = candidates.filter((_tool,index)=>approved[index]);
+                  const allowed = available.map(tool=>tool.name);
+                  const risks = Object.freeze(Object.fromEntries(available.map(tool=>[tool.name,appCallRisk(tool)])));
+                  const originRisk=appCallRisk(listed.find(tool=>tool.name===name)!);
+                  if (!await resourceAuthorized()) return result as McpCallResult;
+                  context.mcpGateway.publishApp({ server: component.serverName, tool: name, uri, ...document, arguments: args, result }, {
+                    tools: credentialMatches()?allowed:[],
+                    risks,
+                    call: async (target, input, signal, stillAllowed) => {
+                      const unavailable = appUnavailable;
+                      if (!allowed.includes(target) || !stillAllowed() || !credentialMatches()) return unavailable();
+                      const risk=risks[target]!;
+                      const eligible = async () => stillAllowed() && !signal.aborted && credentialMatches() &&
+                        await this.appTargetAllowed(entry,snapshot,target,risk) &&
+                        await this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, name, false) &&
+                        !await this.refusal(entry,originRisk==="destructive") && credentialMatches() && stillAllowed() && !signal.aborted;
+                      if (!await eligible()) return unavailable();
+                      const fresh = this.remoteClient(entry.extensionId, component, true,{binding:binding??undefined});
+                      try {
+                        await fresh.initialize(signal,true,eligible);
+                        const observed = await fresh.listTools(signal,eligible);
+                        const candidate = observed.find(tool => tool.name === target);
+                        if (canonicalMcpDigest(observed) !== snapshot.schemaDigest ||
+                          !candidate || candidate.modelOnly || appCallRisk(candidate)!==risk || !await eligible()) return unavailable();
+                        // Single-use host approval is the HTTP dispatch authority; every write rechecks it.
+                        const reply=await fresh.callTool(target, input, signal, undefined, eligible);
+                        return await eligible()?reply:{content:[{type:"text",text:"App call authority changed before its result could be delivered. It was not retried."}],isError:true};
+                      } finally { await fresh.close(); }
+                    },
+                  });
+                }
+              } catch { /* Optional presentation failure must not change the actual tool outcome. */ }
+            }
+            return result as McpCallResult;
           } catch (error) {
             const unknown = error instanceof RemoteMcpError && error.code === "outcome_unknown";
             return { isError: true, content: [{ type: "text", text: (unknown ? "OUTCOME UNKNOWN (not retried): " : "") + describe(error) }] };
@@ -739,10 +886,9 @@ export class ManagedMcpRuntime {
           return { isError: true, content: [{ type: "text", text: "Tool is unavailable." }], error: { code: "tool_unavailable", message: "Tool is unavailable." } };
         }
         if (refusal) return { isError: true, content: [{ type: "text", text: refusal }], error: { code: "permission_denied", message: refusal } };
-        if (!remotelyExposed) return await tool.execute(input, context);
         const authorize = async () => {
           try {
-            if (context.signal?.aborted || !await this.requireService().managedMcpToolAdmitted(entry, current.schemaDigest, current.names, toolName, true) ||
+            if (context.signal?.aborted || !await this.requireService().managedMcpToolAdmitted(entry, current.schemaDigest, current.names, toolName, remotelyExposed) ||
                 await this.refusal(entry, destructive)) return false;
             return !context.signal?.aborted && (context.mcpGateway?.authorize ? await context.mcpGateway.authorize() : true);
           } catch { return false; }
@@ -753,11 +899,12 @@ export class ManagedMcpRuntime {
   }
 
   private async stdioChatTools(generation: number, sessionId: string, artifacts: ArtifactStore,
-    build?: { binding: ExecutionHostRunBinding; permissionProfile: PermissionProfile }, remotelyExposed = false): Promise<ChatMcpTools> {
-    const launched = await this.launchPlans(generation);
+    build?: { binding: ExecutionHostRunBinding; permissionProfile: PermissionProfile }, remotelyExposed = false, appInvocation?: StdioAppInvocation): Promise<ChatMcpTools> {
+    const launched = await this.launchPlans(generation, appInvocation?.entry);
     const unavailable = launched.unavailable;
     const eligible = await Promise.all(launched.plans.map((plan) => this.requireService().managedMcpServerEligible(plan.entry, remotelyExposed)));
     const plans = launched.plans.filter((_plan, index) => eligible[index]);
+    if (appInvocation && !await appInvocation.authorize()) return { tools: [], unavailable, close: async () => undefined };
     if (!plans.length || !this.options.executionHost) return { tools: [], unavailable, close: async () => undefined };
     const host = this.options.executionHost;
     const servers = plans.map((plan) => plan.spec);
@@ -771,30 +918,45 @@ export class ManagedMcpRuntime {
     const binding = build?.binding ?? await host.bindRun({ runId, permissionProfile,
       capabilityContract: await createRunnerCapabilityContractSnapshot(capabilitiesConfig, this.options.stateDirectory), capabilitiesConfig });
     let manager: McpManager | undefined;
-    const snapshots = new Map<string, { schemaDigest: string; names: readonly string[] }>();
+    const snapshots = new Map<string, { schemaDigest: string; names: readonly string[]; stdioBinding?: string }>();
     try {
       if (!build) {
         await binding.recover({ maxRecords: 1_024, timeoutMs: 30_000 });
         await cleanupRecoveredMcpTransports(binding);
       }
       for (const plan of plans) if (plan.secrets) await provisionMcpSecrets(plan.secrets.directory, plan.secrets.values);
+      if (appInvocation && !await appInvocation.authorize()) throw new Error("App or task authority changed before discovery.");
       const discovery = this.options.internal.createMcpDiscoveryExecutor({ runId, servers, attestation });
       let discovered;
+      const stopDiscovery=()=>{void discovery.close().catch(()=>undefined);};
+      appInvocation?.signal?.addEventListener("abort",stopDiscovery,{once:true});
       try {
+        appInvocation?.signal?.throwIfAborted();
         discovered = await discovery.discover();
       } finally {
+        appInvocation?.signal?.removeEventListener("abort",stopDiscovery);
         await discovery.close();
       }
+      if (appInvocation && !await appInvocation.authorize()) throw new Error("App or task authority changed after discovery.");
       const launches = await this.options.internal.resolveMcpRuntimeLaunches({ servers, attestation });
+      if(appInvocation?.recovery && !discovered.servers.some(server=>server.name===appInvocation.recovery!.serverName &&
+        server.durableTasks && server.schemaDigest===appInvocation.recovery!.schemaDigest &&
+        canonicalMcpDigest([server.configDigest,server.executableDigest])===appInvocation.recovery!.stdioBinding))
+        throw new Error("Durable task discovery changed.");
       manager = new McpManager({
+        ...(appInvocation?.recovery?{recovery:Object.freeze({...appInvocation.recovery})}:{}),
         runId, discovery: discovered, cwd: this.options.projectRoot, servers,
         reattest: () => this.options.internal.resolveMcpRuntimeLaunches({ servers, attestation }),
-        transportFactory: this.wrapTransport(createExecutionHostMcpTransportFactory({ run: binding, permissionProfile, projectDirectory: this.options.projectRoot, launches }), async (name) => await this.beforeLaunch(plans, name)),
+        transportFactory: this.wrapTransport(createExecutionHostMcpTransportFactory({ run: binding, permissionProfile, projectDirectory: this.options.projectRoot, launches }), async (name) => {
+          if(appInvocation && !await appInvocation.authorize()) throw new Error("App or task authority changed before live launch.");
+          await this.beforeLaunch(plans,name);
+          if(appInvocation && !await appInvocation.authorize()) throw new Error("App or task authority changed during live launch preparation.");
+        }),
       });
       await manager.start();
       for (const server of discovered.servers) {
         if (server.status !== "ready" || !server.schemaDigest) unavailable.push({ serverName: server.name, reason: "It did not complete the MCP handshake." });
-        else snapshots.set(server.name, { schemaDigest: server.schemaDigest, names: server.tools.map((tool) => tool.name) });
+        else snapshots.set(server.name, { schemaDigest: server.schemaDigest, names: server.tools.map((tool) => tool.name), ...(server.durableTasks ? {stdioBinding:canonicalMcpDigest([server.configDigest,server.executableDigest])}:{} ) });
       }
     } catch (error) {
       await manager?.close().catch(() => undefined);
@@ -802,37 +964,190 @@ export class ManagedMcpRuntime {
       throw error;
     }
     const owned = manager;
-    const entries = new Map(plans.map((plan) => [plan.spec.name, plan.entry]));
-    const admitted = new Set<string>();
-    const gatewayTools: GatewayTool[] = [];
-    for (const { client, tool } of owned.toolEntries()) {
-      const entry = entries.get(client.spec.name);
-      const snapshot = snapshots.get(client.spec.name);
-      if (entry && snapshot && await this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)) {
-        admitted.add(JSON.stringify([client.spec.name, tool.name]));
-        if (remotelyExposed) gatewayTools.push({ serverId: client.spec.name, toolName: tool.name,
-          relayToolId: remoteToolName(entry, tool.name, snapshot.schemaDigest) });
+    try {
+      const entries = new Map(plans.map((plan) => [plan.spec.name, plan.entry]));
+      const admitted = new Set<string>();
+      const gatewayTools: GatewayTool[] = [];
+      for (const { client, tool } of owned.toolEntries()) {
+        const entry = entries.get(client.spec.name);
+        const snapshot = snapshots.get(client.spec.name);
+        if (appInvocation && (!entry || !sameMcpEntry(entry, appInvocation.entry) ||
+          snapshot?.schemaDigest !== appInvocation.snapshot.schemaDigest ||
+          tool.name !== appInvocation.target || tool.modelOnly ||
+          appCallRisk(tool)!==(appInvocation.recovery?"read_only":appInvocation.risk) ||
+          (!appInvocation.recovery && !await this.appTargetAllowed(entry,snapshot,tool.name,appCallRisk(tool))))) continue;
+        if (entry && snapshot && await this.requireService().managedMcpToolAdmitted(entry, snapshot.schemaDigest, snapshot.names, tool.name, remotelyExposed)) {
+          admitted.add(JSON.stringify([client.spec.name, tool.name]));
+          if (remotelyExposed) gatewayTools.push({ serverId: client.spec.name, toolName: tool.name,
+            relayToolId: remoteToolName(entry, tool.name, snapshot.schemaDigest) });
+        }
       }
+      const entriesForApps = owned.toolEntries();
+      const tools = createMcpTools(owned, artifacts, {
+        visualResults: remotelyExposed,
+        admit: (server, tool) => admitted.has(JSON.stringify([server, tool.name])),
+        ...(appInvocation ? { projectResult: (result: McpCallResult) => {
+          appInvocation.capture(result);
+          // The approved app receives the original result out of band. The
+          // broker output is only a status, not an additional model message.
+          return {isError: result.isError === true, content:[{type:"text" as const,text:"App call completed."}]};
+        }} : {}),
+        ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name, snapshots.get(server)!.schemaDigest) } : {}),
+        guard: (tool, server, discovered) => {
+          const entry = entries.get(server)!;
+          const snapshot = snapshots.get(server)!;
+          const guarded = this.guard(tool, entry, discovered.name, snapshot, remotelyExposed);
+          if (remotelyExposed && !appInvocation && snapshot.stdioBinding && entry.component.environment.length===0 &&
+              discovered.annotations?.readOnlyHint===true && discovered.annotations.destructiveHint===false)
+            return {...guarded,execute:async(input,context)=>await guarded.execute(input,{...context,mcpGateway:{...context.mcpGateway,
+              observeStdioTask:task=>context.mcpGateway?.recordTask?.({...task,extensionId:entry.extensionId,versionId:entry.versionId,
+                generation:entry.generation,componentId:entry.component.componentId,serverName:server,toolName:discovered.name,
+                componentDigest:canonicalMcpDigest(entry.component),schemaDigest:snapshot.schemaDigest,stdioBinding:snapshot.stdioBinding})}})};
+          if (build || remotelyExposed || appInvocation) return guarded;
+          const candidates = entriesForApps.filter(({client,tool}) => client.spec.name===server &&
+            admitted.has(JSON.stringify([server,tool.name])) && !tool.modelOnly).map(({tool})=>tool);
+          return {...guarded, execute: async (input, context) => {
+            const publish = context.mcpGateway?.publishApp;
+            if (!publish || !candidates.length) return await guarded.execute(input, context);
+            const approved=await Promise.all(candidates.map(candidate=>this.appTargetAllowed(entry,snapshot,candidate.name,appCallRisk(candidate))));
+            const available=candidates.filter((_candidate,index)=>approved[index]);
+            const allowed=available.map(candidate=>candidate.name);
+            const risks=Object.freeze(Object.fromEntries(available.map(candidate=>[candidate.name,appCallRisk(candidate)])));
+            return await guarded.execute(input, {...context,mcpGateway:{...context.mcpGateway,publishApp: app => {
+              publish(app, {tools:allowed, risks, call: async (target,args,signal,stillAllowed) => {
+                if (!allowed.includes(target)) return appUnavailable();
+                return await this.invokeStdioApp(entry,snapshot,discovered.name,appCallRisk(discovered)==="destructive",target,risks[target]!,args,artifacts,sessionId,signal,stillAllowed);
+              }});
+            }}});
+          }};
+        },
+      }) as NativeTool<unknown>[];
+      return {
+        tools,
+        binding,
+        unavailable,
+        gatewayTools,
+        status: () => owned.status(),
+        ...(remotelyExposed ? { closeClient: async (clientId: string) => {
+          await owned.closeAgent({ runId, sessionId, actor: { role: "remote", id: clientId } });
+        } } : {}),
+        close: async () => {
+          try { await owned.close(); } finally { if (!build) await binding.close(); }
+        },
+      };
+    } catch (error) {
+      try { await owned.close(); } finally { if (!build) await binding.close(); }
+      throw error;
     }
-    const tools = createMcpTools(owned, artifacts, {
-      visualResults: remotelyExposed,
-      admit: (server, tool) => admitted.has(JSON.stringify([server, tool.name])),
-      ...(remotelyExposed ? { name: (server: string, tool: { name: string }) => remoteToolName(entries.get(server)!, tool.name, snapshots.get(server)!.schemaDigest) } : {}),
-      guard: (tool, server, discovered) => this.guard(tool, entries.get(server)!, discovered.name, snapshots.get(server)!, remotelyExposed),
-    }) as NativeTool<unknown>[];
-    return {
-      tools,
-      binding,
-      unavailable,
-      gatewayTools,
-      status: () => owned.status(),
-      ...(remotelyExposed ? { closeClient: async (clientId: string) => {
-        await owned.closeAgent({ runId, sessionId, actor: { role: "remote", id: clientId } });
-      } } : {}),
-      close: async () => {
-        try { await owned.close(); } finally { if (!build) await binding.close(); }
-      },
+  }
+
+  async recoverRemoteTask(receipt: McpTaskRecoveryReceipt, artifacts: ArtifactStore, signal: AbortSignal, allowed: () => boolean): Promise<ToolResult | undefined> {
+    const service=this.requireService();
+    const current=await service.generation();
+    if (current.generation!==receipt.generation || receipt.expiresAt<=Date.now() || !allowed() || signal.aborted) return;
+    const entry=(await service.managedMcpServers(receipt.generation)).find(e=>e.extensionId===receipt.extensionId &&
+      e.versionId===receipt.versionId && e.component.componentId===receipt.componentId && e.component.serverName===receipt.serverName);
+    if (!entry || canonicalMcpDigest(entry.component)!==receipt.componentDigest) return;
+    if(entry.component.transport==="stdio")return await this.recoverStdioTask(entry,receipt,artifacts,signal,allowed);
+    if(entry.component.transport!=="streamable_http" || receipt.stdioBinding) return;
+    const credentialMatches=()=>{
+      try {
+        const authenticated=entry.component.auth==="oauth" || entry.component.auth==="bearer";
+        return authenticated===!!receipt.credentialBinding &&
+          this.currentCredentialBinding(entry.extensionId,entry.component)===receipt.credentialBinding;
+      }catch{return false;}
     };
+    if(!credentialMatches()) return;
+    const inventory=entry.toolPolicy?.reviewed.find(i=>i.componentId===receipt.componentId);
+    if (!inventory || inventory.schemaDigest!==receipt.schemaDigest ||
+      !await service.managedMcpToolAdmitted(entry,receipt.schemaDigest,inventory.toolNames,receipt.toolName,true) ||
+      !allowed() || signal.aborted) return;
+    const preflight=async()=>credentialMatches() && allowed() && !signal.aborted && (await service.generation()).generation===receipt.generation &&
+      await service.managedMcpToolAdmitted(entry,receipt.schemaDigest,inventory.toolNames,receipt.toolName,true) &&
+      credentialMatches() && allowed() && !signal.aborted;
+    const client=this.remoteClient(entry.extensionId,entry.component,false,{binding:receipt.credentialBinding});
+    try {
+      if ((await client.initialize(signal,true,preflight)).protocolVersion!=="2026-07-28" || !allowed() || signal.aborted) return;
+      const tools=await client.listTools(signal,preflight);
+      const tool=tools.find(t=>t.name===receipt.toolName);
+      if (!tool || canonicalMcpDigest(tools)!==receipt.schemaDigest) return;
+      const authorize=async()=>credentialMatches() && allowed() && !signal.aborted && (await service.generation()).generation===receipt.generation &&
+        await service.managedMcpToolAdmitted(entry,receipt.schemaDigest,tools.map(t=>t.name),tool.name,true) &&
+        !await this.refusal(entry,tool.annotations?.destructiveHint!==false) && credentialMatches() && allowed() && !signal.aborted;
+      if (!await authorize()) return;
+      const raw=await client.readTaskOutcome(receipt.taskId,receipt.createdAt,signal,authorize);
+      if (!raw || !await authorize()) return;
+      const output=await mcpOutput(raw as unknown as McpCallResult,artifacts,entry.component.serverName+"."+tool.name,true);
+      if (!await authorize()) return;
+      return {callId:"recovered-"+randomUUID(),toolName:"mcp_tool_call",...output};
+    } finally {await client.close();}
+  }
+
+  private async recoverStdioTask(entry: ManagedMcpServerEntry,receipt:McpTaskRecoveryReceipt,artifacts:ArtifactStore,signal:AbortSignal,allowed:()=>boolean):Promise<ToolResult|undefined>{
+    if(!receipt.stdioBinding || receipt.credentialBinding || entry.component.environment.length) return;
+    const service=this.requireService();
+    const inventory=entry.toolPolicy?.reviewed.find(i=>i.componentId===receipt.componentId);
+    if(!inventory || inventory.schemaDigest!==receipt.schemaDigest)return;
+    const authorize=async()=>allowed()&&!signal.aborted&&receipt.expiresAt>Date.now()&&
+      (await service.generation()).generation===receipt.generation&&
+      await service.managedMcpToolAdmitted(entry,receipt.schemaDigest,inventory.toolNames,receipt.toolName,true)&&
+      !await this.refusal(entry,false)&&allowed()&&!signal.aborted;
+    if(!await authorize())return;
+    const callId=randomUUID();
+    let raw:McpCallResult|undefined;
+    const extra=await this.stdioChatTools(receipt.generation,"task-recovery-"+callId,artifacts,undefined,true,
+      {entry,snapshot:{schemaDigest:receipt.schemaDigest,names:inventory.toolNames},target:receipt.toolName,authorize,recovery:receipt,signal,capture:value=>{raw=value;}});
+    try{
+      if(!extra.binding||extra.tools.length!==1||!await authorize())return;
+      const broker=new ToolBroker({permissionProfile:"full",workspacePath:this.options.projectRoot,artifacts,executionGrants:extra.binding.executionGrants});
+      const tool=extra.tools[0]!;
+      broker.register(tool);
+      const result=await broker.invoke({type:"tool_call",callId,name:tool.definition.name,arguments:{}},
+        {runId:extra.binding.runId,sessionId:"task-recovery-"+callId,actor:{role:"remote",id:"task-recovery-"+callId},
+          workspacePath:this.options.projectRoot,signal,mcpGateway:{authorize}});
+      if(!raw||!Array.isArray(raw.content)||!await authorize()||(result.isError&&raw.isError!==true))return;
+      const output=await mcpOutput(raw,artifacts,entry.component.serverName+"."+receipt.toolName,true);
+      if(await authorize())return {callId,toolName:"mcp_tool_call",...output};
+    }finally{await extra.close();}
+  }
+
+  private async appTargetAllowed(entry: ManagedMcpServerEntry, snapshot: StdioAppInvocation["snapshot"],
+    target: string, risk: McpAppCallRisk): Promise<boolean> {
+    // Credentialed stdio launchers do not yet bind a fresh process to the
+    // exact original App credential lineage. Do not enable writes there.
+    if (risk!=="read_only" && entry.component.transport==="stdio" && entry.component.environment.length) return false;
+    return await this.requireService().managedMcpToolAdmitted(entry,snapshot.schemaDigest,snapshot.names,target,false,risk!=="read_only") &&
+      !await this.refusal(entry,risk==="destructive");
+  }
+
+  private async invokeStdioApp(entry: ManagedMcpServerEntry, snapshot: StdioAppInvocation["snapshot"],
+    origin: string, originDestructive: boolean, target: string, risk: McpAppCallRisk, args: Record<string, unknown>, artifacts: ArtifactStore,
+    sessionId: string, signal: AbortSignal, stillAllowed: () => boolean): Promise<McpAppResult> {
+    const authorize = async () => stillAllowed() && !signal.aborted &&
+      await this.requireService().managedMcpToolAdmitted(entry,snapshot.schemaDigest,snapshot.names,origin,false) &&
+      await this.appTargetAllowed(entry,snapshot,target,risk) &&
+      !await this.refusal(entry,originDestructive) && stillAllowed() && !signal.aborted;
+    if (!await authorize()) return appUnavailable();
+    let raw: McpCallResult | undefined;
+    const callId = randomUUID();
+    // A fresh run and broker own this exact user-approved operation. Never
+    // reuse the chat turn's closed runtime or grant, nor expose other servers.
+    const extra = await this.stdioChatTools(entry.generation,sessionId+"-app-"+callId,artifacts,undefined,false,
+      {entry,snapshot,target,risk,authorize,signal,capture: result=>{raw=result;}});
+    try {
+      if (!extra.binding || extra.tools.length!==1 || !await authorize()) return appUnavailable();
+      const broker = new ToolBroker({permissionProfile:"full",workspacePath:this.options.projectRoot,artifacts,executionGrants:extra.binding.executionGrants});
+      const tool=extra.tools[0]!;
+      broker.register(tool);
+      const result=await broker.invoke({type:"tool_call",callId,name:tool.definition.name,arguments:args},
+        {runId:extra.binding.runId,sessionId,actor:{role:"worker",id:"mcp-app:"+callId},workspacePath:this.options.projectRoot,
+          signal,mcpGateway:{authorize}});
+      if (!raw || !Array.isArray(raw.content) || !await authorize() || (result.isError && raw.isError!==true))
+        return {content:[{type:"text",text:"App call did not return a verified result. Effects may have occurred; it was not retried."}],isError:true};
+      return {content:raw.content,isError:raw.isError===true,
+        ...(Object.hasOwn(raw,"structuredContent")?{structuredContent:raw.structuredContent}:{}),
+        ...(raw._meta?{_meta:raw._meta}:{})};
+    } finally { await extra.close(); }
   }
 
   // ---- Internals -------------------------------------------------------------------------------------
@@ -1022,7 +1337,7 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
     return await pending;
   };
   const invoke = async (identity: VerifiedRemoteIdentity, relayToolId: string, args: unknown, signal?: AbortSignal,
-    beforeBroker?: () => boolean, progress?: import("./mcp-gateway-tools.js").McpProgressReporter): Promise<RemoteInvocationResult> => {
+    beforeBroker?: () => boolean, progress?: import("./mcp-gateway-tools.js").McpProgressReporter, resolveInput?: import("./mcp-optional-features.js").McpInputResolver, recordTask?: McpTaskReceiptRecorder): Promise<RemoteInvocationResult> => {
     const loaded = await load(MCP_GATEWAY_TOOLS.some((tool) => tool.name === relayToolId));
     if (signal?.aborted || (beforeBroker && !beforeBroker())) {
       throw new McpProtocolError("mcp_request_cancelled", "Remote plugin was refused before dispatch.", "not_sent");
@@ -1085,7 +1400,7 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
         {
           runId: loaded.admitted.binding?.runId ?? `remote-plugin-${loaded.generation}`,
           sessionId, actor: { role: "remote", id: identity.clientId }, workspacePath: options.workspacePath,
-          ...(signal ? { signal } : {}), mcpGateway: { authorize: beforeBroker, progress },
+          ...(signal ? { signal } : {}), mcpGateway: { authorize: beforeBroker, progress, resolveInput, recordTask },
         },
       );
       return { result, brokerInvoked: true, ...(notSentCalls.has(callId) ? { stopEvidence: { effect: "no_effect" as const } } : {}) };
@@ -1115,6 +1430,7 @@ export function createRemotePluginToolProvider(runtime: ManagedMcpRuntime, optio
       return (await invoke(identity, relayToolId, args, signal, beforeBroker)).result;
     },
     invokeAdmitted: invoke,
+    recoverTask: (receipt,signal,allowed)=>runtime.recoverRemoteTask(receipt,options.artifacts,signal,allowed),
     async closeClient(clientId) {
       await pending?.catch(() => undefined);
       await current?.admitted.closeClient?.(clientId);

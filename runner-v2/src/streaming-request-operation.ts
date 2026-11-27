@@ -1,14 +1,15 @@
+import { McpStdioContinuation } from "./mcp-stdio-continuation.js";
 import type { OperationAuthorizationAssertion, SessionOperationAuthorization } from "./session-authority.js";
 
 export interface StreamingRequestChannel {
-  /** One application request, plus at most its exact MCP cancellation notification. */
+  /** One application request, plus only response-proven modern MCP continuation writes and exact cancellation. */
   write(payload: Uint8Array, timeoutMs: number): Promise<void>;
   waitForOutput(signal?: AbortSignal): Promise<boolean>;
   deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>): Promise<boolean>;
 }
 
 /** A compound request/response is one SessionAuthority operation. Its private
- * channel cannot be reused after completion, cannot write a second request and
+ * channel cannot be reused after completion, permits only response-proven continuations and
  * rechecks the SAME authorization immediately before every concrete effect.
  * A timeout does not claim that an already-started provider write was undone;
  * the owning family must close uncertain protocol ownership through the host.
@@ -36,6 +37,7 @@ export function createStreamingRequestOperation(input: Readonly<{
     perform: (channel: StreamingRequestChannel) => Promise<T>,
     timeoutMs: number,
     signal?: AbortSignal,
+    appResource?: Readonly<{ toolName: string; uri: string }>,
   ): Promise<T> {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 3_600_000) throw new Error("Session request timeout is invalid.");
     if (signal?.aborted) throw new Error("Session request was cancelled.");
@@ -54,6 +56,8 @@ export function createStreamingRequestOperation(input: Readonly<{
     const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
     let open = true; let writes = 0;
     let mcpCancellation: Buffer | undefined;
+    let modern: McpStdioContinuation | undefined;
+    let writing = false;
     let requestAcknowledged = false;
     let cancellationWritten = false;
     const pending = new Set<Promise<unknown>>();
@@ -72,17 +76,26 @@ export function createStreamingRequestOperation(input: Readonly<{
     const io: StreamingRequestChannel = Object.freeze({
       async write(payload: Uint8Array, writeTimeoutMs: number) {
         assertCurrent();
-        const cancellation = operation === "request" && writes === 1 && requestAcknowledged && !cancellationWritten &&
-          mcpCancellation !== undefined && Buffer.from(payload).equals(mcpCancellation);
-        if (writes >= maximumWrites && !cancellation) throw new Error(maximumWrites === 1 ? "A session request permits only one request write." : "A language request exceeded its bounded protocol writes.");
+        if (writing) throw new Error("Concurrent request writes are not allowed.");
+        const cancellation = operation === "request" && requestAcknowledged && !cancellationWritten &&
+          (modern ? modern.cancellation(payload) : writes === 1 && mcpCancellation !== undefined && Buffer.from(payload).equals(mcpCancellation));
+        const continuation = !cancellation && operation === "request" && requestAcknowledged && modern?.permit(payload);
+        if (writes >= maximumWrites && !cancellation && !continuation) throw new Error(maximumWrites === 1 ? "A session request permits only one request write or a response-proven MCP continuation." : "A language request exceeded its bounded protocol writes.");
         if (cancellation) cancellationWritten = true;
         else {
           writes++;
-          if (operation === "request") mcpCancellation = mcpCancellationFor(payload);
+          if (operation === "request" && writes === 1) {
+            mcpCancellation = mcpCancellationFor(payload);
+            const gate = new McpStdioContinuation(appResource ? Object.freeze({ ...appResource }) : undefined);
+            if (gate.begin(payload)) modern = gate;
+          }
         }
-        await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent, combined));
-        assertCurrent();
-        if (!cancellation) requestAcknowledged = true;
+        writing = true; requestAcknowledged = false;
+        try {
+          await observe(input.write(new Uint8Array(payload), Math.min(timeoutMs, writeTimeoutMs), assertCurrent, combined));
+          assertCurrent();
+          if (!cancellation) requestAcknowledged = true;
+        } finally { writing = false; }
       },
       async waitForOutput(waitSignal?: AbortSignal) {
         assertCurrent();
@@ -92,7 +105,10 @@ export function createStreamingRequestOperation(input: Readonly<{
       },
       async deliverOutput(deliver: (stream: "stdout" | "stderr", bytes: Uint8Array) => Promise<void>) {
         assertCurrent();
-        return await observe(input.deliver(authorization, expected, deliver, assertCurrent));
+        return await observe(input.deliver(authorization, expected, async (stream, bytes) => {
+          if (stream === "stdout") modern?.feed(bytes);
+          await deliver(stream, bytes);
+        }, assertCurrent));
       },
     });
     let timer: NodeJS.Timeout | undefined;

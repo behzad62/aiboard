@@ -1,5 +1,6 @@
+import { durableStdioTasks } from "./mcp-task-recovery.js";
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
-import { McpRpcPeer, listMcpStdioTools } from "./mcp-rpc-peer.js";
+import { McpRpcPeer, McpProtocolError, MODERN_STDIO_MCP_VERSION, listMcpStdioTools } from "./mcp-rpc-peer.js";
 import { McpConfigurationError, parseMcpCommand, snapshotMcpServerSpec, mcpConfigurationDigest, fixedMcpEnvelope, type McpFixedEnvelope } from "./mcp-configuration.js";
 import { lifecycleRequirementsDigest } from "./execution-lifecycle-policy.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -31,6 +32,11 @@ const MAX_MCP_LINE_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000;
 const DEFAULT_TERMINATION_TIMEOUT_MS = 15_000;
+/** A modern-protocol probe is a capability check, not a tool request. Some legacy
+ * servers silently ignore pre-initialize requests; waiting the whole request
+ * bound for them would exhaust discovery's budget before the legacy handshake.
+ * Matches the tunnel connector's probe bound. */
+const MODERN_PROBE_TIMEOUT_MS = 10_000;
 const GIT_PREFLIGHT_TIMEOUT_MS = 30_000;
 const GIT_PREFLIGHT_TERMINATION_TIMEOUT_MS = 15_000;
 
@@ -61,6 +67,8 @@ export interface RunnerConfiguredCapabilitiesAttestation {
 
 export interface McpDiscoveryTool {
   readonly name: string;
+  readonly uiResourceUri?: string;
+  readonly modelOnly?: true;
   readonly description?: string;
   readonly inputSchema?: Readonly<Record<string, unknown>>;
   readonly annotations?: Readonly<{
@@ -80,6 +88,8 @@ export interface McpDiscoveryResult {
     status: "ready" | "error";
     tools: readonly McpDiscoveryTool[];
     schemaDigest?: string;
+    protocolVersion?: typeof MODERN_STDIO_MCP_VERSION;
+    durableTasks?: true;
     cleanupVerified: true;
     errorCode?: "protocol_unavailable";
   }>[];
@@ -299,7 +309,7 @@ export function createRunnerInternalExecutionContext(
           if (closed) throw new Error("Runner internal execution context is closed.");
           started = true;
           const servers = await Promise.all(trusted.map(async (server) => {
-            const client = new DiscoveryClient({
+            const createClient = () => new DiscoveryClient({
               server,
               cwd: projectDirectory,
               environment,
@@ -309,11 +319,24 @@ export function createRunnerInternalExecutionContext(
               processKernel,
               principal,
             });
+            let client = createClient();
             active.add(client);
             let tools: readonly McpDiscoveryTool[] = [];
             let status: "ready" | "error" = "ready";
             try {
-              tools = await client.discover();
+              try {
+                tools = await client.discover();
+              } catch (error) {
+                // Some legacy servers exit or ignore a pre-initialize discovery request.
+                // A replacement is allowed only after the exact probe owner is reaped.
+                if (!client.probeTransportFailed) throw error;
+                await client.closeVerified();
+                active.delete(client);
+                if (closed || complete || closePromise) throw error;
+                client = createClient();
+                active.add(client);
+                tools = await client.discover(false);
+              }
             } catch {
               status = "error";
             } finally {
@@ -335,6 +358,8 @@ export function createRunnerInternalExecutionContext(
               status,
               tools,
               ...(schemaDigest ? { schemaDigest } : {}),
+              ...(status === "ready" && client.modern ? { protocolVersion: MODERN_STDIO_MCP_VERSION as typeof MODERN_STDIO_MCP_VERSION } : {}),
+              ...(status==="ready" && client.modern && client.durableTasks ? {durableTasks:true as const}:{}),
               cleanupVerified: true as const,
               ...(status === "error"
                 ? { errorCode: "protocol_unavailable" as const }
@@ -469,7 +494,11 @@ class DiscoveryClient {
     readonly principal: RunnerInternalPrincipal;
   }) {}
 
-  async discover(): Promise<readonly McpDiscoveryTool[]> {
+  get modern(): boolean { return this.peer.modern; }
+  probeTransportFailed = false;
+  durableTasks = false;
+
+  async discover(probe = true): Promise<readonly McpDiscoveryTool[]> {
     if (this.owned || this.closed) throw new Error("MCP discovery client is unavailable.");
     await reattestTrustedMcpServer(
       this.options.server,
@@ -500,6 +529,16 @@ class DiscoveryClient {
       }
       this.peer.feed("stdout", bytes);
     });
+    if (probe) {
+      try {
+        const modern = await this.peer.probeModern(owned, { name: "aiboard-runner-v2-discovery", version: "2" }, Math.min(this.options.requestTimeoutMs, MODERN_PROBE_TIMEOUT_MS));
+        if (modern !== undefined) { this.durableTasks=durableStdioTasks(modern); return await listMcpStdioTools(this.peer, owned, this.options.requestTimeoutMs); }
+      } catch (error) {
+        this.probeTransportFailed = !this.closed && !this.peer.modern && error instanceof McpProtocolError &&
+          ["mcp_request_timeout", "mcp_transport_unavailable", "mcp_write_outcome_unknown"].includes(error.code);
+        throw error;
+      }
+    }
     await this.peer.request(owned, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},

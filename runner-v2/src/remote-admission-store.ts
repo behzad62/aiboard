@@ -1,3 +1,4 @@
+import { validMcpTaskReceipt, type McpTaskRecoveryReceipt } from "./mcp-task-recovery.js";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
@@ -541,6 +542,48 @@ export class RemoteAdmissionStore {
     });
   }
 
+  recordMcpTask(identity: VerifiedRemoteIdentity, jobId: string, receipt: McpTaskRecoveryReceipt): void {
+    const principal=checkedPrincipal(identity);
+    this.transaction(()=>{
+      const row=this.ownedRow(principal,jobId);
+      const now=this.clock().getTime();
+      if (row.state!=="running" || row.dispatching!==1 || row.tool_id!=="mcp_tool_call" ||
+        !validMcpTaskReceipt(receipt) || receipt.expiresAt<=now || receipt.expiresAt>now+24*60*60_000) return;
+      const raw=Buffer.from(JSON.stringify(receipt));
+      const iv=randomBytes(12), cipher=createCipheriv("aes-256-gcm",this.key,iv);
+      cipher.setAAD(taskAad(principal,jobId,row.payload_digest,receipt.expiresAt));
+      const ciphertext=Buffer.concat([cipher.update(raw),cipher.final()]);
+      this.database.prepare("INSERT OR IGNORE INTO remote_job_mcp_tasks VALUES (?,?,?,?,?)")
+        .run(jobId,receipt.expiresAt,iv,cipher.getAuthTag(),ciphertext);
+    });
+  }
+
+  mcpTask(identity: VerifiedRemoteIdentity, jobId: string): McpTaskRecoveryReceipt | undefined {
+    const principal=checkedPrincipal(identity);
+    const row=this.ownedRow(principal,jobId);
+    if (row.state!=="outcome_unknown" || row.tool_id!=="mcp_tool_call" || row.result_expired) return;
+    if (row.result_expires_at && Date.parse(row.result_expires_at)<=this.clock().getTime()) return;
+    const stored=this.database.prepare("SELECT * FROM remote_job_mcp_tasks WHERE job_id=? AND expires_at>?")
+      .get(jobId,this.clock().getTime()) as {expires_at:number;iv:Uint8Array;tag:Uint8Array;ciphertext:Uint8Array}|undefined;
+    if (!stored) return;
+    const decipher=createDecipheriv("aes-256-gcm",this.key,stored.iv);
+    decipher.setAAD(taskAad(principal,jobId,row.payload_digest,stored.expires_at));
+    decipher.setAuthTag(stored.tag);
+    const receipt:unknown=JSON.parse(Buffer.concat([decipher.update(stored.ciphertext),decipher.final()]).toString("utf8"));
+    if (validMcpTaskReceipt(receipt) && receipt.expiresAt===stored.expires_at) return receipt;
+  }
+
+  reconcileMcpTask(identity: VerifiedRemoteIdentity, jobId: string, receipt: McpTaskRecoveryReceipt, resolution: "completed"|"failed", result: RemoteJobResult): void {
+    this.transaction(()=>{
+      const current=this.mcpTask(identity,jobId);
+      if (!current || JSON.stringify(current)!==JSON.stringify(receipt)) return;
+      const row=this.ownedRow(checkedPrincipal(identity),jobId);
+      const cancellation=this.cancellation(jobId);
+      if (cancellation) this.updateCancellation(cancellation,cancellation.stop,"known");
+      this.transition(row,resolution,"reconciled",result,"Verified terminal result of the original downstream MCP task.");
+    });
+  }
+
   recordMcpProgress(identity: VerifiedRemoteIdentity, jobId: string, value: McpProgress): void {
     const job = this.ownedRow(checkedPrincipal(identity), jobId);
     if (job.state !== "running" || job.tool_id !== "mcp_tool_call") return;
@@ -604,6 +647,7 @@ export class RemoteAdmissionStore {
     const principal = identity === undefined ? undefined : checkedPrincipal(identity);
     return this.transaction(() => {
       const now = this.clock().toISOString();
+      this.database.prepare("DELETE FROM remote_job_mcp_tasks WHERE expires_at<=?").run(Date.parse(now));
       const query = `SELECT * FROM remote_jobs WHERE result_expired = 0 AND result_expires_at IS NOT NULL AND result_expires_at <= ?` +
         (principal ? " AND account_id = ? AND client_id = ? AND device_id = ?" : "");
       const statement = this.database.prepare(query);
@@ -615,6 +659,7 @@ export class RemoteAdmissionStore {
         if (Number(tombstone.changes) !== 1) throw new Error("Remote job tombstone is missing or inconsistent.");
         this.database.prepare(`UPDATE remote_jobs SET result_expired = 1, output_ref = NULL,
           result_iv = NULL, result_tag = NULL, result_ciphertext = NULL WHERE job_id = ?`).run(row.job_id);
+        this.database.prepare("DELETE FROM remote_job_mcp_tasks WHERE job_id=?").run(row.job_id);
         this.appendEvent(row.job_id, "result_expired", row.trace_id, now);
       }
       return rows.length;
@@ -738,6 +783,7 @@ export class RemoteAdmissionStore {
       reconciliation_evidence = ? WHERE job_id = ?`)
       .run(state, now, Number(state === "running"), Number(clearRequest), Number(clearRequest), Number(clearRequest),
         expiresAt, outputRef, iv, tag, ciphertext, evidence ?? row.reconciliation_evidence, row.job_id);
+    if (terminal && state !== "outcome_unknown") this.database.prepare("DELETE FROM remote_job_mcp_tasks WHERE job_id=?").run(row.job_id);
     this.appendEvent(row.job_id, kind, row.trace_id, now);
     if (terminal) {
       const previous = this.database.prepare(`SELECT job_id, payload_digest, outcome FROM remote_job_tombstones
@@ -840,6 +886,10 @@ function checkedTime(value: Date | string): number {
 
 function requestAad(identity: VerifiedRemoteIdentity, jobId: string, digest: string): Buffer {
   return Buffer.from(JSON.stringify([identity.accountId, identity.clientId, identity.deviceId, jobId, digest]), "utf8");
+}
+
+function taskAad(identity: VerifiedRemoteIdentity, jobId: string, digest: string, expiresAt: number): Buffer {
+  return Buffer.from(JSON.stringify([identity.accountId,identity.clientId,identity.deviceId,jobId,digest,"mcp-task",expiresAt]));
 }
 
 function resultAad(identity: VerifiedRemoteIdentity, jobId: string, digest: string): Buffer {

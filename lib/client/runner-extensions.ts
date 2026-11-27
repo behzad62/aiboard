@@ -343,6 +343,8 @@ export interface RunnerChatSnapshotDto {
   transitions: { from: number; to: number; at: string; operationIds: string[]; boundary: string }[];
   messages: { id: string; role: "user" | "assistant"; text: string; at: string; toolCalls?: { name: string; isError?: boolean; errorCode?: string }[] }[];
   operations: ExtensionOperationDto[];
+  mcpInputs?: McpChatPromptDto[];
+  mcpApps?: McpChatAppDto[];
   error?: string;
   updatedAt: string;
 }
@@ -371,4 +373,40 @@ async function call<T>(connection: NativeRunnerConnection, path: string, init: R
   const data = await response.json().catch(() => ({})) as { error?: string; code?: string } & T;
   if (!response.ok) throw new NativeRunnerError(data.error ?? `Runner request failed (HTTP ${response.status}).`, response.status, data.code);
   return data;
+}
+
+
+export interface McpChatPromptDto {
+  id: string; source: string; message: string;
+  fields: { key: string; title: string; type: "string" | "number" | "integer" | "boolean"; description?: string; required: boolean; choices?: (string | number | boolean)[]; minimum?: number; maximum?: number; minLength?: number; maxLength?: number }[];
+}
+
+export function answerRunnerMcpInput(connection: NativeRunnerConnection, sessionId: string, id: string, answer: { action: "accept" | "decline" | "cancel"; content?: Record<string, string | number | boolean> }): Promise<{ ok: true }> {
+  return call(connection, "/v2/chat-sessions/" + encodeURIComponent(sessionId) + "/mcp-input/" + encodeURIComponent(id), { method: "POST", body: JSON.stringify(answer) });
+}
+
+export interface McpChatAppDto {
+  id: string; server: string; tool: string; uri: string; expiresAt: number;
+}
+export interface McpChatAppPayloadDto extends McpChatAppDto {
+  allowedTools?: readonly string[];
+  resourceDomains?: readonly string[];
+  html: string; arguments: Record<string, unknown>;
+  result: { content: unknown[]; isError: boolean; structuredContent?: unknown; _meta?: Record<string, unknown> };
+}
+export function getRunnerMcpApp(connection: NativeRunnerConnection, sessionId: string, id: string): Promise<McpChatAppPayloadDto> {
+  return call(connection, "/v2/chat-sessions/" + encodeURIComponent(sessionId) + "/mcp-app/" + encodeURIComponent(id), { method: "GET" });
+}
+export function dismissRunnerMcpApp(connection: NativeRunnerConnection, sessionId: string, id: string): Promise<{ ok: true }> {
+  return call(connection, "/v2/chat-sessions/" + encodeURIComponent(sessionId) + "/mcp-app/" + encodeURIComponent(id), { method: "DELETE" });
+}
+
+export interface McpAppCallTicketDto { risk?: "read_only" | "write" | "destructive"; id: string; name: string; arguments: Record<string, unknown>; expiresAt: number }
+export function stageRunnerMcpAppCall(connection: NativeRunnerConnection, sessionId: string, appId: string, name: string, args: Record<string, unknown>): Promise<McpAppCallTicketDto> {
+  return call(connection, "/v2/chat-sessions/" + encodeURIComponent(sessionId) + "/mcp-app/" + encodeURIComponent(appId) + "/calls",
+    { method: "POST", body: JSON.stringify({ name, arguments: args }) });
+}
+export function answerRunnerMcpAppCall(connection: NativeRunnerConnection, sessionId: string, appId: string, ticketId: string, approve: boolean): Promise<McpChatAppPayloadDto["result"]> {
+  return call(connection, "/v2/chat-sessions/" + encodeURIComponent(sessionId) + "/mcp-app/" + encodeURIComponent(appId) + "/calls/" + encodeURIComponent(ticketId),
+    { method: "POST", body: JSON.stringify({ approve }) });
 }

@@ -17,6 +17,8 @@ export const gatewayCallSchema = z.object({
   toolName: z.string().min(1).max(256),
   arguments: z.record(z.string(), z.unknown()).optional(),
   timeoutMs: z.number().int().min(1).max(120_000).optional(),
+  // Internal signed relay capability, never exposed as a public MCP tool argument.
+  forwardMcpInput: z.literal(true).optional(),
 }).strict();
 export type GatewayInput = z.infer<typeof gatewayCallSchema>;
 

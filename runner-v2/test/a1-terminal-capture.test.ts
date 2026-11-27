@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { buildSourceManifest } from "../src/source-manifest.js";
-import { runGitBytes } from "./support/git-fixture.js";
+import * as gitFixture from "./support/git-fixture.js";
 import { A1_DATABASES, captureA1Terminal, finishA1Capture, readA1Database, writeA1File, type A1CaptureInput } from "./support/a1-terminal-capture.js";
 import { a1NestedReferences } from "./support/a1-terminal-references.js";
 
@@ -49,7 +49,7 @@ async function fixture() {
   const fixtureRoot = join(root, "fixture"); fs.mkdirSync(fixtureRoot);
   const project = join(fixtureRoot, "project"); const state = join(fixtureRoot, "state"); const runRoot = join(state, "run");
   fs.mkdirSync(project); fs.mkdirSync(runRoot, { recursive: true });
-  await runGitBytes({ cwd: project, args: ["init", "--quiet"] });
+  await gitFixture.runGitBytes({ cwd: project, args: ["init", "--quiet"] });
   const artifacts = new ArtifactStore(join(state, "artifacts"));
   const binary = Buffer.from([0, 255, 13, 10, 65]); const raw = await artifacts.put(binary, "application/octet-stream");
   const src = Buffer.from("source one\n"); const amended = Buffer.from("source two\r\n");
@@ -216,9 +216,9 @@ test("A1 retains original binary Git commit/tree/blob objects after fixture clea
   const destination = fs.realpathSync.native(fs.mkdtempSync(join(tmpdir(), "aiboard-a1-retained-control-"))); fs.rmdirSync(destination);
   try {
     fs.writeFileSync(join(f.input.project, "binary.dat"), f.binary);
-    await runGitBytes({ cwd: f.input.project, args: ["add", "binary.dat"] });
-    await runGitBytes({ cwd: f.input.project, args: ["commit", "--quiet", "-m", "fixture"] });
-    const commit = (await runGitBytes({ cwd: f.input.project, args: ["rev-parse", "HEAD"] })).stdout.toString("utf8").trim();
+    await gitFixture.runGitBytes({ cwd: f.input.project, args: ["add", "binary.dat"] });
+    await gitFixture.runGitBytes({ cwd: f.input.project, args: ["commit", "--quiet", "-m", "fixture"] });
+    const commit = (await gitFixture.runGitBytes({ cwd: f.input.project, args: ["rev-parse", "HEAD"] })).stdout.toString("utf8").trim();
     f.dbs["scheduler.sqlite"]!.prepare("INSERT INTO scheduler_events VALUES ('snapshot','run_t8_spine',3,'project_docs.handoff_snapshot_committed','2026-10-13T00:00:00Z','{\"role\":\"runner\",\"id\":\"test\"}','snapshot',?)").run(JSON.stringify({ commit, stopKind: "paused" }));
     const receipt = await captureA1Terminal({ ...f.input, destination });
     const blob = receipt.snapshots[0]!.entries.find((e) => e.path === "binary.dat")!;
@@ -250,8 +250,9 @@ function captureWithFs(io: typeof fs): typeof captureA1Terminal {
   const source = fs.readFileSync(url, "utf8").replaceAll("import.meta.url", JSON.stringify(url.href));
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2023, esModuleInterop: true } }).outputText;
   const exports: Record<string, unknown> = {};
+  // git-fixture loads the whole Runner, whose ESM-only dependencies (ext-tasks) cannot be required as CommonJS; reuse the ESM instance.
   const actualRequire = createRequire(url);
-  runInNewContext(compiled, { exports, require: (name: string) => name === "node:fs" ? io : actualRequire(name), Buffer, TextDecoder, URL, performance, process, console, __filename: fileURLToPath(url) });
+  runInNewContext(compiled, { exports, require: (name: string) => name === "node:fs" ? io : name === "./git-fixture.js" ? gitFixture : actualRequire(name), Buffer, TextDecoder, URL, performance, process, console, __filename: fileURLToPath(url) });
   return exports.captureA1Terminal as typeof captureA1Terminal;
 }
 for (const failure of ["flush", "close", "read-back"] as const) test("A1 actual receipt " + failure + " failure leaves no success-named marker", async () => {

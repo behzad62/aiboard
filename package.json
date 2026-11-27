@@ -53,6 +53,10 @@
     "@anthropic-ai/sdk": "^0.110.0",
     "@github/copilot-sdk": "1.0.6",
     "@google/genai": "^2.10.0",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/ext-apps": "2.0.4",
+    "@modelcontextprotocol/ext-tasks": "0.2.3",
     "@modelcontextprotocol/server": "2.4.0",
     "@radix-ui/react-label": "^2.1.11",
     "@radix-ui/react-select": "^2.3.2",
@@ -79,7 +83,6 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
-    "@modelcontextprotocol/client": "2.4.0",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.3.2",
     "@types/node": "^26.1.0",

@@ -129,6 +129,7 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       const expectedMcpSdkVersion = rootPackageJson.dependencies?.["@modelcontextprotocol/server"]
         ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
       check(`${path} pins the MCP server SDK from the root package`, !!expectedMcpSdkVersion && packageJson.dependencies?.["@modelcontextprotocol/server"] === expectedMcpSdkVersion);
+      check(`${path} pins the Tasks extension`, packageJson.dependencies?.["@modelcontextprotocol/ext-tasks"] === rootPackageJson.dependencies?.["@modelcontextprotocol/ext-tasks"]);
       check(`${path} no longer ships the v1 MCP SDK`, packageJson.dependencies?.["@modelcontextprotocol/sdk"] === undefined);
       check(`${path} includes Playwright`, typeof packageJson.dependencies?.playwright === "string");
       check(

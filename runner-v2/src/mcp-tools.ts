@@ -20,6 +20,7 @@ export interface McpCallResult {
   content?: Array<Record<string, unknown>>;
   structuredContent?: unknown;
   isError?: boolean;
+  _meta?: Record<string, unknown>;
 }
 
 export interface McpServerStatus {
@@ -37,6 +38,7 @@ export interface McpTransportWriter {
 export interface McpRequestOwner {
   readonly context: Readonly<ToolExecutionContext>;
   readonly envelope: StreamingSessionEnvelope;
+  readonly appResource?: Readonly<{ toolName: string; uri: string }>;
 }
 export interface McpTransportOpenRequest {
   readonly owner?: McpRequestOwner;
@@ -131,6 +133,7 @@ export interface McpManagerOptions {
   readonly runId?: string;
   readonly discovery?: McpDiscoveryResult;
   readonly reattest?: () => Promise<readonly McpRuntimeServerLaunch[]>;
+  readonly recovery?: Readonly<import("./mcp-task-recovery.js").McpTaskRecoveryReceipt>;
   readonly maximumRestarts?: number;
   readonly maximumSessions?: number;
   cwd: string;
@@ -158,6 +161,7 @@ export function formatMcpToolDescription(serverName: string, description: string
 export interface McpMaterializationPolicy {
   /** Applied before a tool enters any model-visible list. */
   readonly visualResults?: boolean;
+  readonly projectResult?: (result: McpCallResult) => ToolExecutionOutput;
   readonly admit?: (server: string, tool: McpDiscoveryTool) => boolean;
   readonly name?: (server: string, tool: McpDiscoveryTool) => string;
   readonly guard?: (tool: NativeTool<Record<string, unknown>>, server: string, discovered: McpDiscoveryTool) => NativeTool<Record<string, unknown>>;
@@ -183,11 +187,11 @@ export function createMcpTools(
       },
       validate: objectInput,
       assessAccess: (_input, context) => client.access(context),
-      execute: async (input, context) => await mcpOutput(
-        await client.call(tool.name, input, context),
-        artifacts,
-        `${client.spec.name}.${tool.name}`, policy.visualResults
-      ),
+      execute: async (input, context) => {
+        const result = await client.call(tool.name, input, context);
+        return policy.projectResult ? policy.projectResult(result) : await mcpOutput(result, artifacts,
+          client.spec.name + "." + tool.name, policy.visualResults);
+      },
     };
     return policy.guard?.(created, client.spec.name, tool) ?? created;
   });
@@ -224,7 +228,7 @@ export function createRemoteMcpTools(
   });
 }
 
-async function mcpOutput(
+export async function mcpOutput(
   result: McpCallResult,
   artifacts: ArtifactStore,
   label: string,

@@ -1,8 +1,12 @@
+import { durableStdioTasks } from "./mcp-task-recovery.js";
+import { GetTaskResultV2Schema } from "@modelcontextprotocol/ext-tasks/core/v2";
+import { appResourceDocument } from "./mcp-chat-app.js";
+import { settleModernToolCall } from "./mcp-optional-features.js";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ToolExecutionContext, ToolAccessRequest } from "./agent-contracts.js";
 import { canonicalMcpDigest, fixedMcpEnvelope, mcpConfigurationDigest, snapshotMcpServerSpec, type McpServerSpec } from "./mcp-configuration.js";
-import { McpRpcPeer, McpProtocolError, listMcpStdioTools, parseMcpToolList } from "./mcp-rpc-peer.js";
+import { McpRpcPeer, McpProtocolError, MODERN_STDIO_MCP_VERSION, listMcpStdioTools, parseMcpToolList } from "./mcp-rpc-peer.js";
 import type { McpDiscoveryResult, McpDiscoveryTool } from "./runner-internal-execution-context.js";
 import type { McpCallResult, McpManagerOptions, McpOwnedTransport, McpRequestOwner, McpServerStatus } from "./mcp-tools.js";
 
@@ -39,6 +43,7 @@ interface Slot {
   peer?: McpRpcPeer;
   closing?: Promise<void>;
   controller?: AbortController;
+  durableTasks?: boolean;
 }
 
 /** This manager owns no global live child. Its catalog is the result of verified
@@ -70,7 +75,7 @@ export class McpSessionManager {
       const recorded = options.discovery?.servers.find((entry) => entry.name === spec.name);
       const valid = options.discovery?.runId === options.runId && !!options.runId && recorded?.cleanupVerified === true &&
         recorded.configDigest === mcpConfigurationDigest(spec) && recorded.status === "ready";
-      const tools = valid ? parseMcpToolList({ tools: recorded.tools }) : [];
+      const tools = valid ? parseMcpToolList({ tools: recorded.tools }, true) : [];
       const available = valid && recorded.schemaDigest === canonicalMcpDigest(tools) && /^[a-f0-9]{64}$/u.test(recorded.executableDigest);
       return { spec, ...(recorded ? { discovered: Object.freeze(structuredClone(recorded)) } : {}), tools: available ? tools : [],
         available, status: "stopped" as const, degradedSlots: new Set<string>(), recoveryAttempts: 0 };
@@ -120,6 +125,7 @@ export class McpSessionManager {
     })));
     const externalApproved = access.some((entry) => { const path = relative(workspace, entry.canonicalPath); return path === ".." || path.startsWith("..\\") || path.startsWith("../") || isAbsolute(path); });
     return Object.freeze({ context: Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) }),
+      ...(context.mcpGateway?.publishApp && tool.uiResourceUri ? { appResource: Object.freeze({toolName:tool.name, uri:tool.uiResourceUri}) } : {}),
       envelope: Object.freeze({ access: Object.freeze(access), credentialNames: Object.freeze([]), networkApproved: envelope.network,
         externalApproved, destructiveApproved: tool.annotations?.destructiveHint !== false }) });
   }
@@ -131,6 +137,12 @@ export class McpSessionManager {
     if (context.signal?.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP request was cancelled before launch.", "not_sent");
     const tool = server.tools.find((entry) => entry.name === name);
     if (!tool) throw new McpSessionError("mcp_schema_changed", "MCP tool is absent from the discovered schema.");
+    const recovery=this.options.recovery;
+    if(recovery && (server.spec.name!==recovery.serverName || name!==recovery.toolName ||
+      !server.discovered?.durableTasks || !recovery.stdioBinding ||
+      canonicalMcpDigest([server.discovered.configDigest,server.discovered.executableDigest])!==recovery.stdioBinding ||
+      server.discovered.schemaDigest!==recovery.schemaDigest || recovery.expiresAt<=Date.now()))
+      throw new McpSessionError("mcp_attestation_mismatch","Durable task recovery does not match the pinned server.");
     const original = Object.freeze({ ...context, actor: Object.freeze({ ...context.actor }) });
     const agent = JSON.stringify([original.runId, original.actor.role, original.actor.id, original.sessionId]);
     let epoch = this.agentEpochs.get(agent);
@@ -208,9 +220,18 @@ export class McpSessionManager {
           server: server.spec, owner, expected: server.discovered,
           onOutput: (stream, bytes) => peer.feed(stream, bytes), onFailure: (error) => peer.close(error),
           handshake: async (writer) => {
-            const initialized = await peer.request(writer, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "aiboard-runner-v2", version: "2" } }, timeoutMs, owner.context.signal);
-            if (!initialized || typeof initialized !== "object") throw new McpSessionError("mcp_schema_changed", "MCP initialize response is invalid.");
-            await peer.notify(writer, "notifications/initialized", {}, timeoutMs);
+            let initialized: unknown;
+            if (server.discovered!.protocolVersion === MODERN_STDIO_MCP_VERSION) {
+              initialized = await peer.probeModern(writer, { name: "aiboard-runner-v2", version: "2" }, timeoutMs, owner.context.signal);
+              if (initialized === undefined) throw new McpSessionError("mcp_schema_changed", "MCP protocol changed after discovery.");
+            } else {
+              initialized = await peer.request(writer, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "aiboard-runner-v2", version: "2" } }, timeoutMs, owner.context.signal);
+              if (!initialized || typeof initialized !== "object") throw new McpSessionError("mcp_schema_changed", "MCP initialize response is invalid.");
+              await peer.notify(writer, "notifications/initialized", {}, timeoutMs);
+            }
+            slot.durableTasks=peer.modern && durableStdioTasks(initialized);
+            if(this.options.recovery && !slot.durableTasks)
+              throw new McpSessionError("mcp_schema_changed","Server no longer promises durable tasks.");
             const tools = await listMcpStdioTools(peer, writer, timeoutMs, owner.context.signal);
             if (canonicalMcpDigest(tools) !== server.discovered!.schemaDigest) throw new McpSessionError("mcp_schema_changed", "MCP schema changed between discovery and live handshake.");
             return canonicalMcpDigest({ initialized, tools });
@@ -225,10 +246,63 @@ export class McpSessionManager {
         if (!server.degradedSlots.size) server.error = undefined;
       }
       if (!slot.transport.request) throw new McpSessionError("mcp_authority_required", "MCP transport lacks exact session-request authorization.");
-      const result = await slot.transport.request(owner,
-        (writer) => slot.peer!.request(writer, "tools/call", { name, arguments: args }, timeoutMs, owner.context.signal,
-          owner.context.mcpGateway?.progress, owner.context.mcpGateway?.authorize), timeoutMs);
+      const result = await slot.transport.request(owner, async writer => {
+        const started = Date.now();
+        const params = { name, arguments: args };
+        const request = (method: string, payload: Record<string, unknown>, signal?: AbortSignal) =>
+          slot.peer!.request(writer, method, payload, Math.max(1, timeoutMs - (Date.now() - started)), signal,
+            owner.context.mcpGateway?.progress, owner.context.mcpGateway?.authorize);
+        const recovery=this.options.recovery;
+        if(recovery){
+          if(!slot.peer!.modern || !slot.durableTasks || recovery.expiresAt<=Date.now())
+            throw new McpSessionError("mcp_attestation_mismatch","Durable task recovery unavailable.");
+          const raw=await request("tasks/get",{taskId:recovery.taskId},owner.context.signal);
+          const parsed=GetTaskResultV2Schema.safeParse(raw);
+          if(!parsed.success || parsed.data.status!=="completed" || parsed.data.taskId!==recovery.taskId ||
+            Date.parse(parsed.data.createdAt)!==Date.parse(recovery.createdAt) || !Array.isArray(parsed.data.result.content))
+            throw new McpProtocolError("mcp_protocol_invalid","Task outcome not verified.","outcome_unknown");
+          return parsed.data.result;
+        }
+        const initial = await request("tools/call", params, owner.context.signal);
+        let result = initial;
+        if (slot.peer!.modern && initial && typeof initial === "object" && "resultType" in initial &&
+            ["task", "input_required"].includes(String(initial.resultType))) {
+          try {
+            result = await settleModernToolCall({ initial, params, request, timeoutMs: Math.max(1, timeoutMs - (Date.now() - started)),
+              signal: owner.context.signal, onTask: slot.durableTasks && server.discovered?.durableTasks ? owner.context.mcpGateway?.observeStdioTask : undefined, resolveInput: owner.context.mcpGateway?.resolveInput ? (request, signal) => owner.context.mcpGateway!.resolveInput!(request, signal, server.spec.name) : undefined });
+          } catch {
+            throw new McpProtocolError("mcp_protocol_invalid", "MCP task or continuation did not complete; the original call was not replayed.", "outcome_unknown");
+          }
+        }
+        const value = result as McpCallResult;
+        const uri = owner.appResource?.uri;
+        if (slot.peer!.modern && uri && owner.context.mcpGateway?.publishApp && value && Array.isArray(value.content) &&
+            value.isError !== true && !owner.context.signal?.aborted && timeoutMs - (Date.now() - started) > 1000) {
+          try {
+            const remaining = timeoutMs - (Date.now() - started);
+            const appBudget = Math.max(1, Math.min(5000, remaining - 750));
+            const raw = await slot.peer!.request(writer, "resources/read", { uri }, appBudget, owner.context.signal,
+              undefined, owner.context.mcpGateway.authorize);
+            const document = appResourceDocument(uri, raw);
+            if (document && !owner.context.signal?.aborted) owner.context.mcpGateway.publishApp({
+              server: server.spec.name, tool: name, uri, ...document, arguments: args,
+              result: { content: value.content, isError: false,
+                ...(Object.hasOwn(value,"structuredContent") ? {structuredContent:value.structuredContent} : {}),
+                ...(value._meta ? {_meta:value._meta} : {}) },
+            });
+          } catch (error) {
+            // A normal resource error does not change the completed tool outcome.
+            // A broken peer must be retired before reuse, without replay.
+            if (slot.peer?.error) {
+              server.status = "degraded"; server.error = slot.peer.error.message; server.degradedSlots.add(slot.key);
+            }
+          }
+        }
+        return result;
+      }, timeoutMs);
+      if (slot.peer?.error) await this.retire(slot);
       if (!result || typeof result !== "object" || Array.isArray(result)) throw new McpProtocolError("mcp_protocol_invalid", "MCP tools/call result is invalid.", "outcome_unknown");
+      if (slot.peer?.modern && !Array.isArray((result as McpCallResult).content)) throw new McpProtocolError("mcp_protocol_invalid", "MCP tool call did not return a completed result.", "outcome_unknown");
       if (!server.degradedSlots.size) { server.status = "ready"; server.error = undefined; server.recoveryAttempts = 0; }
       return result as McpCallResult;
     } catch (cause) {

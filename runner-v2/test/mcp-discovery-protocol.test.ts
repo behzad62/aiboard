@@ -8,7 +8,7 @@ import test from "node:test";
 import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
 import type { RunnerInternalOwnedProcess, RunnerInternalProcessKernel } from "../src/runner-internal-process-kernel.js";
 
-for (const mode of ["valid", "mixed-schema-keys", "wrong-version", "duplicate-tools", "invalid-schema", "notification-write-timeout", "wrong-id-before-valid", "invalid-utf8"] as const)
+for (const mode of ["valid", "modern", "strict-legacy", "mixed-schema-keys", "wrong-version", "duplicate-tools", "invalid-schema", "notification-write-timeout", "wrong-id-before-valid", "invalid-utf8"] as const)
 test(`MCP ephemeral discovery ${mode} cannot advertise readiness before bounded protocol and cleanup`, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "p682-discovery-protocol-")); t.diagnostic(`exact synthetic discovery root acquired: ${root}`);
   let sink: Parameters<RunnerInternalOwnedProcess["setOutputSink"]>[0] | undefined;
@@ -22,16 +22,18 @@ test(`MCP ephemeral discovery ${mode} cannot advertise readiness before bounded 
     setOutputSink: (value: typeof sink) => { sink = value; return () => { sink = undefined; }; },
     write: async (bytes: Uint8Array) => {
       const request = JSON.parse(Buffer.from(bytes).toString()); methods.push(request.method);
+      if (mode === "strict-legacy" && request.method === "server/discover") return;
+      if (mode === "modern" && request.method !== "notifications/initialized") assert.equal(request.params._meta["io.modelcontextprotocol/protocolVersion"], "2026-07-28");
       if (request.method === "notifications/initialized") { if (mode === "notification-write-timeout") await pending; return; }
       const result = request.method === "tools/list" ? { tools: mode === "duplicate-tools" ? [{ name: "dup" }, { name: "dup" }] :
-        mode === "invalid-schema" ? [{ name: "bad", inputSchema: "string-not-schema" }] : [{ name: "lookup", inputSchema: { type: "object", ...(mode === "mixed-schema-keys" ? { properties: { a: { type: "string" }, Z: { type: "number" }, _key: { type: "boolean" } } } : {}) } }] } : {};
+        mode === "invalid-schema" ? [{ name: "bad", inputSchema: "string-not-schema" }] : [{ name: "lookup", inputSchema: { type: "object", ...(mode === "mixed-schema-keys" ? { properties: { a: { type: "string" }, Z: { type: "number" }, _key: { type: "boolean" } } } : {}) } }] } : mode === "modern" && request.method === "server/discover" ? { supportedVersions: ["2026-07-28"] } : {};
       if (mode === "wrong-id-before-valid") await emit(Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: request.id + 99, result }) + "\n"));
       if (mode === "invalid-utf8") await emit(Buffer.concat([Buffer.from('{"jsonrpc":"2.0","id":'), Buffer.from(String(request.id)), Buffer.from(',"result":"'), Buffer.from([255]), Buffer.from('"}\n')]));
       else await emit(Buffer.from(JSON.stringify({ jsonrpc: mode === "wrong-version" ? "1.0" : "2.0", id: request.id, result }) + "\n"));
     },
     closeVerified: async () => { closes++; active = false; release(); return { exitCode: 0 }; },
   } as unknown as RunnerInternalOwnedProcess;
-  const kernel = { launch: async () => { active = true; return owned; }, activeCount: () => active ? 1 : 0,
+  const kernel = { launch: async () => { assert.equal(active, false, "previous exact owner must be closed before replacement"); active = true; return owned; }, activeCount: () => active ? 1 : 0,
     close: async () => { if (active) await owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 1 }); } } as RunnerInternalProcessKernel;
   const context = createRunnerInternalExecutionContext({ projectDirectory: root, stateDirectory: join(root, "state"), processKernel: kernel });
   let passed = false;
@@ -40,9 +42,11 @@ test(`MCP ephemeral discovery ${mode} cannot advertise readiness before bounded 
     const attested = await context.attestConfiguredCapabilities({ mcpServers: servers, capabilitiesConfig: { extensions: [], languageServers: [] } });
     const discoverer = context.createMcpDiscoveryExecutor({ runId: `discovery-${mode}`, servers, attestation: attested.mcp, requestTimeoutMs: 25, shutdownTimeoutMs: 25, terminationTimeoutMs: 25 });
     const result = await discoverer.discover(); await discoverer.close();
-    assert.equal(result.servers[0]!.status, mode === "valid" || mode === "mixed-schema-keys" ? "ready" : "error");
-    assert.equal(result.servers[0]!.cleanupVerified, true); assert.equal(closes, 1); assert.equal(active, false);
+    assert.equal(result.servers[0]!.status, ["valid", "modern", "strict-legacy", "mixed-schema-keys"].includes(mode) ? "ready" : "error");
+    assert.equal(result.servers[0]!.cleanupVerified, true); assert.equal(closes, mode === "strict-legacy" ? 2 : 1); assert.equal(active, false);
     assert.equal(methods.includes("tools/call"), false);
+    if (mode === "modern") { assert.equal(result.servers[0]!.protocolVersion, "2026-07-28"); assert.deepEqual(methods, ["server/discover", "tools/list"]); }
+    if (mode === "strict-legacy") assert.deepEqual(methods, ["server/discover", "initialize", "notifications/initialized", "tools/list"]);
     if (mode === "notification-write-timeout") assert.equal(methods.includes("tools/list"), false, "cannot issue next RPC before initialized write acknowledgement");
     if (mode === "mixed-schema-keys") {
       const manager = new McpManager({ cwd: root, servers, runId: result.runId, discovery: result,

@@ -238,7 +238,7 @@ export interface ToolExecutionContext {
   callId?: string;
   toolName?: string;
   /** Trusted downstream MCP dispatch controls and progress sink. */
-  mcpGateway?: { authorize?: import("./mcp-gateway-tools.js").McpDispatchAuthorization; progress?: import("./mcp-gateway-tools.js").McpProgressReporter };
+  mcpGateway?: { authorize?: import("./mcp-gateway-tools.js").McpDispatchAuthorization; progress?: import("./mcp-gateway-tools.js").McpProgressReporter; resolveInput?: import("./mcp-optional-features.js").McpInputResolver; publishApp?: import("./mcp-chat-app.js").McpAppPublisher; observeStdioTask?: (task: import("./mcp-task-recovery.js").McpTaskHandleObservation) => void; recordTask?: import("./mcp-task-recovery.js").McpTaskReceiptRecorder };
   /** Runner-owned checks and evidence for the desktop capture helper. */
   screenshot?: { authorize: () => boolean; stopped?: (effect: "no_effect" | "effect_outcome_unknown") => void };
   /** Runner-created after authorization. Model input can never populate this field. */

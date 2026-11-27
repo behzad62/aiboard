@@ -669,7 +669,7 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
         {hasRunnerMcp && toolFilter && (
           <div className="space-y-2 rounded-md bg-muted/60 p-3 text-xs">
             <p className="font-medium">Tool review · risk: {toolFilter.policy.riskLabel}</p>
-            <p>Only reviewed exact tools are available. An allowed tool can still have broad effects; the separate approval setting still applies.</p>
+            <p>Only reviewed exact tools are available. An allowed tool can still have broad effects; the separate approval setting still applies. App writes require an explicit allow entry and a one-time confirmation in the App view.</p>
             {!inventoryMatches(toolFilter.policy.reviewed, toolFilter.discovered) && <p>Discovery changed. Review these tools before allowing them; prior decisions will not carry over.</p>}
             {toolFilter.discovered.length === 0 && <p>No verified tool inventory. Use Test after the server is ready.</p>}
             {toolFilter.discovered.map((inventory) => (
@@ -677,10 +677,15 @@ function InstalledItem({ connection, item, onChanged, onMoveToRunner }: { connec
                 <p className="font-medium">{inventory.componentId}</p>
                 {inventory.toolNames.map((name) => {
                   const admitted = inventoryMatches(toolFilter.policy.reviewed, toolFilter.discovered) && isAllowed(toolFilter.policy, inventory.componentId, name);
-                  return <label key={name} className="flex items-center gap-2">
-                    <Switch checked={admitted} disabled={busy} aria-label={(admitted ? "Deny " : "Allow ") + name} onCheckedChange={(allow) => void updateFilter({ componentId: inventory.componentId, toolName: name, allow })} />
-                    <span>{name}: {admitted && item.enabled && readiness.state === "ready" ? "listed locally" : "absent locally"}{admitted && item.enabled && readiness.state === "ready" && toolFilter.policy.remoteExposure ? ", listed remotely" : ", absent remotely"}</span>
-                  </label>;
+                  const explicit = toolFilter.policy.toolFilter.allow.some(key=>key.componentId===inventory.componentId && key.toolName===name);
+                  return <div key={name} className="flex flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2">
+                      <Switch checked={admitted} disabled={busy} aria-label={(admitted ? "Deny " : "Allow ") + name} onCheckedChange={(allow) => void updateFilter({ componentId: inventory.componentId, toolName: name, allow })} />
+                      <span>{name}: {admitted && item.enabled && readiness.state === "ready" ? "listed locally" : "absent locally"}{admitted && item.enabled && readiness.state === "ready" && toolFilter.policy.remoteExposure ? ", listed remotely" : ", absent remotely"}</span>
+                    </label>
+                    {admitted && !explicit && <Button size="sm" variant="outline" disabled={busy} onClick={()=>void updateFilter({componentId:inventory.componentId,toolName:name,allow:true})}>Explicitly allow</Button>}
+                    {admitted && explicit && <span className="text-muted-foreground">Explicitly allowed</span>}
+                  </div>;
                 })}
               </div>
             ))}
