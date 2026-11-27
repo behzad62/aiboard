@@ -88,7 +88,9 @@ The app cannot select a server, URL, credential, or tool outside this set.
 
 The authenticated host stages an immutable, random, one-use ticket with exact
 arguments (16 KiB maximum). The parent UI displays the server, name and exact
-arguments and asks the user to allow or deny. Tickets expire within 60 seconds;
+arguments and asks the user to allow or deny. Focus starts on Deny and the
+allow button is armed only one second after the dialog appears, so an App
+cannot time a layout shift or a click onto it. Tickets expire within 60 seconds;
 one request may be pending or running per app and 20 staged requests are
 allowed per app, including denials. Approval consumes the ticket before any
 network dispatch; retries cannot reuse it. A fresh MCP client rechecks the
@@ -190,6 +192,9 @@ Tasks); mcp-lazy-native.test.ts (actual ExecutionHost and ToolBroker,
 owned process, task update, exact cleanup and fresh-grant reuse).
 
 ## Owned stdio MCP Apps (display pass)
+
+Discovery probes server/discover for at most 10 seconds; a legacy server that
+ignores pre-initialize requests is reaped and relaunched with initialize.
 
 Modern stdio discovery retains valid ui:// resource URIs and visibility
 metadata in the immutable reviewed inventory; app-only tools are not exposed
@@ -356,8 +361,11 @@ assertion of a downstream OAuth subject or token introspection result.
 
 Recovery verifies the credential before discovery, after policy checks,
 immediately before the HTTP request, and before returning recovered data.
-The refresh exchange inherits the bounded recovery request deadline and
-rechecks the credential revision before sending. No raw access token,
+The refresh rechecks the credential revision before sending. One exchange
+runs per credential revision, shared by concurrent callers, and is never
+aborted by a caller's signal: an aborted sent refresh could lose a rotated
+refresh token. A caller (including bounded recovery) only stops waiting; the
+result is stored by compare-and-swap, so a sign-in or revoke that raced it wins. No raw access token,
 refresh token or user secret is persisted in the task receipt. Existing
 unauthenticated receipts remain readable; authenticated servers reject
 receipts without a credential binding. Other task-recovery limitations
