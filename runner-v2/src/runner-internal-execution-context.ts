@@ -32,6 +32,11 @@ const MAX_MCP_LINE_BYTES = 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 15_000;
 const DEFAULT_TERMINATION_TIMEOUT_MS = 15_000;
+/** A modern-protocol probe is a capability check, not a tool request. Some legacy
+ * servers silently ignore pre-initialize requests; waiting the whole request
+ * bound for them would exhaust discovery's budget before the legacy handshake.
+ * Matches the tunnel connector's probe bound. */
+const MODERN_PROBE_TIMEOUT_MS = 10_000;
 const GIT_PREFLIGHT_TIMEOUT_MS = 30_000;
 const GIT_PREFLIGHT_TERMINATION_TIMEOUT_MS = 15_000;
 
@@ -526,7 +531,7 @@ class DiscoveryClient {
     });
     if (probe) {
       try {
-        const modern = await this.peer.probeModern(owned, { name: "aiboard-runner-v2-discovery", version: "2" }, this.options.requestTimeoutMs);
+        const modern = await this.peer.probeModern(owned, { name: "aiboard-runner-v2-discovery", version: "2" }, Math.min(this.options.requestTimeoutMs, MODERN_PROBE_TIMEOUT_MS));
         if (modern !== undefined) { this.durableTasks=durableStdioTasks(modern); return await listMcpStdioTools(this.peer, owned, this.options.requestTimeoutMs); }
       } catch (error) {
         this.probeTransportFailed = !this.closed && !this.peer.modern && error instanceof McpProtocolError &&

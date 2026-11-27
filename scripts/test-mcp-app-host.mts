@@ -106,7 +106,14 @@ try {
   assert.equal(denied,1);assert.equal(approved,0);
   await app.getByRole("button",{name:"Refresh"}).click();
   await approval.waitFor();assert.equal(staged,2);assert.equal(approved,0);
-  await approval.getByRole("button",{name:"Allow this call"}).click();
+  // A click that lands as the app-timed dialog appears must not approve.
+  const allow = approval.getByRole("button",{name:"Allow this call"});
+  assert.equal(await allow.isDisabled(),true,"approval is not armed the instant the app request appears");
+  await allow.click({force:true});
+  await page.waitForTimeout(100);
+  assert.equal(approved,0,"an immediate click does not approve");
+  assert.equal(await approval.isVisible(),true);
+  await allow.click();
   await app.locator("#refresh-result").filter({hasText:"refreshed"}).waitFor();
   assert.equal(approved,1);
   await page.getByRole("button",{name:"Expand"}).click();
@@ -114,7 +121,7 @@ try {
   await page.getByRole("button",{name:"Close",exact:true}).click();
   await iframe.waitFor({state:"detached"});
   assert.equal(reads,2);assert.deepEqual(external,["https://cdn.example.com/app.js"]);assert.equal(unexpected,0);assert.deepEqual(errors,[]);
-  console.log("PASS: external origin consent, offline fallback, approved static script, blocked undeclared origins/API/frames; real Chromium app handshake, data, local interaction, CSP, opaque origin, denied unauthorized calls, explicit approval/denial, expand and close.");
+  console.log("PASS: external origin consent, offline fallback, approved static script, blocked undeclared origins/API/frames; real Chromium app handshake, data, local interaction, CSP, opaque origin, denied unauthorized calls, explicit approval/denial, approval arming delay, expand and close.");
 } finally {
   await browser?.close();
   await new Promise<void>(resolve=>server.close(()=>resolve()));

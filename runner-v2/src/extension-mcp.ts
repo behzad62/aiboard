@@ -130,6 +130,19 @@ interface StdioAppInvocation {
   readonly capture: (result: McpCallResult) => void;
 }
 
+/** Stops waiting on abort without cancelling the shared operation itself. */
+async function waitUnlessAborted<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await operation;
+  signal.throwIfAborted();
+  let stop!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(signal.reason ?? new Error("Aborted."));
+    signal.addEventListener("abort", stop, { once: true });
+  });
+  try { return await Promise.race([operation, aborted]); }
+  finally { signal.removeEventListener("abort", stop); }
+}
+
 function sameMcpEntry(a: ManagedMcpServerEntry, b: ManagedMcpServerEntry): boolean {
   return a.extensionId === b.extensionId && a.versionId === b.versionId &&
     a.component.componentId === b.component.componentId && a.component.serverName === b.component.serverName &&
@@ -154,6 +167,8 @@ const SERVER_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 export class ManagedMcpRuntime {
   private service: ExtensionManagementService | undefined;
   private readonly signIns = new Map<string, PendingSignIn>();
+  /** One refresh exchange per credential revision, never aborted by one caller. */
+  private readonly refreshes = new Map<string, Promise<ReturnType<ExtensionCredentialStore["taskCredential"]>>>();
 
   constructor(private readonly options: ManagedMcpRuntimeOptions) {}
 
@@ -546,10 +561,28 @@ export class ManagedMcpRuntime {
     signal?.throwIfAborted();
     if(this.options.credentials.taskCredential(stored.ref).revision!==token.revision)
       throw new RemoteMcpError("needs_auth","Downstream sign-in changed before refresh.");
-    const refreshed=await exchangeToken({tokenEndpoint:client.tokenEndpoint,resource:client.resource},
-      {grant_type:"refresh_token",refresh_token:token.refreshToken,client_id:client.clientId},this.options.remoteFetch??fetch,Date.now(),signal);
-    const next=this.options.credentials.rotateOAuth(stored.ref,token.revision,
-      {value:refreshed.accessToken,refreshToken:refreshed.refreshToken,expiresAt:refreshed.expiresAt,scope:refreshed.scope},client);
+    // A sent refresh request may already have rotated the refresh token at the
+    // issuer. Aborting it with one caller's signal (a cancelled tool call or a
+    // recovery deadline) would lose the rotated token and could trip reuse
+    // detection, so the exchange runs to its own deadline and is stored by
+    // compare-and-swap; callers only stop waiting for it.
+    const key=stored.ref+"|"+token.revision;
+    let exchange=this.refreshes.get(key);
+    if(!exchange){
+      const refreshToken=token.refreshToken;
+      exchange=exchangeToken({tokenEndpoint:client.tokenEndpoint,resource:client.resource},
+        {grant_type:"refresh_token",refresh_token:refreshToken,client_id:client.clientId},this.options.remoteFetch??fetch,Date.now())
+        .then(refreshed=>{
+          try {
+            return this.options.credentials.rotateOAuth(stored.ref,token.revision,
+              {value:refreshed.accessToken,refreshToken:refreshed.refreshToken,expiresAt:refreshed.expiresAt,scope:refreshed.scope},client);
+          } catch { throw new RemoteMcpError("needs_auth","Downstream sign-in changed during refresh."); }
+        })
+        .finally(()=>{this.refreshes.delete(key);});
+      this.refreshes.set(key,exchange);
+      exchange.catch(()=>undefined);
+    }
+    const next=await waitUnlessAborted(exchange,signal);
     if(expected && next.lineage!==expected) throw new RemoteMcpError("needs_auth","Downstream authorization changed during refresh.");
     return this.boundCredential(next);
   }

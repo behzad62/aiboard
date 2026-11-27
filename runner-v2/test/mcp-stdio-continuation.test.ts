@@ -97,6 +97,27 @@ test("modern cancellation must match the exact pending request and metadata",()=
   g.feed(result(1,{resultType:"input_required",inputRequests:prompts,requestState:"opaque"}));
   assert.equal(g.permit(req(2,"tools/call",{...initial,inputResponses:answers,requestState:"opaque"})),false);
 });
+test("an invalid gate still allows only the exact cancellation of the pending request",()=>{
+  const cancel=(id:number)=>enc({jsonrpc:"2.0",method:"notifications/cancelled",params:{requestId:id,reason:"Cancelled by caller",_meta:meta}});
+  const g=new McpStdioContinuation();g.begin(req(1,"tools/call",initial));
+  g.feed(enc({jsonrpc:"2.0",id:"srv-1",method:"ping"}));
+  assert.equal(g.permit(req(2,"tools/call",{...initial,inputResponses:answers,requestState:"opaque"})),false);
+  assert.equal(g.cancellation(cancel(2)),false);
+  assert.equal(g.cancellation(cancel(1)),true);
+  assert.equal(g.cancellation(cancel(1)),false);
+  g.feed(result(1,{resultType:"input_required",inputRequests:prompts,requestState:"opaque"}));
+  assert.equal(g.permit(req(2,"tools/call",{...initial,inputResponses:answers,requestState:"opaque"})),false);
+});
+test("one stdout delivery may carry several valid frames over 1 MiB in total; a single oversized frame still invalidates",()=>{
+  const filler=enc({jsonrpc:"2.0",method:"notifications/message",params:{level:"info",data:"x".repeat(700*1024)}});
+  const g=new McpStdioContinuation();g.begin(req(1,"tools/call",initial));
+  g.feed(Buffer.concat([filler,filler,result(1,{resultType:"input_required",inputRequests:prompts,requestState:"opaque"})]));
+  assert.equal(g.permit(req(2,"tools/call",{...initial,inputResponses:answers,requestState:"opaque"})),true);
+  const h=new McpStdioContinuation();h.begin(req(1,"tools/call",initial));
+  h.feed(Buffer.from("{".repeat(1024*1024+1)));
+  h.feed(result(1,{resultType:"input_required",inputRequests:prompts,requestState:"opaque"}));
+  assert.equal(h.permit(req(2,"tools/call",{...initial,inputResponses:answers,requestState:"opaque"})),false);
+});
 test("the continuation and task polling ceilings are independently enforced",()=>{
   const g=new McpStdioContinuation();g.begin(req(1,"tools/call",initial));
   for(let id=1;id<=8;id++){

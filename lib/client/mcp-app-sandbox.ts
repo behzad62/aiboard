@@ -14,6 +14,8 @@ export function mcpAppSrcdoc(html: string, approvedDomains?: readonly string[]):
   return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><meta name="referrer" content="no-referrer">' + html;
 }
 export const MCP_APP_SANDBOX = "allow-scripts";
+/** The host-rendered approval button stays disabled this long after an app request appears. */
+export const MCP_APP_APPROVAL_ARM_MS = 1000;
 export const MCP_APP_PERMISSIONS = "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'; payment 'none'; usb 'none'; fullscreen 'none'";
 export function appHeight(height: unknown): number {
   return typeof height === "number" && Number.isFinite(height) ? Math.max(180, Math.min(900, Math.ceil(height))) : 360;

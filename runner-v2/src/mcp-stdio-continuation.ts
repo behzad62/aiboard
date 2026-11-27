@@ -88,7 +88,9 @@ export class McpStdioContinuation {
     return true;
   }
   cancellation(bytes: Uint8Array): boolean {
-    if (this.invalid || !this.pending || this.cancelled) return false;
+    // An invalid gate refuses every further request, but the exact cancellation
+    // of the still-pending one stays allowed, as it was before modern support.
+    if (!this.pending || this.cancelled) return false;
     const f=canonical(bytes);
     if (!f || Object.keys(f).some(k=>!["jsonrpc","method","params"].includes(k)) || f.method!=="notifications/cancelled" || "id" in f || !obj(f.params) || !same(meta(f.params),this.originalMeta) ||
       !same(methodParams(f.params),{requestId:this.pending.id,reason:"Cancelled by caller"})) return false;
@@ -97,11 +99,12 @@ export class McpStdioContinuation {
   }
   feed(bytes: Uint8Array): void {
     if (this.invalid || !this.original) return;
-    if (this.buffer.length+bytes.byteLength>MAX_LINE) {this.invalid=true;return;}
     this.buffer=Buffer.concat([this.buffer,bytes]);
     for (;;) {
       const end=this.buffer.indexOf(10);
-      if (end<0) return;
+      // The bound is per frame, like the peer's: one delivery may carry many lines.
+      if (end<0) { if (this.buffer.length>MAX_LINE) {this.invalid=true;this.buffer=Buffer.alloc(0);} return; }
+      if (end>MAX_LINE) {this.invalid=true;this.buffer=Buffer.alloc(0);return;}
       const line=this.buffer.subarray(0,end);this.buffer=this.buffer.subarray(end+1);
       if (!line.length) continue;
       const f=frame(line);
